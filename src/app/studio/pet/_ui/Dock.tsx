@@ -4,8 +4,8 @@ import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from '
 import { MOOD_BAND, type NeedKey } from '@/lib/pet/types';
 import type { Point } from '../_engine/types';
 import { GESTURE, type ToyEvent, type ToyKind } from './contract';
-import { COPY, NEED_LABEL } from './copy';
 import { BallIcon, CookieIcon, MoonIcon } from './Particles';
+import { t, type PetStringKey } from './strings';
 
 export type Needs = Record<NeedKey, number>;
 
@@ -18,11 +18,22 @@ interface DockProps {
   disabled?: boolean;
 }
 
-const TOYS: { kind: ToyKind; need: NeedKey; label: string; Icon: () => React.ReactElement }[] = [
-  { kind: 'cookie', need: 'tummy', label: COPY.feed, Icon: CookieIcon },
-  { kind: 'ball', need: 'joy', label: COPY.play, Icon: BallIcon },
-  { kind: 'moon', need: 'energy', label: COPY.rest, Icon: MoonIcon },
+const TOYS: { kind: ToyKind; need: NeedKey; label: PetStringKey; Icon: () => React.ReactElement }[] = [
+  { kind: 'cookie', need: 'tummy', label: 'toy.feed', Icon: CookieIcon },
+  { kind: 'ball', need: 'joy', label: 'toy.ball', Icon: BallIcon },
+  { kind: 'moon', need: 'energy', label: 'toy.moon', Icon: MoonIcon },
 ];
+
+/**
+ * A need for the screen reader: its name, or the whole "wants some" phrase. `need.wantsSuffix` is a template in Persian
+ * («کمی {need} می‌خواهد») and a suffix in English (", wants some"): a template that holds the name is the phrase.
+ */
+export function needPhrase(need: NeedKey, wants: boolean): string {
+  const name = t(`need.${need}`);
+  if (!wants) return name;
+  const s = t('need.wantsSuffix', { need: name });
+  return s.includes(name) ? s : `${name}${s}`;
+}
 
 /** Ring geometry: r 30 in a 68 box, so the stroke sits just outside the 52 px toy. */
 const R = 30;
@@ -86,7 +97,7 @@ export const Dock = memo(function Dock({ needs, onToy, toyRef, disabled }: DockP
   };
 
   return (
-    <div className="pet-dock" role="group" aria-label="Toys">
+    <div className="pet-dock" role="group" aria-label={t('ui.toys')}>
       {TOYS.map(({ kind, need, label, Icon }) => {
         const value = needs ? needs[need] : null;
         const wants = value !== null && value < MOOD_BAND.wantsBelow;
@@ -96,13 +107,13 @@ export const Dock = memo(function Dock({ needs, onToy, toyRef, disabled }: DockP
           className: 'pet-toy',
           'data-toy': kind,
           'data-wants': wants ? '' : undefined,
-          'aria-label': label,
-          'aria-description': value === null ? undefined : `${NEED_LABEL[need]}${wants ? ', wants some' : ''}`,
+          'aria-label': t(label),
+          'aria-description': value === null ? undefined : needPhrase(need, wants),
           disabled,
         };
         if (kind === 'cookie') {
           return (
-            <button key={kind} {...common} data-lifted={lifted ? '' : undefined} title={COPY.feedHint}
+            <button key={kind} {...common} data-lifted={lifted ? '' : undefined} title={t('toy.feedHint')}
               onPointerDown={cookieDown} onPointerMove={cookieMove} onPointerUp={(e) => cookieUp(e)} onPointerCancel={(e) => cookieUp(e, true)}
               onClick={() => { if (!disabled && performance.now() - pointerEnd.current > 600) onToy({ type: 'cookieTap' }); }}>
               <Ring value={value} /><span className="pet-toy-face"><Icon /></span>

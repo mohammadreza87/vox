@@ -24,6 +24,8 @@ vi.mock('../_engine/loop', () => ({
 }));
 
 const { PetApp } = await import('./PetApp');
+/** the hold-to-talk recorder is its own chunk (mic.ts); a test hold awaits it as the page's idle prefetch would */
+const { loadMic } = await import('./TalkPill');
 
 function telegram() {
   const calls: string[] = [];
@@ -277,6 +279,7 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     const api = fast({ talkVoice: async () => ({ transcript: '', reply: '' }) });
     const { container } = render(<PetApp agentId="x" api={api} />);
     await ready(container);
+    await loadMic();
     const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
     const mic = screen.getByRole('button', { name: 'Hold to talk' });
     await act(async () => { fireEvent.pointerDown(mic); });
@@ -302,7 +305,8 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(engine().talk).toHaveBeenLastCalledWith('idle');
   });
 
-  it.each([[undefined, 'Close and reopen me to keep talking.'], ['fa', 'برای ادامهٔ گفتگو، مرا ببندید و دوباره باز کنید.']])
+  // fa: the copywriter's rewrite (PET_PERSIAN_COPY A.1) replaced «برای ادامهٔ گفتگو، مرا ببندید…»; the whole page is Persian then
+  it.each([[undefined, 'Close and reopen me to keep talking.'], ['fa', 'این صفحه را ببندید و دوباره باز کنید تا گفتگو ادامه پیدا کند.']])
   ('talk past the 1 h window (401 session_expired) asks to reopen (%s) and never ends the pet', async (lang, line) => {
     const { app } = telegram();
     if (lang) Object.assign(app.initDataUnsafe.user, { language_code: lang });
@@ -312,10 +316,10 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     const api = fast({ get, talk });
     const { container } = render(<PetApp agentId="x" api={api} />);
     await ready(container);
-    const input = screen.getByRole('textbox', { name: 'Talk to Mochi' }) as HTMLInputElement;
+    const input = screen.getByRole('textbox') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'still there?' } });
     fireEvent.submit(input.closest('form')!);
-    await waitFor(() => expect(bubble(container)).toBe(line));
+    await waitFor(() => expect(container.querySelector('.pet-bubble .pet-sr')?.textContent).toBe(line));
     await waitFor(() => expect(input.value).toBe('still there?'));
     // the session lives on: no outsider screen, the pet and the pill stay, and the pill still sends
     expect(screen.queryByRole('heading', { name: 'Open me in Telegram' })).toBeNull();

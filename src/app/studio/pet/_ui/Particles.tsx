@@ -1,8 +1,11 @@
 'use client';
 
-import { memo, useLayoutEffect, useRef } from 'react';
+import { lazy, memo, Suspense, useLayoutEffect, useRef } from 'react';
 import { TIER_BUDGET } from '../_engine/types';
 import type { PetEngine } from './contract';
+
+/** fx.css: each particle kind's look, the thought cloud and the Bop count, out of the route's first CSS (§3.3). */
+const FxStyles = lazy(() => import('./FxStyles'));
 
 /** The full-tier pool (§3.3): lite and reduced use fewer of the same divs. */
 export const PARTICLE_POOL = TIER_BUDGET.full.particles;
@@ -10,8 +13,8 @@ export const PARTICLE_POOL = TIER_BUDGET.full.particles;
 /**
  * The particle and ball layer (§3.2 layer 3): a fixed pool of ≤ 16 divs rendered once, plus the Bop
  * ball and the cookie in flight. The engine writes `data-kind`, transform and opacity straight into
- * them (no React state per burst, unlike Studio's Burst.tsx); pet.css draws each kind (crumb, heart,
- * z, sparkle, note, wisp, tear). Taps on the ball keep it in the air.
+ * them (no React state per burst, unlike Studio's Burst.tsx); fx.css draws each kind (crumb, heart,
+ * z, sparkle, note, wisp, tear), loaded with this layer. Taps on the ball keep it in the air.
  */
 export const Particles = memo(function Particles({ engine }: { engine: PetEngine }) {
   const pool = useRef<(HTMLDivElement | null)[]>([]);
@@ -26,6 +29,7 @@ export const Particles = memo(function Particles({ engine }: { engine: PetEngine
 
   return (
     <div className="pet-fx" aria-hidden="true">
+      <Suspense fallback={null}><FxStyles /></Suspense>
       {Array.from({ length: PARTICLE_POOL }, (_, i) => <div key={i} ref={(d) => { pool.current[i] = d; }} className="pet-p" />)}
       <div ref={cookie} className="pet-flycookie" style={{ opacity: 0 }}><CookieIcon /></div>
       <div ref={ball} className="pet-ball" style={{ opacity: 0 }}

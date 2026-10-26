@@ -1,97 +1,95 @@
-/* Vox Pet: the one stylesheet of /studio/pet/[agentId] (brief §3.2, §3.3: ≤ 12 KB with fonts.css, no filters,
-   no blur). The Soft Weather tokens it uses (studio.css) are restated here so the route never loads the Studio's
-   CSS; the fonts come from fonts.css on the /studio root (Vazirmatn carries Persian). Ambient loops are CSS
-   keyframes with cubic-bezier easing only; everything reactive is the engine writing transforms. The lab's framed
-   stage (data-embed) lives in the lab's own lab.css. Custom-property fallbacks are written without spaces: the
-   minifier keeps them verbatim. */
+/* Vox Pet route CSS (brief §3.3: ≤ 12 KB minified with fonts.css; no filters, no blur). Soft Weather tokens restated;
+   var() fallbacks without spaces. No scroll anywhere (design §9): data-h (peek/short/regular/tall), data-layout=wide
+   and lang=fa set the tokens. */
 
 .pet-root {
   --text: #F2F1EC; --text-2: #A9ADB5; --ink: #14202C; --volt: #D6FF5C; --on-volt: #0E1013;
   --f-display: var(--font-unbounded), var(--font-vazir), sans-serif;
   --f-body: var(--font-onest), var(--font-vazir), system-ui, sans-serif;
   --ease-sine: cubic-bezier(.37, 0, .63, 1); --ease-out: cubic-bezier(.05, .7, .1, 1); --ease-over: cubic-bezier(.34, 1.56, .64, 1);
+  --pet-toy: 68px; --pet-gap: 30px; --pet-pill: 52px; --pet-fs: 15px; --pet-lh: 21px; --pet-sm: 13px; --pet-col: 100%;
   position: fixed; inset: 0; height: var(--pet-vh,100dvh); overflow: hidden;
-  background: #0E1013; color: var(--text); font-family: var(--f-body); font-size: 15px; line-height: 21px;
+  background: #0E1013; color: var(--text); font: var(--pet-fs)/var(--pet-lh) var(--f-body);
   -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
-  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
-  touch-action: none; overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; overscroll-behavior: none;
 }
+.pet-root[data-h=peek] { --pet-toy: 56px; --pet-gap: 20px; }
+.pet-root[data-h=short] { --pet-toy: 60px; --pet-gap: 24px; --pet-pill: 48px; }
+.pet-root[data-h=tall] { --pet-gap: 36px; }
+.pet-root[data-layout=wide] { --pet-col: 480px; }
+.pet-root[lang=fa] { --pet-fs: 16px; --pet-lh: 24px; --pet-sm: 14px; }
 .pet-root *, .pet-root *::before, .pet-root *::after { box-sizing: border-box; }
 .pet-root :where(button) { font: inherit; color: inherit; cursor: pointer; }
 .pet-root :focus-visible, .pet-close:focus-visible { outline: 2px solid var(--volt,#D6FF5C); outline-offset: 3px; }
 .pet-close { min-height: 44px; padding: 8px 14px; border: 1px solid #fff6; border-radius: 24px; background: #14202C; color: #F2F1EC; font: inherit; cursor: pointer; }
-.pet-sr { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* screen-reader only: also rail labels (Short: all, Regular: all but the current) */
+.pet-sr, .pet-root:not([data-layout=wide])[data-h=short] .pet-room-label, .pet-root:not([data-layout=wide])[data-h=regular] .pet-room:not([aria-selected=true]) .pet-room-label {
+  position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* ---------- stage (layer 1): static backdrop, floor light, glow, lights-off ---------- */
 .pet-stage { position: absolute; inset: 0; background-repeat: no-repeat; touch-action: none; }
 .pet-floor, .pet-glow, .pet-night, .pet-fx { position: absolute; pointer-events: none; background-repeat: no-repeat; }
 .pet-glow { opacity: 0; }
 .pet-night { inset: 0; background: #04060A; opacity: 0; }
 .pet-fx { inset: 0; overflow: hidden; }
 
-/* ---------- character (layer 2): the engine moves .pet-body; CSS breathes and sways inside it ---------- */
+/* the engine moves .pet-body; CSS breathes and sways inside it (twin keyframes: PetRig's latch, §2.4) */
 .pet-char { position: absolute; }
 .pet-body { position: absolute; inset: 0; will-change: transform; }
 .pet-body svg { display: block; overflow: visible; }
-/* §2.4: the engine eases the mood's breath peak (--pet-bx/by) and sway (--pet-sw, degrees) on .pet-body;
-   PetRig latches the periods (--pet-bp/swp) at a cycle boundary and swaps to the twin keyframes */
 .pet-breathe { transform-origin: 50% 83%; animation: petBreathe 4.2s var(--ease-sine) infinite, petSway 8s var(--ease-sine) infinite; }
 @keyframes petBreathe { 0%, 100% { scale: 1 1; } 40% { scale: var(--pet-bx,.985) var(--pet-by,1.032); } }
 @keyframes petBreathe2 { 0%, 100% { scale: 1 1; } 40% { scale: var(--pet-bx,.985) var(--pet-by,1.032); } }
 @keyframes petSway { 0%, 100% { rotate: calc(var(--pet-sw,0) * -1deg); } 50% { rotate: calc(var(--pet-sw,0) * 1deg); } }
 @keyframes petSway2 { 0%, 100% { rotate: calc(var(--pet-sw,0) * -1deg); } 50% { rotate: calc(var(--pet-sw,0) * 1deg); } }
 
-/* ---------- particles, ball, flying cookie (layer 3): the engine writes transform + opacity; parked ones are
-   hidden with no 3D transform (no compositor layer at rest, §3.3) ---------- */
+/* particle kinds, thought cloud, Bop count: _ui/fx.css (lazy) */
 .pet-p { position: absolute; left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; opacity: 0; visibility: hidden; }
-.pet-p[data-kind="crumb"] { width: 6px; height: 5px; margin: -3px 0 0 -3px; border-radius: 2px; background: #C98A4B; }
-.pet-p[data-kind="heart"] { width: 18px; height: 16px; margin: -8px 0 0 -9px; background: #FF8FAB;
-  clip-path: polygon(50% 100%, 7% 57%, 0 35%, 4% 14%, 18% 2%, 34% 2%, 50% 17%, 66% 2%, 82% 2%, 96% 14%, 100% 35%, 93% 57%); }
-.pet-p[data-kind="sparkle"] { width: 16px; height: 16px; margin: -8px 0 0 -8px; background: var(--volt);
-  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%); }
-.pet-p[data-kind="z"]::before, .pet-p[data-kind="note"]::before { position: absolute; inset: -6px; display: grid; place-items: center; font: 700 16px/1 var(--f-display); color: #E6EEFF; }
-.pet-p[data-kind="z"]::before { content: 'z'; }
-.pet-p[data-kind="note"]::before { content: '\266A'; font-size: 18px; color: var(--volt); }
-.pet-p[data-kind="wisp"] { width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #ffffff8c; }
-.pet-p[data-kind="tear"] { width: 7px; height: 10px; margin: -5px 0 0 -3.5px; border-radius: 50% / 60% 60% 40% 40%; background: #9CD3FF; }
 .pet-ball, .pet-flycookie { position: absolute; left: 0; top: 0; opacity: 0; visibility: hidden; }
 .pet-ball { width: 46px; height: 46px; margin: -23px 0 0 -23px; pointer-events: auto; touch-action: none; }
 .pet-flycookie { width: 44px; height: 44px; margin: -22px 0 0 -22px; pointer-events: none; }
 .pet-icon { display: block; width: 100%; height: 100%; }
 
-/* ---------- bubble, thought, chips (layer 4: opacity/transform only) ---------- */
+/* bubble: paged, never scrolled (§9.4); --pet-lines is the page's line budget */
 .pet-bubble {
   position: absolute; left: 50%; z-index: 3; max-width: min(78vw, 320px); padding: 11px 16px 12px; border-radius: 22px;
-  background: #F7F6F1; color: var(--ink); font: 500 15px/21px var(--f-body); text-align: center; pointer-events: auto;
+  background: #F7F6F1; color: var(--ink); font: 500 var(--pet-fs)/var(--pet-lh) var(--f-body); text-align: center; pointer-events: auto;
   transform: translate(-50%, calc(-100% - 14px)); transform-origin: 50% 100%;
   animation: petBubbleIn .34s var(--ease-over); transition: opacity .22s var(--ease-sine), transform .22s var(--ease-sine);
 }
 .pet-bubble::after { content: ''; position: absolute; left: 50%; bottom: -5px; width: 14px; height: 14px; margin-left: -7px; border-radius: 3px; background: inherit; transform: rotate(45deg); }
 .pet-bubble[data-out] { opacity: 0; transform: translate(-50%, calc(-100% - 22px)) scale(.96); }
-.pet-bubble-text { display: block; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
-.pet-bubble[data-expanded] .pet-bubble-text { overflow-y: auto; text-align: start; touch-action: pan-y; -webkit-user-select: text; user-select: text; }
-.pet-more { border: 0; background: none; padding: 0 0 0 6px; font-weight: 700; color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.pet-bubble-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--pet-lines,4); overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pet-pages { display: flex; align-items: center; justify-content: center; gap: 10px; height: 22px; }
+.pet-dots { display: flex; gap: 5px; }
+.pet-dots i { width: 6px; height: 6px; border-radius: 50%; background: #14202c40; }
+.pet-dots i[data-on] { background: var(--ink); }
+.pet-more { margin: -11px 0; padding: 11px 4px; border: 0; background: none; font-weight: 700; color: var(--ink); }
 @keyframes petBubbleIn { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)) scale(.82); } }
-
-.pet-thought { position: absolute; z-index: 2; width: 46px; height: 46px; transform-origin: 0 100%; animation: petThought 2.4s var(--ease-out) forwards; }
-.pet-thought-cloud { position: absolute; inset: 0; display: grid; place-items: center; padding: 9px; border-radius: 50%; background: #f7f6f1eb; }
-.pet-thought-dot { position: absolute; border-radius: 50%; background: #f7f6f1eb; width: 8px; height: 8px; left: -8px; bottom: -6px; }
-.pet-thought-dot + .pet-thought-dot { width: 5px; height: 5px; left: -15px; bottom: -13px; }
-@keyframes petThought { 0% { opacity: 0; transform: scale(.4); } 14% { opacity: 1; transform: scale(1.06); } 22%, 82% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: translateY(-8px) scale(.94); } }
 
 .pet-days { position: absolute; left: 50%; transform: translateX(-50%); font: 500 12px/16px var(--f-body); letter-spacing: .02em; color: var(--text-2); white-space: nowrap; pointer-events: none; animation: petDays 2.6s var(--ease-sine) forwards; }
 @keyframes petDays { 0% { opacity: 0; } 15%, 77% { opacity: 1; } 100% { opacity: 0; } }
-.pet-score { position: absolute; left: 50%; top: calc(var(--pet-safe-top,env(safe-area-inset-top,0px)) + 14px); min-width: 46px; padding: 4px 14px; border-radius: 999px; transform: translateX(-50%); background: var(--volt); color: var(--on-volt); font: 700 18px/26px var(--f-display); text-align: center; animation: petPop .3s var(--ease-over); }
-@keyframes petPop { from { transform: translateX(-50%) scale(.6); opacity: 0; } }
 
-/* ---------- dock: three toys in need rings ---------- */
-.pet-bottom { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 0 16px calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 14px); pointer-events: none; }
+/* rail → dock row → pill, centred column */
+.pet-bottom { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: var(--pet-col); margin: 0 auto; padding: 0 16px calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 14px); pointer-events: none; }
 .pet-bottom > * { pointer-events: auto; }
-.pet-dock { display: flex; gap: 30px; justify-content: center; transition: opacity .6s var(--ease-sine); }
+.pet-root:is([data-kb], [data-talkopen]) :is(.pet-rail, .pet-row) { display: none; }
+
+/* room rail: 32 px, 44 px hit area (transparent borders) */
+.pet-rail { display: flex; justify-content: center; align-items: center; height: 32px; }
+.pet-room { display: flex; align-items: center; gap: 6px; min-width: 44px; height: 44px; padding: 0 10px; border: solid transparent; border-width: 6px 0; border-radius: 22px; background: none padding-box; color: var(--text-2); font-size: var(--pet-sm); line-height: 18px; white-space: nowrap; touch-action: manipulation; }
+.pet-room[aria-selected=true] { background-color: #ffffff17; color: var(--text); }
+.pet-room svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pet-root[data-h=peek] .pet-room:not([aria-selected=true]), .pet-root[data-h=peek] .pet-room svg { display: none; }
+.pet-root[data-h=tall]:not([data-layout=wide]) .pet-room { flex-direction: column; gap: 0; padding: 0 6px; border: 0; font-size: 11px; line-height: 13px; }
+.pet-root[data-h=tall] .pet-rail { height: 44px; }
+.pet-root[data-layout=wide] .pet-rail { position: fixed; top: 50%; inset-inline-start: 16px; height: auto; flex-direction: column; align-items: stretch; transform: translateY(-50%); }
+
+.pet-row, .pet-dock { display: flex; gap: var(--pet-gap); justify-content: center; align-items: center; }
+.pet-dock { transition: opacity .6s var(--ease-sine); }
 .pet-root[data-asleep] .pet-dock { opacity: .55; }
-.pet-toy { position: relative; width: 68px; height: 68px; padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; touch-action: none; transition: transform .18s var(--ease-over); }
+.pet-toy { position: relative; width: var(--pet-toy); height: var(--pet-toy); padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; touch-action: none; transition: transform .18s var(--ease-over); }
 .pet-toy:active { transform: scale(.9); }
-.pet-toy-face { width: 52px; height: 52px; padding: 9px; border-radius: 50%; background: #ffffff12; box-shadow: inset 0 -3px 0 #0003, inset 0 1px 0 #ffffff1a; }
+.pet-toy-face { width: calc(var(--pet-toy) - 16px); height: calc(var(--pet-toy) - 16px); padding: 9px; border-radius: 50%; background: #ffffff12; box-shadow: inset 0 -3px 0 #0003, inset 0 1px 0 #ffffff1a; }
 .pet-toy[data-wants] .pet-toy-face { animation: petWiggle 6s var(--ease-sine) infinite; }
 .pet-toy[data-lifted] .pet-toy-face > svg { opacity: 0; }
 .pet-ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -100,9 +98,8 @@
 .pet-ring-fill { stroke: var(--volt); stroke-linecap: round; transition: stroke-dashoffset .6s var(--ease-sine); }
 @keyframes petWiggle { 0%, 86%, 100% { transform: rotate(0); } 89% { transform: rotate(-2deg); } 93% { transform: rotate(2deg); } 96% { transform: rotate(-1deg); } }
 
-/* ---------- talk pill ---------- */
 .pet-talk { position: relative; width: 100%; max-width: 420px; }
-.pet-pill { display: flex; align-items: center; gap: 6px; width: 100%; height: 52px; padding: 0 6px 0 20px; border-radius: 999px; background: #16191ee0; border: 1px solid #ffffff14; transition: border-color .18s var(--ease-sine); }
+.pet-pill { display: flex; align-items: center; gap: 6px; width: 100%; height: var(--pet-pill); padding: 0 6px; padding-inline-start: 20px; border-radius: 999px; background: #16191ee0; border: 1px solid #ffffff14; transition: border-color .18s var(--ease-sine); }
 .pet-pill[data-recording] { border-color: var(--volt); }
 .pet-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: none; background: none; color: var(--text); font: 500 16px/1 var(--f-body); -webkit-user-select: text; user-select: text; touch-action: manipulation; }
 .pet-input::placeholder { color: var(--text-2); }
@@ -117,11 +114,8 @@
 .pet-hint { font-size: 13px; color: var(--text-2); }
 @keyframes petChip { 0% { opacity: 0; transform: translate(-50%, 8px) scale(.94); } 14% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; transform: translate(-50%, -96px) scale(.9); } }
 
-/* ---------- hidden or minimised (§3.3): every CSS loop stops with the engine (PetApp mirrors pageActive()) ---------- */
 .pet-root[data-paused] *, .pet-root[data-paused] *::before { animation-play-state: paused !important; }
-
-/* ---------- reduced (§2.9): blinks, faces and fades stay; loops and travel go. The OS setting reaches here as
-   data-tier="reduced" (PetApp follows prefers-reduced-motion live), so one block serves both ---------- */
+/* reduced (§2.9): loops and travel go */
 .pet-root[data-tier="reduced"] :is(.pet-breathe, .pet-toy-face) { animation: none !important; }
 .pet-root[data-tier="reduced"] :is(.pet-chip, .pet-thought) { animation-name: petDays; }
 .pet-root[data-tier="reduced"] :is(.pet-bubble, .pet-score) { animation: petFade .15s linear; }

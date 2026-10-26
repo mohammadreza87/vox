@@ -7,26 +7,83 @@
 import type { MotionStyle, MotionValue } from 'framer-motion';
 import type { Expression } from '@/lib/studio/character';
 import type {
-  CareRequest, CareResponse, CharacterLook, Mood, NeedKey, PetAction, PetErrorBody, PetErrorCode, PetPrivateView, PetView,
-  Stage, TalkRequest, TalkResponse, TalkVoiceResponse,
+  CareRequest, CareResponse, CharacterLook, GrowthConfirmResponse, LookRequest, LookResponse, Mood, NeedKey, PetAction, PetErrorBody, PetErrorCode, PetPrivateView, PetView,
+  Stage, TalkAction, TalkRequest, TalkResponse, TalkVoiceResponse, TalkVoiceStreamEvent,
 } from '@/lib/pet/types';
+import type { PetGrowthView } from '@/lib/pet/growth';
+import type { PetCheckinsRequest, PetCheckinsView } from '@/lib/pet/checkins';
+import type { AskId, GardenState, PetPlayView, PlayRequest as PlayMutationRequest, PlayResponse, SeedKind, WearableId, WearSlot } from '@/lib/pet/play';
 import type { RigBindings } from '../../_components/character/CharacterView';
-import type { Point, ReactionEvent, SayLine, Side, Tier, Zone } from '../_engine/types';
+import type { MotionCue, Point, ReactionEvent, Room, RoomReaction, SayLine, Side, Tier, Zone } from '../_engine/types';
 
 /* ---------- API (brief §3.8): every call sends X-Telegram-Init-Data and the x-pet-tz header ---------- */
 
+/** The play record (design §3.4): `PetView.play` on open, and what POST …/play answers. */
+export type { PetPlayView, PlayResponse };
+/** One play mutation, plus `askAccepted` (Wave B server: the yes on a permission sheet, §6.1 rule 6) until play.ts carries it. */
+export type PlayRequest = PlayMutationRequest | { op: 'askAccepted'; ask: AskId };
+
 /** `keepalive`: the request outlives the page (care flushed on hide, before Telegram may close it). */
 export interface PetRequestOpts { signal?: AbortSignal; keepalive?: boolean }
+
+/* ---------- Wave B, optional until the server lands them (design §4.11, §8A) ---------- */
+
+/** `PetView.growth` (pet/growth.ts, §4.11): every moment, its agent-wide `lit`, and `mine`, the ids lit only for this person. */
+export type { PetGrowthView };
+export type PetGrowthMoment = PetGrowthView['moments'][number];
+/**
+ * UX-02's launch facts (PRIVACY_AND_CONSENT.md §8, `PetView.voiceNotice`): who hears the audio, where, and the verified
+ * retention line, with optional Persian spellings. Until all three are resolved the mic sheet says the providers are
+ * listed in Privacy (never a brace, never a silent gap).
+ */
+export type PetVoiceNotice = NonNullable<PetView['voiceNotice']> & { retentionFa?: string; providersFa?: string; locationsFa?: string };
+/** What lit moments add to the character (_engine/details.ts `Details`): taught a glint, task a pin, access a charm. */
+export interface LitDetails { glint?: boolean; pin?: boolean; charm?: boolean; keepsakes?: string[]; seasonal?: string | null }
+/* ---------- Wave C (design §5, §6.2, §8.4): the server's shapes (pet/checkins.ts, pet/types.ts) ---------- */
+
+/** The check-in moment types (§5.2) and GET/POST …/checkins: the view answered, the requests (P1 yes with consent, resume, stop). */
+export type { CheckinTypes, PetCheckinReplay } from '@/lib/pet/checkins';
+export type CheckinPrefs = PetCheckinsView;
+export type CheckinsRequest = PetCheckinsRequest;
+/** pet_action (§8.4): the page acts only at confidence ≥ 0.75 (petAction.ts), after the reply. */
+export type { PetActionKind, TalkAction } from '@/lib/pet/types';
+
+/** PetView plus the Persian spellings of UX-02's facts (the server sends the providers; locations and retention are a legal to-do). */
+export type PetViewB = PetView & { voiceNotice?: PetVoiceNotice };
+/** A talk reply may say an explicit "remember this" save happened (UX-06), the cue for the growth confirm step. */
+export type TalkReplyB = (TalkResponse | TalkVoiceResponse) & { savedNote?: boolean; memorySaved?: boolean; growthMoment?: string; action?: TalkAction };
+
+/** talk-voice?stream=1 (§8A.3): NDJSON, one event per line: transcript, reply, sentences, then done (or a final error). */
+export type VoiceStreamEvent = TalkVoiceStreamEvent;
+
+export interface VoiceOpts extends PetRequestOpts {
+  /** sent as `handsFree: true` (the server's per-turn voice line, §8A.1) */
+  handsFree?: boolean;
+}
 
 export interface PetApi {
   /** GET /api/studio/pet/:agentId */
   get(agentId: string, o?: PetRequestOpts): Promise<PetView>;
   /** POST …/care. pet/tickle are flushed as tap counts every 2 s. */
   care(agentId: string, req: CareRequest, o?: PetRequestOpts): Promise<CareResponse>;
+  /** POST …/play (design §3.4): one idempotent play mutation, sent with the care epoch like care. Optional until the client implements it. */
+  play?(agentId: string, req: PlayRequest, o?: PetRequestOpts): Promise<PlayResponse>;
   /** POST …/talk */
   talk(agentId: string, req: TalkRequest, o?: PetRequestOpts): Promise<TalkResponse>;
   /** POST …/talk-voice, multipart `audio` (MediaRecorder blob) */
-  talkVoice(agentId: string, audio: Blob, o?: PetRequestOpts): Promise<TalkVoiceResponse>;
+  talkVoice(agentId: string, audio: Blob, o?: VoiceOpts): Promise<TalkVoiceResponse>;
+  /**
+   * POST …/talk-voice?stream=1: events as they arrive (`onEvent`), resolving with the whole turn. A server that answers
+   * plain JSON resolves with it (no events). Null: this server has no stream route and did not take the turn (post the
+   * plain call instead); any other failure throws like talkVoice.
+   */
+  talkVoiceStream?(agentId: string, audio: Blob, onEvent: (e: VoiceStreamEvent) => void, o?: VoiceOpts): Promise<TalkVoiceResponse | null>;
+  /** POST …/growth/confirm `{ momentId }` (§4.11): the person said yes to "Shall I keep this as …?" */
+  growthConfirm?(agentId: string, momentId: string, o?: PetRequestOpts): Promise<GrowthConfirmResponse>;
+  /** GET …/checkins (no request) or POST it (§5.2). Refusals come as `checkins_unavailable` / `consent_*` (never `pet_unavailable`: a server without the route is renamed). */
+  checkins?(agentId: string, req?: CheckinsRequest, o?: PetRequestOpts): Promise<CheckinPrefs>;
+  /** POST …/look (§4.3): the real look, pet-signed, for `view.canEditLook` only; 403 `look_forbidden` otherwise */
+  look?(agentId: string, req: LookRequest, o?: PetRequestOpts): Promise<LookResponse>;
   /** Circles S4: GET circle | notes, POST circle/decision | circle/leave, DELETE notes/:copyId (no care epoch) */
   send?<T>(agentId: string, method: 'GET' | 'POST' | 'DELETE', action: string, body?: unknown, o?: PetRequestOpts): Promise<T>;
 }
@@ -206,6 +263,32 @@ export interface PetEngine {
   start(): void;
   stop(): void;
   dispose(): void;
+
+  /* the motion layer (loop.ts PetMotionControls, design §10): optional, so a page or a test double without it still runs */
+  setStage?(stage: Stage): void;
+  setRoom?(room: Room, o?: { dir?: -1 | 1; instant?: boolean }): void;
+  roomReact?(kind: RoomReaction, o?: { won?: boolean; zen?: boolean }): void;
+  loadRooms?(): Promise<void>;
+  /** `detail` (and `id` for a keepsake or the seasonal one) fades in at the `litPeak` cue, which names it */
+  lightMoment?(o?: { fidget?: string; detail?: 'glint' | 'pin' | 'charm' | 'keepsake' | 'seasonal'; id?: string }): void;
+  /** steer the eyes to a stage point (Starfall's falling star), null to let go */
+  setGaze?(p: Point | null): void;
+  unlockFidget?(id: string): boolean;
+  setReducedMotion?(on: boolean | null): void;
+  setGuidedBreath?(periodS: number | null): void;
+  onMotion?(fn: (c: MotionCue) => void): () => void;
+  /** the lit moments' detail parts (eye glints, pins, charms, floor keepsakes), from the growth view (motion engineer, Wave B) */
+  setDetails?(d: LitDetails): void;
+  /** hold (or let go of) the listening pose for hands-free (motion engineer, Wave B) */
+  setListening?(on: boolean): void;
+  /** the person's closet overlay on the character (§4.3), this screen only (motion engineer, Wave C) */
+  setWearing?(w: Partial<Record<WearSlot, WearableId>>): void;
+  /** the Garden pot's floor state (§4.5); null clears it (motion engineer, Wave C) */
+  setGarden?(g: { state: GardenState; seed: SeedKind } | null): void;
+  /** Guess my word (§4.2): it has a word, a question heard, a right or wrong guess, the word told; Zen one preset softer (motion engineer, Wave C) */
+  guessReact?(k: 'think' | 'heard' | 'right' | 'wrong' | 'reveal', o?: { zen?: boolean }): void;
+  /** the Closet mirror (§4.3): a glance at the item, a turn to the mirror (same as roomReact('tryOn', { id })) */
+  tryOn?(id: string): void;
 }
 
 /* ---------- PetRig ---------- */

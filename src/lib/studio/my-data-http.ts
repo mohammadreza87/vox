@@ -1,5 +1,5 @@
 /**
- * "My data" API (`/api/studio/my-data`): a person's own pet care, agent choices, group participation, notes and
+ * "My data" API (`/api/studio/my-data`): a person's own pet care and play, agent choices, group participation, notes and
  * connection records, with export and erase. It replaces the pet page's export and forget, which trusted agent-signed initData: an agent's
  * creator holds that bot's token (BotFather), so they could forge it for anyone, or harvest a genuine one by
  * repointing the bot's menu. Here only initData signed by the manager bot (VOXX_BOT_TOKEN, which only Vox holds) is
@@ -19,6 +19,9 @@ import { isSchemaValidationError } from '../error-contract';
 import { verifyManagerInitData } from './initdata-trust';
 import { boundedStudioRequest } from './http';
 import { petStoreFor } from './pet-store';
+import { petPlayStoreFor } from './pet-play-store';
+import { petCheckinStoreFor } from './pet-checkins/store';
+import { noteCheckinStop } from './pet-checkins/deliver';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { trustedStudioRequestOrigin } from './request-origin';
 import { StudioError, type Studio } from './service';
@@ -83,13 +86,24 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
       const notes = await studio.notesFor(user.id).catch(() => []);
       const connections = await connectionsForExport(studio, user.id);
       const petCare = await pets.listForUser(user.id);
+      // Play (design §3.4) is content-free; a failing play store never blocks the export either.
+      const petPlay = await petPlayStoreFor(studio).then((plays) => plays.listForUser(user.id)).catch(() => {
+        (studio.deps.logger ?? console).warn('[studio] pet_play_export_failed');
+        return [];
+      });
+      // Check-ins (design §5) are content-free too; a failing store never blocks the export.
+      const petCheckins = await petCheckinStoreFor(studio).then((store) => store.get(user.id)).catch(() => {
+        (studio.deps.logger ?? console).warn('[studio] pet_checkins_export_failed');
+        return null;
+      });
       // Display names only for the agents the person's own records already name.
-      const named = new Set([...petCare.map((c) => c.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds),
+      const named = new Set([...petCare.map((c) => c.agentId), ...petPlay.map((p) => p.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds),
         ...(connections.connections ?? []).flatMap((e) => [...e.connections.flatMap((c) => c.agentId ? [c.agentId] : []), ...e.grants.map((g) => g.agentId)])]);
       const state = await studio.deps.store.read();
       const agentNames: Record<string, string> = {};
       for (const agent of state.agents) if (named.has(agent.id)) agentNames[agent.id] = agent.persona.name;
-      const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}), ...connections, agentNames };
+      const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}),
+        ...(petPlay.length ? { petPlay } : {}), ...(petCheckins ? { petCheckins } : {}), ...connections, agentNames };
       return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-my-data.json"' });
     }
 
@@ -104,13 +118,20 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
     let input: unknown;
     try { input = await bounded.json(); } catch { return fail('invalid_request', 400); }
     forgetSchema.parse(input);
-    // Circle rows, note copies, channel post drafts and choices first, so a failing store fails before pet care is touched.
+    // Circle rows, note copies, channel post drafts, choices and play first, so a failing store fails before pet care is touched.
     const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id);
     await studio.forgetChannelDrafts(user.id);
-    const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
+    const choices = await studio.forgetAgentChoices(user.id);
+    // Play shares care's erasure epoch: both erasures rotate it, so no open from before this forget can write either.
+    const played = await (await petPlayStoreFor(studio)).eraseUser(user.id);
+    // Check-ins go too; any check-in still being sent fails its final fence (noteCheckinStop).
+    noteCheckinStop(user.id);
+    const checkins = await (await petCheckinStoreFor(studio)).eraseUser(user.id);
+    const erased = await pets.eraseUser(user.id);
     // Connections in both spaces, for every agent: best-effort, it never fails the forget (a vault entry may wait for the broker).
     const connections = await studio.forgetConnections(user.id);
     const body: MyDataForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}),
+      ...(played ? { playErased: played } : {}), ...(checkins ? { checkinsErased: checkins } : {}),
       ...(connections.erased ? { connectionsErased: connections.erased } : {}), ...(connections.pending ? { connectionsPending: connections.pending } : {}) };
     return json(body);
   } catch (error) {

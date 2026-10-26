@@ -1,0 +1,23 @@
+/* Loaded lazily by Particles (FxStyles) as the stage first paints, so the route's own CSS stays in budget (§3.3).
+   Until it lands a particle is an invisible box: nothing shows unstyled. */
+.pet-p[data-kind="crumb"] { width: 6px; height: 5px; margin: -3px 0 0 -3px; border-radius: 2px; background: #C98A4B; }
+.pet-p[data-kind="heart"] { width: 18px; height: 16px; margin: -8px 0 0 -9px; background: #FF8FAB;
+  clip-path: polygon(50% 100%, 7% 57%, 0 35%, 4% 14%, 18% 2%, 34% 2%, 50% 17%, 66% 2%, 82% 2%, 96% 14%, 100% 35%, 93% 57%); }
+.pet-p[data-kind="sparkle"] { width: 16px; height: 16px; margin: -8px 0 0 -8px; background: var(--volt);
+  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%); }
+.pet-p[data-kind="z"]::before, .pet-p[data-kind="note"]::before { position: absolute; inset: -6px; display: grid; place-items: center; font: 700 16px/1 var(--f-display); color: #E6EEFF; }
+.pet-p[data-kind="z"]::before { content: 'z'; }
+.pet-p[data-kind="note"]::before { content: '\266A'; font-size: 18px; color: var(--volt); }
+.pet-p[data-kind="wisp"] { width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #ffffff8c; }
+.pet-p[data-kind="tear"] { width: 7px; height: 10px; margin: -5px 0 0 -3.5px; border-radius: 50% / 60% 60% 40% 40%; background: #9CD3FF; }
+.pet-p[data-kind="drop"] { width: 5px; height: 12px; margin: -6px 0 0 -2.5px; border-radius: 50% / 30% 30% 70% 70%; background: #9CD3FF; }
+.pet-thought { position: absolute; z-index: 2; width: 46px; height: 46px; transform-origin: 0 100%; animation: petThought 2.4s var(--ease-out) forwards; }
+.pet-thought-cloud { position: absolute; inset: 0; display: grid; place-items: center; padding: 9px; border-radius: 50%; background: #f7f6f1eb; }
+.pet-thought-dot { position: absolute; border-radius: 50%; background: #f7f6f1eb; width: 8px; height: 8px; left: -8px; bottom: -6px; }
+.pet-thought-dot + .pet-thought-dot { width: 5px; height: 5px; left: -15px; bottom: -13px; }
+@keyframes petThought { 0% { opacity: 0; transform: scale(.4); } 14% { opacity: 1; transform: scale(1.06); } 22%, 82% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: translateY(-8px) scale(.94); } }
+.pet-score { position: absolute; left: 50%; top: calc(var(--pet-safe-top,env(safe-area-inset-top,0px)) + 14px); display: flex; gap: 6px; padding: 8px 12px; border-radius: 999px; transform: translateX(-50%); background: #0006; animation: petPop .3s var(--ease-over); }
+.pet-score i { width: 9px; height: 9px; border-radius: 50%; background: #ffffff33; transition: background-color .2s, transform .2s var(--ease-over); }
+.pet-score i[data-on] { background: var(--volt); transform: scale(1.15); }
+@keyframes petPop { from { transform: translateX(-50%) scale(.6); opacity: 0; } }
+.pet-root[data-room="garden"] .pet-details [data-anim="sway"] { transform-box: fill-box; transform-origin: 50% 100%; animation: petSprout 3.4s var(--ease-sine) infinite alternate; } @keyframes petSprout { from { transform: rotate(-4deg) } to { transform: rotate(4deg) } } .pet-root[data-room="garden"] .pet-details [data-anim="shimmer"] > * { animation: petShimmer 2.4s var(--ease-sine) infinite alternate; } .pet-details [data-anim="shimmer"] > :nth-child(2) { animation-delay: -.8s } .pet-details [data-anim="shimmer"] > :nth-child(3) { animation-delay: -1.6s } @keyframes petShimmer { from { opacity: .2 } to { opacity: 1 } } .pet-root[data-tier="reduced"] .pet-details [data-anim], .pet-root[data-tier="reduced"] .pet-details [data-anim] > * { animation: none; }

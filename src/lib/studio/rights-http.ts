@@ -13,7 +13,12 @@ import { verifyInitData } from './auth';
 import { boundedStudioRequest } from './http';
 import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { petStoreFor } from './pet-store';
+import { petPlayStoreFor } from './pet-play-store';
+import { petCheckinStoreFor } from './pet-checkins/store';
+import { noteCheckinStop } from './pet-checkins/deliver';
+import type { PetCheckinRecord } from '../pet/checkins';
 import type { PetCare } from '../pet/types';
+import type { PetPlay } from '../pet/play';
 import type { AgentJoin } from './types';
 import type { CircleParticipationExport, NoteExport } from '../circles/contracts';
 import type { ConnectionsExport } from '../connections/rights';
@@ -35,10 +40,25 @@ async function petCareForExport(studio: Studio, id: number): Promise<{ petCare: 
   catch { (studio.deps.logger ?? console).warn('[studio] pet_export_failed'); return { petCareUnavailable: true }; }
 }
 
-/** Pet care erasure at intake: never fails the filed request (replaying it retries). */
+/** Pet care erasure at intake: never fails the filed request (replaying it retries). Play (design §3.4) goes with it. */
 async function erasePetCare(studio: Studio, id: number): Promise<void> {
+  try { await (await petPlayStoreFor(studio)).eraseUser(id); }
+  catch { (studio.deps.logger ?? console).warn('[studio] pet_play_erasure_failed'); }
+  // Check-ins (design §5): the record and its consent go; a send in flight fails its final fence.
+  try { noteCheckinStop(id); await (await petCheckinStoreFor(studio)).eraseUser(id); }
+  catch { (studio.deps.logger ?? console).warn('[studio] pet_checkins_erasure_failed'); }
   try { await (await petStoreFor(studio)).eraseUser(id); }
   catch { (studio.deps.logger ?? console).warn('[studio] pet_erasure_failed'); }
+}
+/** Pet play for a rights export: present only when any exists, or a flag that it could not be read. */
+async function petPlayForExport(studio: Studio, id: number): Promise<{ petPlay?: PetPlay[] } | { petPlayUnavailable: true }> {
+  try { const petPlay = await (await petPlayStoreFor(studio)).listForUser(id); return petPlay.length ? { petPlay } : {}; }
+  catch { (studio.deps.logger ?? console).warn('[studio] pet_play_export_failed'); return { petPlayUnavailable: true }; }
+}
+/** Pet check-ins (design §5) for a rights export: present only when a record exists, or a flag that it could not be read. */
+async function petCheckinsForExport(studio: Studio, id: number): Promise<{ petCheckins?: PetCheckinRecord } | { petCheckinsUnavailable: true }> {
+  try { const petCheckins = await (await petCheckinStoreFor(studio)).get(id); return petCheckins ? { petCheckins } : {}; }
+  catch { (studio.deps.logger ?? console).warn('[studio] pet_checkins_export_failed'); return { petCheckinsUnavailable: true }; }
 }
 /** Agent-card choices (Circles) for a rights export: present only when any exist, or a flag that they could not be read. */
 async function agentChoicesForExport(studio: Studio, id: number): Promise<{ agentChoices?: AgentJoin[] } | { agentChoicesUnavailable: true }> {
@@ -184,7 +204,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       // Pet care is per person and agent, not per space: every export carries all of it. Read
       // before the fences below, which must stay free of awaits. A pet store failure never fails the
       // export: it says the pet part is missing instead.
-      const petCare = result.prepared ? { ...await petCareForExport(studio, user.id), ...await agentChoicesForExport(studio, user.id), ...await circlesForExport(studio, user.id), ...await notesForExport(studio, user.id), ...await connectionsForExport(studio, user.id, space!) } : undefined;
+      const petCare = result.prepared ? { ...await petCareForExport(studio, user.id), ...await petPlayForExport(studio, user.id), ...await petCheckinsForExport(studio, user.id), ...await agentChoicesForExport(studio, user.id), ...await circlesForExport(studio, user.id), ...await notesForExport(studio, user.id), ...await connectionsForExport(studio, user.id, space!) } : undefined;
       if (result.prepared) {
         // Serialization precedes the last synchronous authority check. There is
         // no await between this fence and constructing the attachment response.

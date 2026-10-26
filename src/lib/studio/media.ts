@@ -49,7 +49,9 @@ export class OpenAIMedia {
     private readonly apiKey: string,
     private readonly fetchFn: FetchFn = fetch,
     private readonly imageModel = process.env.OPENAI_IMAGE_MODEL ?? 'gpt-image-1',
-    private readonly sttModel = process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+    // OPENAI_STT_MODEL overrides the speech-to-text model. OpenAI's deprecations page (fetched 26 October 2026) removes
+    // gpt-4o-mini-transcribe on 26 February 2027; the replacement is gpt-transcribe (design §8A.5). Default unchanged.
+    private readonly sttModel = process.env.OPENAI_STT_MODEL?.trim() || 'gpt-4o-mini-transcribe',
     private readonly decisionModel = process.env.OPENAI_DECISION_MODEL ?? 'gpt-6-luna'
   ) {}
 
@@ -452,6 +454,8 @@ export interface VoiceAgentConfig {
   llmUrl: string;
   llmSecretId: string;
   maxCallSeconds: number;
+  /** the live-call TTS model; unset: ELEVENLABS_LIVE_TTS_MODEL, else eleven_flash_v2_5 */
+  ttsModel?: string;
 }
 
 /**
@@ -474,7 +478,9 @@ export function voiceAgentBody(c: VoiceAgentConfig) {
           custom_llm: { url: c.llmUrl, model_id: 'vox-persona', api_key: { secret_id: c.llmSecretId } },
         },
       },
-      tts: { model_id: 'eleven_flash_v2_5' },
+      // ELEVENLABS_LIVE_TTS_MODEL overrides the live-call voice model (design §8A.4). Default unchanged: eleven_flash_v2_5,
+      // which docs/STUDIO_VOICES.md lists without Persian; eleven_v4_turbo lists Persian (switch after the bake-off).
+      tts: { model_id: c.ttsModel || process.env.ELEVENLABS_LIVE_TTS_MODEL?.trim() || 'eleven_flash_v2_5' },
       conversation: { max_duration_seconds: c.maxCallSeconds },
     },
     platform_settings: {

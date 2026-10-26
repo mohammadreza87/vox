@@ -40,6 +40,9 @@ jobs:
       - name: Check Studio style rules
         run: npm run check:studio-style && node --test scripts/check-studio-style.test.mjs
 
+      - name: Check pet copy (care game lint, EN and FA)
+        run: node --test scripts/pet-copy-lint.test.mjs scripts/check-pet-gates.test.mjs && npm run check:pet-copy
+
       - name: Run TypeScript type check
         run: npx tsc --noEmit
 

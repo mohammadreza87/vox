@@ -33,14 +33,15 @@ export type DecisionLogAnswer =
 
 export interface DecisionLogRow {
   id: string;
-  questionSetVersion: 'v1' | 'v2' | 'v2-live' | 'image-v1';
+  questionSetVersion: 'v1' | 'v2' | 'v2-live' | 'image-v1' | 'pet-v1';
   names: string[];
   answers: DecisionLogAnswer[];
   outcome: 'answered' | 'unknown';
   unknownReason?: string;
   elapsedMs: number;
   inputTokens?: number;
-  routeTaken: 'quick' | 'thoughtful' | 'web' | 'untriaged';
+  /** `pet`: a pet decision (care game design §8.6), never a triage route. */
+  routeTaken: 'quick' | 'thoughtful' | 'web' | 'untriaged' | 'pet';
   personaId: string;
   chatKind: 'private' | 'group';
   language: 'fa' | 'en' | 'mixed' | 'unknown';
@@ -71,14 +72,14 @@ const answerSchema = z.discriminatedUnion('type', [
 ]);
 
 export const newDecisionLogRowSchema: z.ZodType<NewDecisionLogRow> = z.object({
-  questionSetVersion: z.enum(['v1', 'v2', 'v2-live', 'image-v1']),
+  questionSetVersion: z.enum(['v1', 'v2', 'v2-live', 'image-v1', 'pet-v1']),
   names: z.array(z.string().regex(NAME)).min(1).max(MAX_NAMES),
   answers: z.array(answerSchema).max(MAX_NAMES),
   outcome: z.enum(['answered', 'unknown']),
   unknownReason: z.enum(UNKNOWN_REASONS).optional(),
   elapsedMs: z.number().int().min(0).max(600_000),
   inputTokens: z.number().int().min(0).optional(),
-  routeTaken: z.enum(['quick', 'thoughtful', 'web', 'untriaged']),
+  routeTaken: z.enum(['quick', 'thoughtful', 'web', 'untriaged', 'pet']),
   personaId: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/),
   chatKind: z.enum(['private', 'group']),
   language: z.enum(['fa', 'en', 'mixed', 'unknown']),
@@ -314,4 +315,43 @@ export function recordTriageDecision(sink: DecisionLogSink, event: TriageDecisio
       at: event.at,
     });
   } catch { /* never throws into delivery */ }
+}
+
+/** One pet decision (care game design §8.6): which questions were asked, and what came back. Content-free. */
+export interface PetDecisionEvent {
+  questions: readonly DecisionQuestion[];
+  /** null: the call failed or timed out before any answer */
+  detail: DecideDetail | null;
+  elapsedMs: number;
+  /** the agent (persona) id; never a person id */
+  personaId: string;
+  /** the person's language on the pet page (not a script ratio: pet inputs carry no text) */
+  language: 'fa' | 'en';
+  at: Date;
+}
+
+/** Builds and records one `pet-v1` row, routed `pet`. Only answers to the questions asked, with catalogue values. Never throws. */
+export function recordPetDecision(sink: DecisionLogSink, event: PetDecisionEvent): void {
+  try {
+    const answers = event.questions.flatMap((q) => {
+      const a = logAnswer(q, event.detail?.answers[q.name]);
+      return a ? [a] : [];
+    });
+    const outcome = answers.length > 0 ? 'answered' : 'unknown';
+    const inputTokens = event.detail?.inputTokens;
+    sink.record({
+      questionSetVersion: 'pet-v1',
+      names: event.questions.map((q) => q.name),
+      answers,
+      outcome,
+      ...(outcome === 'unknown' ? { unknownReason: event.detail?.unknownReason ?? (event.detail === null ? 'timeout' : 'empty') } : {}),
+      elapsedMs: Math.max(0, Math.round(event.elapsedMs)),
+      ...(typeof inputTokens === 'number' ? { inputTokens } : {}),
+      routeTaken: 'pet',
+      personaId: event.personaId,
+      chatKind: 'private',
+      language: event.language,
+      at: event.at,
+    });
+  } catch { /* never throws into a pet request */ }
 }

@@ -121,3 +121,32 @@ describe('mock api', () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe('pet api, Wave B', () => {
+  it('posts play mutations and growth/confirm with the care epoch, and `handsFree` on a voice turn', async () => {
+    const fetch = vi.fn(async (url: string) => json(200, url.endsWith('/x') ? { careEpoch: 'e2' } : { play: {}, now: 1, lit: 'agent' }));
+    const api = createHttpApi({ fetch: fetch as never, initData: () => 'signed' });
+    await api.get('x');
+    await api.play!('x', { op: 'askAccepted', ask: 'P3' });
+    await api.growthConfirm!('x', 'release');
+    await api.talkVoice('x', new Blob(['a'], { type: 'audio/webm' }), { handsFree: true });
+    const calls = fetch.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[1][0]).toBe('/api/studio/pet/x/play');
+    expect(JSON.parse(calls[1][1].body as string)).toEqual({ op: 'askAccepted', ask: 'P3' });
+    expect(calls[2][0]).toBe('/api/studio/pet/x/growth/confirm');
+    expect(JSON.parse(calls[2][1].body as string)).toEqual({ momentId: 'release' });
+    for (const [, init] of calls.slice(1)) expect((init.headers as Record<string, string>)['x-pet-care-epoch']).toBe('e2');
+    expect((calls[3][1].body as FormData).get('handsFree')).toBe('true');
+  });
+
+  it('the ?mock=1 fake plays, lights a room moment for this person only, and confirms a taught one', async () => {
+    const api = createPetApi('?mock=1');
+    const v = await api.get('x');
+    expect(v.play).toBeTruthy();
+    const r = await api.play!('x', { op: 'roomVisited', room: 'play' });
+    expect(r.growth?.mine).toContain('room-play');
+    const c = await api.growthConfirm!('x', 'release');
+    expect(c.lit).toBe('agent');
+    expect(c.growth?.moments.find((m) => m.id === 'release')?.lit).toBeTruthy();
+  });
+});

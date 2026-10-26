@@ -25,20 +25,31 @@ import { CLOSED_EYES, eyeOpenness, gapeMouth, lidEye, mixMouth, petEye, petMouth
 import { follow, makeFollower, resetFollower } from './follower';
 import { Gaze } from './gaze';
 import { createGestureClassifier } from './gestures';
-import { BODY, Secondary, bankAtRest, compose, makeBank, stepBank, RigWriter, type Bank, type Geom, type RigFrame, type WriteStats } from './layers';
+import { BODY, Secondary, bankAtRest, compose, makeBank, stepBank, RigWriter, type Bank, type Geom, type RigFrame, type SecondaryOut, type WriteStats } from './layers';
+import { lowerTier, polish, stageMotion, weightTime, type StageMotion } from './motion';
 import { AudioLipSync, TextLipSync } from './lipsync';
+import type { DetailName, Details } from './details';
+import type { GardenInput } from './garden';
+import type { Wearing } from './outfits';
 import { Particles, park, place } from './particles';
 import { Ball, Fling, Hop, velocityStretch, type Bounds } from './physics';
 import { Player, type Playing } from './player';
 import { REACTIONS } from './reactions';
+import { BOND_SIGNATURES, SIGNATURE_MOVES } from './reactions/mood';
+import { hopIdle } from './reactions/motions';
+
+/** Rooms, the settle rule, growth moments, unlockable moves, the OS switch: their own chunk, preloaded after start (§10.7). */
+type Extras = typeof import('./extras');
+type LipSource = import('./extras').LipSource;
+type SpeakItem = import('./extras').SpeakItem;
 import { chance, range, seeded, sign, variantHistory } from './rng';
 import { anchorModel, bodyHull, defaultScene, gazeTo, toModel, toStage, zoneAt, type Placement } from './scene';
 import { tuningFor, volumeSx, type Tuning } from './species';
 import { atRest, jump, makeSpring, presetKC, retarget, step } from './spring';
 import {
   EVENT_PRIORITY, LOOP, MULTIPLY, NEUTRAL_POSE, PHYSICS, PRIORITY_ORDER, TIER_BUDGET,
-  type Channel, type LookTarget, type MouthKey, type Oscillation, type PetExpr, type Point, type PoseTargets, type ReactionCtx,
-  type ReactionEvent, type Rng, type Spring, type SpringPreset, type Tier, type VariantHistory,
+  type Beat, type Channel, type LookTarget, type MotionCue, type MouthKey, type Oscillation, type PetExpr, type Point, type PoseTargets, type ReactionCtx,
+  type GuessBeat, type PriorityClass, type ReactionEvent, type Rng, type Room, type RoomReaction, type RoomReactOpts, type Spring, type SpringPreset, type Tier, type VariantHistory,
 } from './types';
 
 /** A hop never takes off sooner than this after a landing: the squash reads before the next stretch. */
@@ -55,6 +66,77 @@ export interface EngineExtras {
   activity?: boolean;
   /** play reactions without the ±12 % / ±15 % jitter (frame sheets of the bare timeline) */
   exact?: boolean;
+  /**
+   * script-cost clock for the frame-budget guard (ms). Default performance.now with the real clock; with an
+   * injected clock it is off unless given (tests stay deterministic).
+   */
+  perf?: () => number;
+  /** follow the OS prefers-reduced-motion setting live (default: with `activity`, i.e. in the browser) */
+  followOS?: boolean;
+  /** the motion extras module, already loaded (tests, frame sheets): no lazy import */
+  motionExtras?: typeof import('./extras');
+}
+
+/**
+ * Engine methods beyond the UI contract (design §10): stage vocabulary, rooms, growth moments, reduced motion,
+ * the guided breath and motion cues. Stable names; the UI may call them as it adopts the rooms.
+ */
+export interface PetMotionControls {
+  /** the stage's motion vocabulary (§10.3) and look (same as setLook(look, stage); no celebration) */
+  setStage(stage: Stage): void;
+  /** switch rooms: a 300 ms transition (counter-lean, lean with the slide, settle) and the room's idle flavour; reduced or instant: a cut */
+  setRoom(room: Room, o?: { dir?: -1 | 1; instant?: boolean }): void;
+  /** a room's reaction by its final name (§10.4); Play's take `won` and `zen` (one preset softer, nothing flashes, no round-end flourish); the rooms' chunk loads on first use if needed */
+  roomReact(kind: RoomReaction, o?: RoomReactOpts): void;
+  /** preload the rooms' motion chunk (setRoom away from Home loads it too) */
+  loadRooms(): Promise<void>;
+  /**
+   * light a growth moment (§10.3): look up, slow blink, glow, nod (~1.2 s); `fidget` also unlocks that moment's move;
+   * `detail` (and `id` for a keepsake or the seasonal one) joins the shown details at the `litPeak` cue, which names it
+   */
+  lightMoment(o?: { fidget?: string; detail?: DetailName; id?: string }): void;
+  /** the growth details this view has lit (§4.11): what the stage can wear shows (a `details` cue says what), the rest waits for its part */
+  setDetails(d: Details): void;
+  /** hands-free (§8A.2): hold an attentive listening pose while the mic is open (under the talk states; the listen perk still plays on speech) */
+  setListening(on: boolean): void;
+  /**
+   * sentences in a row (§8A.3): one continuous lip-sync, each sentence filling its ms with a short closing pause and a
+   * small breath; `more` keeps the queue open for further sentences (a later call appends; stopSpeaking ends it)
+   */
+  speakQueue(items: SpeakItem[], o?: { more?: boolean }): void;
+  /** steer the eyes to a stage point (Starfall's nearest star), null to let go; a finger or a reaction's look still wins */
+  setGaze(p: Point | null): void;
+  /**
+   * this person's closet overlay (§4.3), whole (PetPlay.wearing as it is: a slot left out wears nothing). What the
+   * stage can show is worn now (closet items come with the accessory slot, stage 4; a `wearing` cue says what), the
+   * rest waits; never PetCare, never the agent's look
+   */
+  setWearing(w: Wearing): void;
+  /**
+   * the Garden's seed on the floor (§4.5), right of the pet: planted, sprouted, bloomed (or play.ts's view state with
+   * `seed`, as PetPlayView.garden carries it), or null; rain and the bloom aim at it (a `details` cue carries it)
+   */
+  setGarden(g: GardenInput | null): void;
+  /**
+   * Guess my word (§4.2), never sad: `think` it has a word (a sly secret smile), `heard` a question landed (a perk and
+   * a nod), `right` a pleased bounce and a glint, `wrong` a playful head-shake and a wink, `reveal` it says the word;
+   * Zen one preset softer (same as roomReact('guessThink' | 'guessHeard' | 'guessRight' | 'guessWrong' | 'guessReveal'))
+   */
+  guessReact(k: GuessBeat, o?: { zen?: boolean }): void;
+  /** the Closet mirror (§4.3): a glance at the item, a turn to the mirror with a small pose, a blush (same as roomReact('tryOn', { id })) */
+  tryOn(id: string): void;
+  /** a lit moment adds one signature move without touching Bond; returns false if it was already unlocked */
+  unlockFidget(id: string): boolean;
+  /** an erased moment takes its move back (silently) */
+  lockFidget(id: string): void;
+  /** reduced motion on/off, or null to follow the OS setting again (the tier passed in still applies) */
+  setReducedMotion(on: boolean | null): void;
+  /** Garden's "breathe with me": the breath slows to this period (s), deeper; null ends it */
+  setGuidedBreath(periodS: number | null): void;
+  /** discrete motion cues (settle, room swap, lit peak, degraded); returns an unsubscribe */
+  onMotion(fn: (c: MotionCue) => void): () => void;
+  /** what the motion layer is doing now (tests, the lab, the UI) */
+  readonly motion: { room: Room; stage: Stage; tier: Tier; contentFloat: boolean; signatures: number; reduced: boolean };
 }
 
 /** Read-only internals for tests and scripts/pet-frames.ts. */
@@ -76,9 +158,15 @@ export interface EngineDebug {
   cookie(): { x: number; y: number; s: number; o: number };
   /** the spring preset most recently retargeted (frame-sheet overlay) */
   readonly lastSpring: string;
+  /** the gaze (eye lead, darts) */
+  readonly gaze: { ex: number; ey: number; hx: number; hy: number; darts: boolean; lead: readonly [number, number] };
+  /** the current idle parameters (breath, blinks, drift), after the room, the settle float and the stage */
+  readonly idle: IdleParams;
+  /** feed one frame interval and cost to the frame-budget guard (tests) */
+  guardFrame(dtMs: number, costMs: number): void;
 }
 
-type DebugEngine = PetEngine & { readonly debug: EngineDebug };
+type DebugEngine = PetEngine & PetMotionControls & { readonly debug: EngineDebug };
 
 export function createPetEngine(o: PetEngineOptions & EngineExtras): DebugEngine {
   return new Engine(o);
@@ -108,22 +196,31 @@ interface Job { at: number; fn: () => void }
 
 class Engine implements PetEngine {
   /* config */
-  private look: CharacterLook;
+  look: CharacterLook;
   private stage: Stage;
   private size: number;
   private k: number;
-  private tier: Tier;
-  private mood: Mood;
+  /** the effective tier: the lowest of the one passed in, the frame guard's and reduced motion (OS or knob) */
+  tier: Tier;
+  private baseTier: Tier;
+  guardTier: Tier = 'full';
+  private reducedPref: boolean | null = null;
+  osReduced = false;
+  unsubOS: (() => void) | null = null;
+  /** frames chained from a busy frame (a wake from rest is never measured) */
+  private chained = false;
+  private costNow: (() => number) | null;
+  mood: Mood;
   private tuning: Tuning;
   private idle: IdleParams;
   private rng: Rng;
   private history: VariantHistory;
   private onCue?: (c: EngineCue) => void;
   private extras: EngineExtras;
-  private clock: NonNullable<PetEngineOptions['clock']>;
+  clock: NonNullable<PetEngineOptions['clock']>;
 
   /* geometry */
-  private model: CharacterModel;
+  model: CharacterModel;
   private hull: Point[];
   private geom: Geom;
   private growthFrom = 1;
@@ -159,7 +256,7 @@ class Engine implements PetEngine {
   private freezeFrom = -Infinity;
   private freezeUntil = -Infinity;
   private pose: PoseTargets = { ...NEUTRAL_POSE };
-  private sec = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, accY: 0, cheek: 1, shadow: 1, puff: 0 };
+  private sec: SecondaryOut = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, hairRot: 0, accY: 0, accRot: 0, faceY: 0, cheek: 1, shadow: 1, puff: 0 };
 
   /* faces and gaze overrides */
   private exprOv: { expr: PetExpr; id: number } | null = null;
@@ -168,24 +265,41 @@ class Engine implements PetEngine {
   private suppressBy: number | null = null;
   private lastExpr: PetExpr = 'idle';
   private shownStructural = 'idle';
-  private eyeKey = '';
-  private mouthKeyNow = '';
-  private finger: Point | null = null;
+  finger: Point | null = null;
   private drift = { x: 0, y: 0 };
   private glanceSide = 1;
   private lookAwayUntil = -Infinity;
 
   /* state */
-  private talkState: TalkState = 'idle';
-  private asleep = false;
-  private dozing = false;
-  private sleeping = false; // the yawn → drift sequence is under way
+  talkState: TalkState = 'idle';
+  asleep = false;
+  dozing = false;
+  sleeping = false; // the yawn → drift sequence is under way
   private listenSide: -1 | 1 = 1;
   private signatures = 0;
+  /** signature moves unlocked by lit growth moments (id → move index) */
+  private unlocked = new Map<string, number>();
+  room: Room = 'home';
+  sm: StageMotion;
+  /** the settle rule: when the current stretch of continuous play began, and whether it has settled */
+  stretchStart: number | null = null;
+  contentFloat = false;
+  guidedBreath: number | null = null;
+  private x: Extras | null = null;
+  private xLoading: Promise<void> | null = null;
+  private disposed = false;
+  private motionFns = new Set<(c: MotionCue) => void>();
+  /** reused per frame (no allocation): the composed pose and the procedural offsets */
+  private proc: Partial<PoseTargets> = {};
+  private dueTags: string[] = [];
+  private eyeExpr: PetExpr | '' = '';
+  private eyeStage = 0;
+  private mouthKey: MouthKey | '' = '';
+  private mouthStageK = 0;
   private thinkSince = 0;
   private thinkCycle = 0;
   private wakeTapAt = -Infinity;
-  private lip: TextLipSync | AudioLipSync | null = null;
+  lip: LipSource | null = null;
   private lipOut = { open: 0, width: 0 };
   private onset = onsetDetector(TALK);
   /** the cookie as last written (frame sheets draw it) */
@@ -196,8 +310,8 @@ class Engine implements PetEngine {
   /* loop */
   private classifier = createGestureClassifier();
   private ptr: number | null = null;
-  private touchAt: Point | null = null;
-  private lastInput = 0;
+  touchAt: Point | null = null;
+  lastInput = 0;
   private jobs = new Map<string, Job>();
   private running = false;
   private rafId: number | null = null;
@@ -221,13 +335,17 @@ class Engine implements PetEngine {
     this.stage = o.stage;
     this.size = o.size;
     this.k = o.size / 200;
+    this.baseTier = o.tier;
     this.tier = o.tier;
     this.mood = o.mood;
+    this.sm = stageMotion(o.stage);
     this.onCue = o.onCue;
     this.extras = { ambient: true, activity: true, ...o };
     this.rng = seeded(o.seed ?? 1);
     this.history = variantHistory(this.rng);
     const perf = typeof performance !== 'undefined' ? performance : { now: () => Date.now() };
+    this.costNow = o.perf ?? (o.clock ? null : () => perf.now());
+    this.tier = this.effectiveTier();
     // framer's frame loop, not a raw rAF: a MotionValue set from a raw rAF callback renders in framer's next batch,
     // one frame behind what the tick writes straight to the DOM; from its update step it renders in this one
     const framed = new Map<number, (d: { timestamp: number }) => void>();
@@ -254,6 +372,7 @@ class Engine implements PetEngine {
     this.dim = this.writer.dim;
     this.glow = this.writer.glow;
     this.gaze = new Gaze(this.rng);
+    this.gaze.lead = this.sm.lead;
     this.blink = new Blinker(this.rng);
     this.secondary = new Secondary(this.tuning);
     this.particles = new Particles(this.rng, TIER_BUDGET.full.particles);
@@ -277,6 +396,7 @@ class Engine implements PetEngine {
     this.applyMood(t0, true);
     this.secondary.reset(this.pose);
     this.tick(t0, true);
+    if (o.motionExtras) { this.x = o.motionExtras; this.xLoading = Promise.resolve(); }
   }
 
   /* ================= public API ================= */
@@ -287,6 +407,8 @@ class Engine implements PetEngine {
     const speciesChanged = look.species !== this.look.species || look.family !== this.look.family;
     this.look = look;
     this.stage = stage;
+    this.sm = stageMotion(stage);
+    this.gaze.lead = this.sm.lead;
     this.model = this.build(look, stage);
     this.hull = bodyHull(this.model);
     // a stage change keeps the old silhouette and size until stageUp tweens them (or snaps on the next settle)
@@ -304,10 +426,11 @@ class Engine implements PetEngine {
   setSize(px: number): void { this.size = px; this.k = px / 200; this.wake(); }
 
   setTier(tier: Tier): void {
-    if (tier === this.tier) return;
-    this.tier = tier;
-    this.applyMood(this.clock.now());
-    this.wake();
+    // a tier the page chooses starts the frame guard over
+    this.baseTier = tier;
+    this.x?.resetGuard(this);
+    this.guardTier = 'full';
+    this.applyTier();
   }
 
   setMood(mood: Mood): void {
@@ -324,11 +447,81 @@ class Engine implements PetEngine {
   setScene(scene: SceneAnchors): void { this.scene = scene; this.wake(); }
 
   /** Bond unlocks one signature fidget per milestone (§1.2); the long-fidget tier plays them. */
-  setBond(bond: number): void { this.signatures = clamp(Math.floor(bond / BOND_MILESTONE), 0, 6); }
+  setBond(bond: number): void { this.signatures = clamp(Math.floor(bond / BOND_MILESTONE), 0, BOND_SIGNATURES); }
+
+  /* ---------- motion controls (design §10; PetMotionControls) ---------- */
+
+  setStage(stage: Stage): void { if (stage !== this.stage) this.setLook(this.look, stage); }
+
+  setRoom(room: Room, o: { dir?: -1 | 1; instant?: boolean } = {}): void { this.withX((x) => x.setRoom(this, room, o, (n) => this.noteInput(n))); }
+
+  roomReact(kind: RoomReaction, o: RoomReactOpts = {}): void {
+    this.noteInput(this.clock.now());
+    this.withX((x) => x.roomReact(this, kind, o));
+  }
+
+  lightMoment(o: { fidget?: string; detail?: DetailName; id?: string } = {}): void {
+    if (o.fidget) this.unlockFidget(o.fidget);
+    this.withX((x) => x.lightMoment(this, o));
+  }
+
+  setDetails(d: Details): void { this.withX((x) => x.setDetails(this, d)); }
+  setListening(on: boolean): void { this.withX((x) => x.setListening(this, on)); }
+  speakQueue(items: SpeakItem[], o: { more?: boolean } = {}): void { this.withX((x) => x.speakQueue(this, items, o)); }
+  setGaze(p: Point | null): void { this.finger = p; this.wake(); }
+  setWearing(w: Wearing): void { this.withX((x) => x.setWearing(this, w)); }
+  setGarden(g: GardenInput | null): void { this.withX((x) => x.setGarden(this, g)); }
+  guessReact(k: GuessBeat, o: { zen?: boolean } = {}): void { this.roomReact(`guess${k[0].toUpperCase()}${k.slice(1)}` as RoomReaction, o); }
+  tryOn(id: string): void { this.roomReact('tryOn', { id }); }
+
+  /** Load the motion extras chunk once (preloaded after start; the UI may call it earlier). */
+  loadRooms(): Promise<void> {
+    this.xLoading ??= import('./extras').then((m) => {
+      this.x = m;
+      if (this.extras.followOS ?? this.extras.activity !== false) m.followOS(this);
+      // a stretch of play that began before the chunk arrived counts from its first input
+      if (this.stretchStart === null && this.lastInput > 0) m.input(this, this.lastInput, Infinity);
+    }, () => { this.xLoading = null; });
+    return this.xLoading;
+  }
+
+  /** Run with the extras chunk now, or as soon as it lands (never after dispose). */
+  private withX(fn: (x: Extras) => void): void {
+    if (this.x) fn(this.x);
+    else void this.loadRooms().then(() => { if (this.x && !this.disposed) fn(this.x); });
+  }
+
+  unlockFidget(id: string): boolean {
+    if (this.unlocked.has(id)) return false;
+    // each moment owns one of the four unlockable moves (a stable pick by id); more moments than moves share them
+    const n = SIGNATURE_MOVES - BOND_SIGNATURES, taken = [...this.unlocked.values()];
+    let h = 0;
+    for (let k = 0; k < id.length; k++) h = (h * 31 + id.charCodeAt(k)) >>> 0;
+    let i = h % n;
+    for (let k = 0; k < n && taken.includes(BOND_SIGNATURES + i); k++) i = (i + 1) % n;
+    this.unlocked.set(id, BOND_SIGNATURES + i);
+    return true;
+  }
+
+  lockFidget(id: string): void { this.unlocked.delete(id); }
+
+  setReducedMotion(on: boolean | null): void { this.reducedPref = on; this.applyTier(); }
+
+  setGuidedBreath(periodS: number | null): void {
+    this.guidedBreath = periodS === null ? null : clamp(periodS, 2, 10);
+    this.applyMood(this.clock.now());
+    this.withX((x) => x.guide(this));
+  }
+
+  onMotion(fn: (c: MotionCue) => void): () => void { this.motionFns.add(fn); return () => { this.motionFns.delete(fn); }; }
+
+  get motion() {
+    return { room: this.room, stage: this.stage, tier: this.tier, contentFloat: this.contentFloat, signatures: this.signaturePool().length, reduced: this.tier === 'reduced' };
+  }
 
   pointer(p: PointerSample): boolean {
     const now = this.clock.now();
-    if (p.kind === 'down') { this.lastInput = now; this.resetIdleJobs(now); }
+    if (p.kind === 'down') { this.noteInput(now); this.resetIdleJobs(now); }
     const hitAt = (at: Point) => {
       const local = toModel(at, this.scene, this.placement(), this.model.pivots.body[0]);
       // asleep, a tap anywhere is a poke (two wake it: §1.3); dozing, a near miss still counts
@@ -357,7 +550,7 @@ class Engine implements PetEngine {
 
   toy(e: ToyEvent): void {
     const now = this.clock.now();
-    this.lastInput = now;
+    this.noteInput(now);
     this.resetIdleJobs(now);
     switch (e.type) {
       case 'cookieLift': return this.cookieLift(e.at, now);
@@ -373,7 +566,7 @@ class Engine implements PetEngine {
     const now = this.clock.now();
     const prev = this.talkState;
     if (state === prev) return;
-    this.lastInput = now;
+    this.noteInput(now);
     this.resetIdleJobs(now);
     if ((this.asleep || this.dozing) && state !== 'idle') this.wakeUp(now, this.asleep ? 'sleep' : 'doze');
     this.talkState = state;
@@ -446,6 +639,8 @@ class Engine implements PetEngine {
     this.lastT = this.clock.now();
     this.blink.schedule(this.lastT);
     this.resetIdleJobs(this.lastT);
+    // the lazy motion chunk, off the first paint
+    if (!this.x) this.schedule('preload', 2500, () => { void this.loadRooms(); });
     this.wake();
   }
 
@@ -461,7 +656,11 @@ class Engine implements PetEngine {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.stop();
+    this.unsubOS?.();
+    this.unsubOS = null;
+    this.motionFns.clear();
     this.lip = null;
     this.detachDom?.();
     this.jobs.clear();
@@ -485,6 +684,9 @@ class Engine implements PetEngine {
       cookie: () => ({ ...me().cookieDrawn }),
       ball: () => ({ x: me().bop.ball.x, y: me().bop.ball.y, r: me().bop.ball.r, active: me().bop.ball.active }),
       get lastSpring() { return me().lastSpring; },
+      get gaze() { const g = me().gaze; return { ex: g.ex.x, ey: g.ey.x, hx: g.hx.x, hy: g.hy.x, darts: g.darts, lead: g.lead }; },
+      get idle() { return me().idle; },
+      guardFrame: (dt, cost) => me().x?.guardFrame(me(), dt, cost),
     };
   }
 
@@ -492,7 +694,9 @@ class Engine implements PetEngine {
 
   private tick(now: number, first = false): void {
     this.rafId = null;
-    const dt = first ? 0 : clamp(now - this.lastT, 0, LOOP.maxDtMs);
+    const c0 = this.costNow?.() ?? NaN;
+    const raw = now - this.lastT, measured = this.chained && !first;
+    const dt = first ? 0 : clamp(raw, 0, LOOP.maxDtMs);
     this.lastT = now;
     this.runJobs(now);
     if (this.ptr !== null) this.handleGestures(this.classifier.tick(now), now);
@@ -500,7 +704,8 @@ class Engine implements PetEngine {
     const frozen = now >= this.freezeFrom && now < this.freezeUntil;
     stepBank(this.base, dt, frozen ? BODY : undefined);
     stepBank(this.shot, dt, frozen ? BODY : undefined);
-    for (const s of Object.values(this.breath)) step(s, dt);
+    const br = this.breath;
+    step(br.amp, dt); step(br.bx, dt); step(br.by, dt); step(br.sway, dt);
     step(this.swell, dt);
     if (!frozen) step(this.impact, dt);
     this.stepFace(now, dt);
@@ -514,7 +719,7 @@ class Engine implements PetEngine {
     this.particles.update(dt, this.k, this.tier);
 
     const proc = this.procedural(now);
-    this.pose = compose(this.base, this.shot, proc);
+    this.pose = compose(this.base, this.shot, proc, this.pose);
     this.sec = this.secondary.update(this.pose, dt, this.tier);
     const frame = this.frame(now);
     this.stats = this.writer.write(frame, this.geom, this.k, this.tier);
@@ -522,9 +727,30 @@ class Engine implements PetEngine {
     this.finishMorph();
 
     if (first) return;
-    if (this.busy(now)) this.request();
+    // the frame-budget guard measures chained busy frames only (its own thresholds: extras.ts FRAME_GUARD)
+    if (measured && this.x) this.x.guardFrame(this, raw, (this.costNow?.() ?? NaN) - c0);
+    const busy = this.busy(now);
+    this.chained = busy;
+    if (busy) this.request();
     else this.sleep(now);
   }
+
+  private effectiveTier(): Tier {
+    const reduced = this.reducedPref ?? this.osReduced;
+    return reduced ? 'reduced' : lowerTier(this.baseTier, this.guardTier);
+  }
+
+  /** The effective tier changed (the page, the guard, the OS or the knob): particles, gaze and the mood follow. */
+  applyTier(): void {
+    const t = this.effectiveTier();
+    if (t === this.tier) return;
+    this.tier = t;
+    if (t === 'reduced') this.particles.clear();
+    this.applyMood(this.clock.now());
+    this.wake();
+  }
+
+  motionCue(c: MotionCue): void { for (const fn of this.motionFns) fn(c); }
 
   /** Is anything still moving (or due within a frame)? */
   private busy(now: number): boolean {
@@ -532,7 +758,8 @@ class Engine implements PetEngine {
     if (this.player.playing.length || this.oscs.length || this.gulps.length || this.lip || this.drag || this.settle || this.hop.active || this.fling.active || this.home) return true;
     if (this.bop.on || this.cookie.state !== 'idle' || this.particles.live > 0 || now < this.freezeUntil) return true;
     if (this.talkState === 'thinking' || this.blink.busy(now) || this.blink.nextWake() <= now + 16) return true;
-    if (!this.gaze.atRest() || !atRest(this.impact) || !atRest(this.swell) || !Object.values(this.breath).every((s) => atRest(s))) return true;
+    const br = this.breath;
+    if (!this.gaze.atRest() || !atRest(this.impact) || !atRest(this.swell) || !atRest(br.amp) || !atRest(br.bx) || !atRest(br.by) || !atRest(br.sway)) return true;
     for (const e of this.eyes) for (const k of EYE_KEYS) if (!atRest(e[k], 1e-3)) return true;
     for (const k of MOUTH_KEYS) if (!atRest(this.mouth[k], 1e-3)) return true;
     // bankAtRest settles each spring onto its target, so a sleeping frame never drifts by ε
@@ -548,10 +775,11 @@ class Engine implements PetEngine {
   }
 
   /** Wake for input: the first frame after a sleep measures dt from now, not from the last frame. */
-  private wake(): void {
+  wake(): void {
     if (!this.running || this.rafId !== null) return;
     if (this.extras.activity !== false && !pageActive()) return;
     this.lastT = this.clock.now();
+    this.chained = false;
     this.request();
   }
 
@@ -582,7 +810,7 @@ class Engine implements PetEngine {
 
   /** Asleep at rest: one timer for the next blink, glance, fidget or scheduled beat. */
   private sleep(now: number): void {
-    let next = Math.min(this.blink.nextWake(), this.player.nextDue());
+    let next = Math.min(this.blink.nextWake(), this.player.nextDue(), this.gaze.nextWake());
     for (const j of this.jobs.values()) next = Math.min(next, j.at);
     if (this.timer !== null) { this.timers().clear(this.timer); this.timer = null; }
     if (next === Infinity || !this.running) return;
@@ -628,6 +856,8 @@ class Engine implements PetEngine {
     t.sparkle = 0;
     if (this.cookie.state === 'held' || this.cookie.state === 'flying') Object.assign(t, { pupil: 1.16, lidL: 1, lidR: 1, sparkle: 1 });
     if (this.drag) t.shadow = 0.8;
+    // the held pose (extras): the room's (§10.4) or the hands-free hold; never asleep, face channels only on reduced
+    if (!closed) this.x?.pose(this, t, listening);
     const perk: ReadonlySet<Channel> = new Set<Channel>(listening ? ['sx', 'sy', 'pupil', 'browL', 'browR', 'earL', 'earR'] : []);
     for (const c of Object.keys(t) as Channel[]) {
       const s = this.base[c];
@@ -644,20 +874,27 @@ class Engine implements PetEngine {
   }
 
   /** The mood's breath, sway, lids and blinks, eased over ~600 ms (never snaps). */
-  private applyMood(now: number, instant = false): void {
-    this.idle = idleParams({ ...this.mood, asleep: this.asleep }, this.stage, this.tuning);
-    const amp = this.tier === 'reduced' ? 0 : this.talkState === 'speaking' || this.drag ? 0.3 : 1;
+  applyMood(now: number, instant = false): void {
+    const ip = idleParams({ ...this.mood, asleep: this.asleep }, this.stage, this.tuning);
+    this.idle = this.x ? this.x.flavour(this, ip) : ip;
+    // reduced motion keeps a gentle breath (half depth, no sway): blink and breath only (§10.8)
+    const amp = this.tier === 'reduced' ? 0.5 : this.talkState === 'speaking' || this.drag ? 0.3 : 1;
     const set = (s: Spring, v: number) => (instant ? jump(s, v) : retarget(s, v, presetKC('float')));
     set(this.breath.amp, amp);
     set(this.breath.bx, this.idle.bx);
     set(this.breath.by, this.idle.by);
     this.blink.median = this.talkState === 'idle' ? this.idle.blinkMedian : BLINK_MEDIAN[this.talkState];
     this.blink.slowShare = this.idle.slowBlinks;
+    // eye lead and micro-saccades come with the shaped stage; never on reduced motion
+    this.gaze.setDarts(this.sm.darts && this.tier !== 'reduced');
     this.blink.doubleShare = this.stage >= 4 ? 0.12 : 0.1;
     this.blink.base = { close: this.tuning.blink.close, hold: 30, open: this.tuning.blink.open };
     this.applyState(now, instant);
     this.resetIdleJobs(now);
   }
+
+  /** Idle intervals × (the room, the content float: rarer fidgets when settled). */
+  private idleScale(): number { return this.x ? this.x.idleScale(this) : 1; }
 
   private eyeTarget(expr: PetExpr) {
     const pe = petEye(expr, this.stage), e = modelEye(this.model, pe);
@@ -681,16 +918,15 @@ class Engine implements PetEngine {
     if (this.talkState === 'listening') return 'o';
     if (this.talkState === 'thinking') return 'smirk';
     if (this.cookie.state === 'held' && this.cookie.reach) return 'smile';
-    return 'X';
+    return this.x?.mouth(this) ?? 'X';
   }
 
   private stepFace(now: number, dt: number): void {
     const expr = this.currentExpr();
     // suppression first: a reaction that holds the eyes open (the cookie notice) never gets a face-change blink
     this.blink.suppress(CLOSED_EYES.has(expr) || this.suppressBy !== null || this.asleep || this.dozing, now);
-    const key = `${expr}|${this.stage}`;
-    if (key !== this.eyeKey) {
-      this.eyeKey = key;
+    if (expr !== this.eyeExpr || this.stage !== this.eyeStage) {
+      this.eyeExpr = expr; this.eyeStage = this.stage;
       const t = this.eyeTarget(expr);
       // falling asleep closes slowly; everything else morphs on the snap spring (~200 ms)
       const kc = presetKC(expr === 'sleeping' ? 'sleepy' : 'snap');
@@ -700,10 +936,10 @@ class Engine implements PetEngine {
       if (expr !== this.lastExpr && !CLOSED_EYES.has(expr) && chance(this.rng, 0.4)) this.blink.force(now);
       this.lastExpr = expr;
     }
-    const mk = `${this.currentMouth()}|${this.stage}`;
-    if (mk !== this.mouthKeyNow) {
-      this.mouthKeyNow = mk;
-      const m = petMouth(this.currentMouth(), this.stage);
+    const mk = this.currentMouth();
+    if (mk !== this.mouthKey || this.stage !== this.mouthStageK) {
+      this.mouthKey = mk; this.mouthStageK = this.stage;
+      const m = petMouth(mk, this.stage);
       for (const k of MOUTH_KEYS) retarget(this.mouth[k], m[k] ?? 0, presetKC('snap'));
       if (this.tier === 'reduced') for (const k of MOUTH_KEYS) jump(this.mouth[k], m[k] ?? 0);
     }
@@ -727,7 +963,14 @@ class Engine implements PetEngine {
     const g = target === null ? this.drift : this.resolveLook(target);
     if (target === 'finger' || target === 'cookie' || target === 'ball') pursuit = true;
     const jumpBy = this.gaze.look(g.x, g.y, now, pursuit);
-    if (jumpBy > 0.6 && !pursuit && chance(this.rng, 0.25)) this.blink.force(now);
+    // a blink rides a big turn (§10.2: the head joining a turn over ~25°): always from the shaped stage on
+    if (jumpBy > 0 && !pursuit) {
+      const big = this.gaze.lastHeadTurn > 0.4 || jumpBy > 0.75;
+      if (big ? chance(this.rng, this.sm.turnBlink) : jumpBy > 0.6 && chance(this.rng, 0.25)) this.blink.force(now);
+    }
+    // micro-saccades only while a look is simply held (idle and awake)
+    const darting = this.sm.darts && this.tier !== 'reduced' && !this.asleep && !this.dozing && !pursuit && this.talkState !== 'speaking';
+    if (darting !== this.gaze.darts) this.gaze.setDarts(darting);
     this.gaze.update(now, dt);
   }
 
@@ -751,7 +994,9 @@ class Engine implements PetEngine {
 
   /** L3 procedural contributions (offsets and factors) for this frame. */
   private procedural(now: number): Partial<PoseTargets> {
-    const p: Partial<PoseTargets> = {};
+    // one object reused every frame: its keys are cleared, not reallocated
+    const p = this.proc;
+    for (const k in p) p[k as Channel] = undefined;
     const add = (c: Channel, v: number) => { p[c] = (p[c] ?? 0) + v; };
     const mul = (c: Channel, v: number) => { p[c] = (p[c] ?? 1) * v; };
     const al = this.tuning.alpha;
@@ -802,7 +1047,10 @@ class Engine implements PetEngine {
     }
 
     // oscillations (purr, giggle fits, shakes, belly pats, ear waves)
-    this.oscs = this.oscs.filter((q) => now - q.start < q.ms);
+    // drop the oscillations that have run out, in place
+    let live = 0;
+    for (const q of this.oscs) if (now - q.start < q.ms) this.oscs[live++] = q;
+    this.oscs.length = live;
     for (const q of this.oscs) {
       const t = now - q.start, u = t / q.ms;
       const env = Math.min(1, t / 40) * (q.decay === false ? Math.min(1, (q.ms - t) / 80) : 1 - u);
@@ -833,7 +1081,12 @@ class Engine implements PetEngine {
         // on the ground away from home: hop back once the landing has played
         this.player.end('fling');
         const dx = -this.fling.x;
-        if (Math.abs(dx) > 2) this.schedule('home', 520, () => { this.home = { x: this.fling.x, y: 0 }; this.hop.x = 0; this.launchHop(Math.min(26, 10 + Math.abs(dx) * 0.08), 0.1, dx); this.wake(); });
+        if (Math.abs(dx) > 2) this.schedule('home', 440, () => {
+          // anticipation: a crouch toward home, then the hop
+          this.crouch(0.92);
+          this.schedule('home', 80, () => { this.home = { x: this.fling.x, y: 0 }; this.hop.x = 0; this.launchHop(Math.min(26, 10 + Math.abs(dx) * 0.08) * this.sm.hop, 0.1, dx); this.wake(); });
+          this.wake();
+        });
         else this.fling.x = 0;
       }
     }
@@ -853,10 +1106,22 @@ class Engine implements PetEngine {
     if (TIER_BUDGET[this.tier].hitStop && !small) { this.freezeFrom = now + 40; this.freezeUntil = now + 70; }
     this.landedAt = now;
     if (this.hopNext) this.relaunch(HOP_SQUASH_MS);
+    // a blink on landing (§10.2): most big landings, some small ones
+    if (chance(this.rng, v > 150 ? 0.8 : 0.35)) this.blink.force(now);
+    // weight: a heavy body rebounds and settles slower, a light one flicks back faster (a stage's springs too)
+    const w = this.tuning.weight, st = this.sm.spring;
     this.schedule('impact', 70, () => {
-      retarget(this.impact, 1 + (1 - sy) * 0.4, presetKC('snap', 0.6));
-      this.schedule('impact', 80, () => retarget(this.impact, 1, presetKC('jelly', 0.8, this.tuning.jelly)));
+      retarget(this.impact, 1 + (1 - sy) * 0.4, presetKC('snap', 0.6 * weightTime('snap', w) * st));
+      this.schedule('impact', 80 * weightTime('snap', w), () => retarget(this.impact, 1, presetKC('jelly', 0.8 * weightTime('jelly', w) * st, this.tuning.jelly * this.sm.bounce)));
     });
+  }
+
+  /** A quick anticipation crouch on the one-shot layer (volume kept); the takeoff stretch replaces it. */
+  private crouch(sy: number): void {
+    if (this.tier === 'reduced') return;
+    const kc = presetKC('snap');
+    retarget(this.shot.sy, sy, kc);
+    retarget(this.shot.sx, volumeSx(sy, this.tuning.alpha), kc);
   }
 
   /** The queued hop takes off once the landing squash has bottomed out. */
@@ -887,6 +1152,11 @@ class Engine implements PetEngine {
       const kc = presetKC('eye');
       retarget(this.shot.sy, this.shot.sy.t, kc);
       retarget(this.shot.sx, this.shot.sx.t, kc);
+    } else if (this.shot.sy.t < 1) {
+      // a bare crouch (the hop home) turns into the takeoff stretch; the landing lets it go
+      const kc = presetKC('eye');
+      retarget(this.shot.sy, 1.05, kc);
+      retarget(this.shot.sx, volumeSx(1.05, this.tuning.alpha), kc);
     }
     this.hop.launch(h, dx);
   }
@@ -894,13 +1164,13 @@ class Engine implements PetEngine {
   private stepLip(now: number, dt: number): void {
     if (!this.lip) { this.lipOut.open += (0 - this.lipOut.open) * (1 - Math.exp(-dt / 25)); if (this.lipOut.open < 1e-3) this.lipOut.open = 0; return; }
     const s = this.lip.sample(now, dt);
-    this.lipOut = { open: this.tier === 'reduced' ? Math.round(s.open * 3) / 3 : s.open, width: s.width };
+    this.lipOut.open = this.tier === 'reduced' ? Math.round(s.open * 3) / 3 : s.open; this.lipOut.width = s.width;
     // syllable onsets bounce the body (≥ 150 ms apart); some sentence starts look away
     if (this.onset(s.open, now) && this.tier !== 'reduced') this.play({ type: 'onset' }, now);
     if (s.sentence && chance(this.rng, 0.25)) { this.glanceSide = sign(this.rng); this.lookAwayUntil = now + range(this.rng, 400, 700); }
     if (s.done) {
       this.lip = null;
-      this.lipOut = { open: 0, width: 0 };
+      this.lipOut.open = 0; this.lipOut.width = 0;
       this.play({ type: 'speakEnd' }, now);
       this.cue({ type: 'spoken' });
       if (this.talkState === 'speaking') { this.talkState = 'idle'; this.applyState(now); this.applyMood(now); }
@@ -948,7 +1218,9 @@ class Engine implements PetEngine {
     // the cheeks puff out on the outline; a swallow's bump travels from the cheeks down to the base
     const bulges: Bulge[] = [];
     if (puff > 1e-3 && this.tier !== 'reduced') bulges.push({ y: m.face.cheeks.y + 2, a: PUFF.a * puff, s: PUFF.s });
-    this.gulps = this.gulps.filter((g) => now - g.start < g.ms);
+    let gl = 0;
+    for (const g of this.gulps) if (now - g.start < g.ms) this.gulps[gl++] = g;
+    this.gulps.length = gl;
     for (const g of this.gulps) {
       const u = (now - g.start) / g.ms;
       bulges.push({ y: m.face.cheeks.y + 4 + (GROUND - 10 - m.face.cheeks.y - 4) * u * u * (3 - 2 * u), a: GULP.a * Math.sin(Math.PI * u), s: GULP.s });
@@ -963,10 +1235,11 @@ class Engine implements PetEngine {
         bx: 1 + (this.breath.bx.x - 1) * amp, by: 1 + (this.breath.by.x - 1) * amp,
         period: idle.period, sway: this.breath.sway.x, swayPeriod: idle.swayPeriod,
       },
-      face: { x: p.headX, y: p.headY, rot: clamp(p.headTilt, -this.tuning.tiltMax * 1.5, this.tuning.tiltMax * 1.5) },
-      accRigid: this.geom.lensed ? { x: p.headX, y: p.headY, rot: p.headTilt } : { x: 0, y: 0, rot: p.headTilt * 0.5 },
-      accSoft: { y: s.accY },
-      hair: { y: s.hairY, sy: s.hairSy },
+      // the face lands a beat after the body (overlap on the face follower); glasses ride it, hats stay on the crown
+      face: { x: p.headX, y: p.headY + s.faceY, rot: clamp(p.headTilt, -this.tuning.tiltMax * 1.5, this.tuning.tiltMax * 1.5) },
+      accRigid: this.geom.lensed ? { x: p.headX, y: p.headY + s.faceY, rot: p.headTilt } : { x: 0, y: 0, rot: p.headTilt * 0.5 },
+      accSoft: { y: s.accY, rot: s.accRot },
+      hair: { y: s.hairY, sy: s.hairSy, rot: s.hairRot },
       fx: { y: this.talkState === 'thinking' ? Math.sin(now / 520) * 1.2 : 0, o: clamp(p.fx, 0, 1) },
       shadow: { y: 0, rot: 0, s: s.shadow, o: clamp(0.55 + 0.45 * s.shadow, 0, 1) * this.spinShade(p) },
       earL: s.earL, earR: s.earR, tail: s.tail,
@@ -1007,14 +1280,20 @@ class Engine implements PetEngine {
 
   /* ================= reactions ================= */
 
-  private ctx(): ReactionCtx {
+  ctx(): ReactionCtx {
     return { rng: this.rng, species: this.look.species ?? 'cloud', family: this.look.family ?? 'puff', stage: this.stage, mood: this.mood, tier: this.tier, variantHistory: this.history };
   }
 
   private play(e: ReactionEvent, now: number, onEnd?: () => void, onCancel?: () => void): Playing | null {
-    const beats = (REACTIONS[e.type] as (e: ReactionEvent, c: ReactionCtx) => ReturnType<typeof REACTIONS.hello>)(e, this.ctx());
-    const prepared = prepareBeats(beats, { rng: this.rng, tuning: this.tuning, tier: this.tier, tempo: this.idle.tempo, exact: this.extras.exact });
-    const p = this.player.play(e.type, EVENT_PRIORITY[e.type], prepared, now, onEnd, onCancel);
+    const beats = (REACTIONS[e.type] as (e: ReactionEvent, c: ReactionCtx) => Beat[])(e, this.ctx());
+    return this.playBeats(e.type, EVENT_PRIORITY[e.type], beats, now, onEnd, onCancel);
+  }
+
+  /** Polish (anticipation, idle settles), then jitter, species, stage and tier rules, then play. */
+  playBeats(kind: Playing['kind'], cls: PriorityClass, beats: Beat[], now: number, onEnd?: () => void, onCancel?: () => void): Playing | null {
+    const polished = this.tier === 'reduced' ? beats : polish(beats, cls);
+    const prepared = prepareBeats(polished, { rng: this.rng, tuning: this.tuning, tier: this.tier, tempo: this.idle.tempo, exact: this.extras.exact, stage: this.stage });
+    const p = this.player.play(kind, cls, prepared, now, onEnd, onCancel);
     if (p) this.lastSpring = prepared[0]?.spring ?? 'pop';
     this.wake();
     return p;
@@ -1024,7 +1303,7 @@ class Engine implements PetEngine {
     this.lastSpring = b.spring;
     if (b.haptic) haptic[b.haptic]?.();
     if (b.particles) for (const q of Array.isArray(b.particles) ? b.particles : [b.particles]) {
-      this.particles.burst(q.kind, q.n, toStage(anchorModel(q.at, this.model, this.touchAt), this.scene, this.placement()), this.k, this.tier);
+      this.particles.burst(q.kind, q.n, toStage(anchorModel(q.at, this.model, this.touchAt), this.scene, this.placement()), this.k, this.tier, q.w);
     }
     if (b.expr) this.exprOv = { expr: b.expr, id: p.id };
     if (b.mouth) this.mouthOv = { key: b.mouth, id: p.id };
@@ -1153,7 +1432,7 @@ class Engine implements PetEngine {
   private kick(now: number): void {
     const dt = 8;
     stepBank(this.shot, dt);
-    this.pose = compose(this.base, this.shot, this.procedural(now));
+    this.pose = compose(this.base, this.shot, this.procedural(now), this.pose);
     this.stats = this.writer.write(this.frame(now), this.geom, this.k, this.tier);
   }
 
@@ -1258,7 +1537,7 @@ class Engine implements PetEngine {
     if (reach && !c.reach) this.play({ type: 'feed', phase: 'approach', dist: d }, now);
     // the wanting face holds for as long as the cookie stays in reach
     if (reach) this.player.extend('feed', now + 150);
-    if (reach !== c.reach) { c.reach = reach; this.mouthKeyNow = ''; }
+    if (reach !== c.reach) { c.reach = reach; this.mouthKey = ''; }
     // continuous: the mouth follows the distance, the body leans and stretches toward it
     const reduced = this.tier === 'reduced';
     retarget(this.base.gape, 2 * open, presetKC('snap'));
@@ -1440,7 +1719,7 @@ class Engine implements PetEngine {
    * Awake. Every real wake from sleep (two taps, the talk pill or mic, a reply, the cookie, the ball) tells the
    * server, so its nap ends with the one on screen; `post` is false only when the server said so first.
    */
-  private wakeUp(now: number, from: 'sleep' | 'doze', grumpy?: boolean, post = true): void {
+  wakeUp(now: number, from: 'sleep' | 'doze', grumpy?: boolean, post = true): void {
     if (!this.asleep && !this.dozing && !this.sleeping) { this.play({ type: 'wake', from, grumpy: !!grumpy }, now); return; }
     const g = grumpy ?? (from === 'sleep' && this.mood.lowest === 'energy' && this.mood.level !== 'content' && this.mood.level !== 'happy');
     if (this.asleep && post) this.cue({ type: 'care', action: 'wake' });
@@ -1468,7 +1747,7 @@ class Engine implements PetEngine {
     this.schedule('morph', 200, () => retarget(this.base.morph, 1, presetKC('float', 1.1)));
   }
 
-  private startSpeaking(now: number, mode: 'text' | 'audio'): void {
+  startSpeaking(now: number, mode: 'text' | 'audio'): void {
     if (this.asleep || this.dozing) this.wakeUp(now, this.asleep ? 'sleep' : 'doze');
     this.talkState = 'speaking';
     this.cancel('think'); this.cancel('glance');
@@ -1480,49 +1759,81 @@ class Engine implements PetEngine {
 
   /* ================= the idle scheduler ================= */
 
-  private schedule(tag: string, ms: number, fn: () => void): void {
+  schedule(tag: string, ms: number, fn: () => void): void {
     this.jobs.set(tag, { at: this.clock.now() + ms, fn });
     if (this.rafId === null) this.sleep(this.clock.now());
   }
-  private cancel(tag: string): void { this.jobs.delete(tag); }
+  cancel(tag: string): void { this.jobs.delete(tag); }
   private runJobs(now: number): void {
-    for (const [tag, j] of [...this.jobs]) if (j.at <= now && this.jobs.get(tag) === j) { this.jobs.delete(tag); j.fn(); }
+    // collect the due tags first (a job may schedule or cancel others); most frames have none and allocate nothing
+    const due = this.dueTags;
+    due.length = 0;
+    for (const [tag, j] of this.jobs) if (j.at <= now) due.push(tag);
+    for (const tag of due) { const j = this.jobs.get(tag); if (j && j.at <= now) { this.jobs.delete(tag); j.fn(); } }
   }
 
   /** Can an idle one-shot play now (nothing more important is going on)? */
-  private canIdle(): boolean {
+  canIdle(): boolean {
     const top = this.player.top();
     return this.talkState === 'idle' && !this.asleep && !this.dozing && !this.sleeping && !this.drag && !this.fling.active && !this.home
       && this.cookie.state === 'idle' && !this.bop.on && (top === null || top === 'idle' || top === 'needs');
+  }
+
+  /** An input (a touch, a toy, talk, a room): the idle watch and the settle rule's stretch of play (extras). */
+  private noteInput(now: number): void {
+    const gap = now - this.lastInput;
+    this.lastInput = now;
+    this.x?.input(this, now, gap);
   }
 
   /** Any input restarts the watch clock: fidgets after 8 s, long fidgets after 30, a doze at 90. */
   private resetIdleJobs(now: number): void {
     if (this.extras.ambient === false || !this.running) return;
     const at = (tag: string, ms: number, fn: () => void) => this.jobs.set(tag, { at: now + ms, fn });
-    at('fidget', 8000 + range(this.rng, 0, 4000), () => this.fidget());
+    const k = this.idleScale();
+    at('fidget', (8000 + range(this.rng, 0, 4000)) * k, () => this.fidget());
     at('doze', 90000, () => { if (this.canIdle()) this.startDoze(this.clock.now()); });
-    at('ambient', range(this.rng, 9000, 16000), () => this.ambientBeat());
+    at('ambient', range(this.rng, 9000, 16000) * k, () => this.ambientBeat());
     at('drift', range(this.rng, this.idle.drift[0], this.idle.drift[1]), () => this.driftGaze());
     if (this.mood.level === 'wants') at('wants', range(this.rng, 6000, 12000), () => this.wantsBeat()); else this.jobs.delete('wants');
     if (this.mood.tone === 'happy') at('happyHop', range(this.rng, 12000, 20000), () => this.happyHop()); else this.jobs.delete('happyHop');
     if (this.asleep) this.scheduleSleepLife(now);
   }
 
+  /** The signature moves this pet can play: one per Bond milestone, plus the ones lit moments unlocked (formed stage). */
+  private signaturePool(): number[] {
+    if (!this.sm.signatures) return [];
+    const pool: number[] = [];
+    for (let i = 0; i < this.signatures; i++) pool.push(i);
+    for (const i of this.unlocked.values()) if (!pool.includes(i)) pool.push(i);
+    return pool;
+  }
+
   private fidget(): void {
     const now = this.clock.now(), watch = now - this.lastInput;
-    // past 30 s a long fidget, a third of them an unlocked signature (the Bond reward)
-    const signature = watch >= 30000 && this.signatures > 0 && chance(this.rng, 1 / 3);
-    if (this.canIdle()) this.play(signature ? { type: 'signature', index: this.signatures > 1 ? this.history.pick('signature', this.signatures) : 0 } : { type: watch < 30000 ? 'fidgetSmall' : 'fidgetLong' }, now);
-    this.jobs.set('fidget', { at: now + (watch < 30000 ? range(this.rng, 6000, 12000) : range(this.rng, 20000, 30000)), fn: () => this.fidget() });
+    // past 30 s a long fidget, a third of them a signature (the Bond reward, a lit moment's move)
+    const pool = watch >= 30000 ? this.signaturePool() : [];
+    const signature = pool.length > 0 && chance(this.rng, 1 / 3);
+    // reduced motion idles on blink and breath alone
+    const index = signature ? pool[pool.length > 1 ? this.history.pick('signature', pool.length) : 0] : 0;
+    if (this.canIdle() && this.tier !== 'reduced') {
+      // an unlocked move lives in the lazy chunk; a Bond move is a plain reaction
+      if (signature && index >= BOND_SIGNATURES && this.x) this.playBeats('signature', 'idle', this.x.unlockedMove(index), now);
+      else this.play(signature && index < BOND_SIGNATURES ? { type: 'signature', index } : { type: watch < 30000 ? 'fidgetSmall' : 'fidgetLong' }, now);
+    }
+    const k = this.idleScale();
+    this.jobs.set('fidget', { at: now + (watch < 30000 ? range(this.rng, 6000, 12000) : range(this.rng, 20000, 30000)) * k, fn: () => this.fidget() });
   }
 
   private ambientBeat(): void {
     const now = this.clock.now();
-    if (this.canIdle() && now - this.lastInput > 8000 && this.mood.tone !== 'content') {
-      this.play(this.mood.tone === 'bored' ? { type: 'bored' } : { type: 'ambient', tone: this.mood.tone }, now);
+    if (this.canIdle() && this.tier !== 'reduced' && now - this.lastInput > 8000) {
+      // away from home, the room's own idle beat takes most turns (§10.4); the mood keeps the rest
+      // (at Home the content mood's own beat is the content float)
+      if (this.x && (this.room !== 'home' || this.mood.tone === 'content') && (this.mood.tone === 'content' || chance(this.rng, 0.6))) this.x.idleBeat(this, now);
+      else if (this.mood.tone !== 'content') this.play(this.mood.tone === 'bored' ? { type: 'bored' } : { type: 'ambient', tone: this.mood.tone }, now);
     }
-    this.jobs.set('ambient', { at: now + range(this.rng, 9000, 16000), fn: () => this.ambientBeat() });
+    this.jobs.set('ambient', { at: now + range(this.rng, 9000, 16000) * this.idleScale(), fn: () => this.ambientBeat() });
   }
 
   private wantsBeat(): void {
@@ -1533,18 +1844,22 @@ class Engine implements PetEngine {
 
   private happyHop(): void {
     const now = this.clock.now();
-    if (this.canIdle() && this.tier !== 'reduced') { this.launchHop(3, 0.06); this.wake(); }
+    // the settled float does not hop; a hop starts from a crouch (anticipation)
+    if (this.canIdle() && this.tier !== 'reduced' && !this.contentFloat) this.playBeats('hopIdle', 'idle', hopIdle(), now);
     if (this.mood.tone === 'happy') this.jobs.set('happyHop', { at: now + range(this.rng, 12000, 20000), fn: () => this.happyHop() });
   }
 
   /** Gaze drift: a glance somewhere, then (often) back to you. */
   private driftGaze(): void {
     const now = this.clock.now();
-    if (this.canIdle() && !this.lookOv && !this.finger) {
+    if (this.canIdle() && !this.lookOv && !this.finger && this.tier !== 'reduced') {
       const away = this.drift.x !== 0 || this.drift.y !== 0;
       const wide = this.mood.tone === 'bored' ? 0.85 : this.mood.tone === 'tired' ? 0.35 : 0.6;
+      const roomLook = this.x?.roomLook(this);
       if (away && chance(this.rng, this.idle.homeShare + 0.25)) this.drift = { x: 0, y: 0 };
       else if (this.mood.tone === 'hungry' && chance(this.rng, 1 / 3)) this.drift = this.resolveLook('cookie');
+      // the room pulls the eyes (the toy in Play, the pot in the Garden, the page in the Life Book)
+      else if (roomLook && chance(this.rng, 0.6)) this.drift = { x: roomLook.x + range(this.rng, -0.15, 0.15), y: roomLook.y + range(this.rng, -0.1, 0.1) };
       else this.drift = { x: range(this.rng, -wide, wide), y: this.mood.tone === 'tired' ? range(this.rng, 0.1, 0.4) : range(this.rng, -0.35, 0.3) };
       this.wake();
     }

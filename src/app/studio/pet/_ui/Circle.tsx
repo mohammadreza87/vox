@@ -18,7 +18,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CircleDecisionRequest, PetCircle, PetNote, PetNotesResponse } from '@/lib/pet/types';
 import type { PetApi } from './contract';
-import { circleCopy, circleLang, type CircleLang } from './circle-copy';
+import { circleCopy, type CircleLang } from './circle-copy';
+import { petLang } from './strings';
 import { isPetError } from './errors';
 import { backButton, confirmNative, openDm, tg } from './telegram';
 import './circle.css';
@@ -44,7 +45,7 @@ export interface CircleProps {
 }
 
 export function Circle({ api, agentId, code, onJoy }: CircleProps) {
-  const lang: CircleLang = circleLang(tg()?.initDataUnsafe?.user?.language_code);
+  const lang: CircleLang = petLang();
   const t = circleCopy(lang);
   const [circle, setCircle] = useState<PetCircle | null>(null);
   const [sheet, setSheet] = useState<Sheet>(null);

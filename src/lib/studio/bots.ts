@@ -21,6 +21,7 @@ import type { Studio } from './service';
 import { AGENT_UPDATES, handleAgentUpdate, handleManagerUpdate, MANAGER_UPDATES } from './updates';
 import { randomUUID } from 'crypto';
 import { IntegrityWatch, integrityReporter, type IntegrityReason } from './bot-integrity';
+import { CHECKIN_MAINTENANCE_EVERY_MS, runPetCheckins } from './pet-checkins/run';
 
 const REFRESH_MS = 8000;
 /** After any failure, a competing poller's conflict included: slowing down would hand the rival more updates. */
@@ -149,6 +150,18 @@ export function startBots(studio: Studio): { stop: () => void } {
   };
   const maintenanceTimer = studio.deps.maintenance ? setInterval(maintain, 60_000) : undefined;
   void maintain();
+  // Pet check-ins (design §5, open decision 2): the HTTPS trigger's run, here only under STUDIO_MAINTENANCE=1. It returns
+  // at once while STUDIO_PET_CHECKINS is off, and is idempotent per person, agent and day, so overlap with the trigger is safe.
+  let checkingIn = false;
+  const runCheckins = async () => {
+    if (stopped || checkingIn || !studio.deps.maintenance) return;
+    checkingIn = true;
+    try { await runPetCheckins(studio, { signal: maintenanceAbort.signal }); }
+    catch { if (!stopped) log.warn({ type: 'pet_checkins', outcome: 'failed' }); }
+    finally { checkingIn = false; }
+  };
+  const checkinTimer = studio.deps.maintenance ? setInterval(runCheckins, CHECKIN_MAINTENANCE_EVERY_MS) : undefined;
+  void runCheckins();
   let runningRoutines = false;
   const runRoutines = async () => {
     if (stopped || runningRoutines || !studio.deps.requestedRoutines || !studio.deps.requestedRoutinesEnabled?.()) return;
@@ -176,6 +189,7 @@ export function startBots(studio: Studio): { stop: () => void } {
       if (archiveTimer) clearInterval(archiveTimer);
       clearInterval(relationshipTimer);
       if (maintenanceTimer) clearInterval(maintenanceTimer);
+      if (checkinTimer) clearInterval(checkinTimer);
       maintenanceAbort.abort();
       if (routineTimer) clearInterval(routineTimer);
       studio.deps.requestedRoutines?.close();

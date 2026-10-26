@@ -1,21 +1,24 @@
 'use client';
 
 import { memo, useEffect, useRef, useState, type FormEvent } from 'react';
-import { COPY } from './copy';
+import type { VoiceUi } from './host';
+import type { Take } from './mic';
+import { t } from './strings';
 
-/** Container types in order of preference: Opus in WebM (Android/desktop), AAC in MP4 (iOS), Ogg. */
-export const MIC_TYPES = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm'] as const;
 /** a mic press shorter than this is a tap: show the hint, send nothing */
 const MIN_HOLD_MS = 350;
 /** typing pauses longer than this get a micro-nod (§2.6 listening) */
 const TYPING_PAUSE_MS = 700;
+/** the recorder chunk is fetched this long after the pill mounts (never with the first paint), or on the first hold */
+const MIC_PREFETCH_MS = 1500;
 
-export function pickMicType(rec: { isTypeSupported?(t: string): boolean } | null = typeof MediaRecorder === 'undefined' ? null : MediaRecorder): string | null {
-  if (!rec) return null;
-  for (const t of MIC_TYPES) {
-    try { if (rec.isTypeSupported?.(t)) return t; } catch { /* old WebKit */ }
-  }
-  return '';
+type MicModule = typeof import('./mic');
+let micModule: MicModule | null = null;
+let micLoading: Promise<MicModule> | null = null;
+/** The hold-to-talk recorder (mic.ts), loaded once; a failed chunk is tried again on the next hold. */
+export function loadMic(): Promise<MicModule> {
+  micLoading ??= import('./mic').then((m) => (micModule = m), (e) => { micLoading = null; throw e; });
+  return micLoading;
 }
 
 export interface TalkPillProps {
@@ -42,13 +45,18 @@ export interface TalkPillProps {
   audioContext?: () => AudioContext | null;
   /** start_param `talk`: focus on open */
   autoFocus?: boolean;
+  /** before a hold records: false stops it here (the UX-02 sheet opens instead, P3) */
+  micGate?: () => boolean;
+  /** hands-free (§8A.2): the switch, the open mic and what it hears */
+  voice?: VoiceUi;
+  onHandsFree?: () => void;
 }
 
 /**
  * The talk pill (§1.4): type, or hold the mic. Focus perks the character to listening in the same
  * handler; typing pauses nod; send clears and floats the words up as a chip. The mic asks for
- * permission only on the first hold, records with MediaRecorder in the first supported container,
- * and on any failure falls back to typing (the text field is always there).
+ * permission only on the first hold, records with MediaRecorder in the first supported container
+ * (mic.ts, its own chunk), and on any failure falls back to typing (the text field is always there).
  */
 export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
   const [text, setText] = useState('');
@@ -57,7 +65,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
   const [chip, setChip] = useState<{ id: number; text: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const pause = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rec = useRef<{ recorder: MediaRecorder; stream: MediaStream; started: number; cancel: boolean; meter?: () => void } | null>(null);
+  const rec = useRef<Take | null>(null);
   const pending = useRef(false);
   const mounted = useRef(true);
   const generation = useRef(0);
@@ -78,14 +86,18 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
       if (pause.current) clearTimeout(pause.current);
       const r = rec.current;
       if (r) {
-        r.cancel = true;
-        r.recorder.onstop = null; r.recorder.ondataavailable = null;
-        try { r.recorder.stop(); } catch { /* already stopped */ }
-        stopTracks(); rec.current = null;
+        r.drop(); rec.current = null;
         latest.current.onRecording?.(false);
       }
     };
   }, []);
+  // the recorder chunk, fetched once the page has settled (a hold before then fetches it itself)
+  const hears = !!p.onVoice && !p.guest;
+  useEffect(() => {
+    if (!hears) return;
+    const id = setTimeout(() => { void loadMic().catch(() => { /* the hold tries again */ }); }, MIC_PREFETCH_MS);
+    return () => clearTimeout(id);
+  }, [hears]);
   useEffect(() => { if (p.autoFocus) input.current?.focus(); }, [p.autoFocus]);
   useEffect(() => {
     if (!hint) return;
@@ -93,16 +105,10 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     return () => clearTimeout(t);
   }, [hint]);
 
-  function stopTracks(r = rec.current) {
-    if (!r) return;
-    r.meter?.();
-    for (const t of r.stream.getTracks()) t.stop();
-  }
-
   if (p.guest) {
     return (
       <div className="pet-talk">
-        <button type="button" className="pet-pill pet-pill-dm" onClick={p.onOpenDm}>{COPY.chatInTelegram}</button>
+        <button type="button" className="pet-pill pet-pill-dm" onClick={p.onOpenDm}>{t('talk.chatInTelegram')}</button>
       </div>
     );
   }
@@ -117,37 +123,17 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     void p.onSend(t)?.then((ok) => { if (mounted.current && !ok) setText((now) => (now ? now : t)); });
   };
 
-  const meter = (stream: MediaStream): (() => void) | undefined => {
-    const ctx = p.audioContext?.();
-    if (!ctx || !p.onMicLevel) return undefined;
-    try {
-      const src = ctx.createMediaStreamSource(stream);
-      const an = ctx.createAnalyser();
-      an.fftSize = 1024;
-      src.connect(an);
-      const buf = new Float32Array(an.fftSize);
-      let raf = 0;
-      const tick = () => {
-        an.getFloatTimeDomainData(buf);
-        let s = 0;
-        for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
-        const db = 20 * Math.log10(Math.sqrt(s / buf.length) || 1e-6);
-        latest.current.onMicLevel?.(Math.max(0, Math.min(1, (db + 50) / 32)));
-        raf = requestAnimationFrame(tick);
-      };
-      raf = requestAnimationFrame(tick);
-      return () => { cancelAnimationFrame(raf); src.disconnect(); latest.current.onMicLevel?.(0); };
-    } catch { return undefined; }
-  };
-
   const micDown = async () => {
-    if (p.busy || pending.current || rec.current) return;
+    if (p.busy || pending.current || rec.current || p.voice?.open) return;
+    if (p.micGate && !p.micGate()) return;
     // perk first, in this handler: the permission prompt must not delay the listening pose
     p.onListen('mic');
-    const type = pickMicType();
-    if (type === null || !navigator.mediaDevices?.getUserMedia) { fallback(); return; }
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) { fallback(); return; }
     pending.current = true;
     const ticket = ++generation.current;
+    // the prompt is asked in this handler; the recorder chunk loads beside it (usually already here)
+    const mod = micModule ? null : loadMic();
+    mod?.catch(() => { /* handled below */ });
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
@@ -155,42 +141,38 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
       if (mounted.current && ticket === generation.current) { pending.current = false; fallback(); }
       return;
     }
+    let mic = micModule;
+    if (!mic) {
+      try { mic = await mod!; } catch { mic = null; }
+    }
     // Permission may outlive a release, cancellation, identity change or the entire page.
     // Never construct/start a recorder for that abandoned request; stop every returned track.
-    if (!mounted.current || ticket !== generation.current || released.current || latest.current.busy || latest.current.guest || !latest.current.onVoice) {
+    if (!mic || !mounted.current || ticket !== generation.current || released.current || latest.current.busy || latest.current.guest || !latest.current.onVoice) {
       for (const track of stream.getTracks()) track.stop();
       if (ticket === generation.current) pending.current = false;
+      if (!mic && mounted.current && ticket === generation.current && !released.current) fallback();
       return;
     }
     pending.current = false;
-    let recorder: MediaRecorder;
-    try {
-      recorder = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
-    } catch {
-      for (const t of stream.getTracks()) t.stop();
-      fallback();
-      return;
-    }
-    const chunks: Blob[] = [];
-    const r = { recorder, stream, started: performance.now(), cancel: false, meter: undefined as (() => void) | undefined };
-    rec.current = r;
-    recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
-    recorder.onstop = () => {
-      stopTracks(r);
-      if (rec.current === r) rec.current = null;
-      if (!mounted.current || ticket !== generation.current) return;
-      setRecording(false);
-      latest.current.onRecording?.(false);
-      const held = performance.now() - r.started;
-      if (r.cancel || held < MIN_HOLD_MS || !chunks.length) {
-        if (!r.cancel && held < MIN_HOLD_MS) setHint(COPY.holdToTalk);
-        latest.current.onIdle();
-        return;
-      }
-      latest.current.onVoice?.(new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' }));
-    };
-    recorder.start();
-    r.meter = meter(stream);
+    const type = mic.pickMicType() ?? '';
+    const take: Take | null = mic.record(stream, type, {
+      ctx: latest.current.audioContext?.(),
+      level: latest.current.onMicLevel ? (l) => latest.current.onMicLevel?.(l) : undefined,
+      done: (clip, held) => {
+        if (rec.current === take) rec.current = null;
+        if (!mounted.current || ticket !== generation.current) return;
+        setRecording(false);
+        latest.current.onRecording?.(false);
+        if (take!.cancel || held < MIN_HOLD_MS || !clip) {
+          if (!take!.cancel && held < MIN_HOLD_MS) setHint(t('talk.holdToTalk'));
+          latest.current.onIdle();
+          return;
+        }
+        latest.current.onVoice?.(clip);
+      },
+    });
+    if (!take) { fallback(); return; }
+    rec.current = take;
     setRecording(true);
     latest.current.onRecording?.(true);
     // released while the permission prompt was up: stop right away
@@ -203,27 +185,28 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     if (!r) {
       if (pending.current) {
         generation.current++; pending.current = false;
-        if (!cancel) setHint(COPY.holdToTalk);
+        if (!cancel) setHint(t('talk.holdToTalk'));
         latest.current.onIdle();
       }
       return;
     }
-    r.cancel = cancel;
-    try { r.recorder.stop(); } catch { stopTracks(); rec.current = null; setRecording(false); latest.current.onRecording?.(false); }
+    if (!r.stop(cancel)) { rec.current = null; setRecording(false); latest.current.onRecording?.(false); }
   };
 
   function fallback() {
-    setHint(COPY.micBlocked);
+    setHint(t('talk.micBlocked'));
     input.current?.focus();
   }
 
+  const v = p.voice;
+  const note = v?.open ? t('voice.listening') : v?.note;
   return (
     <div className="pet-talk">
       {chip && <span key={chip.id} className="pet-chip" onAnimationEnd={() => setChip(null)}>{chip.text}</span>}
-      {hint && <span className="pet-hint" role="status">{hint}</span>}
-      <form className="pet-pill" data-recording={recording ? '' : undefined} onSubmit={submit}>
+      {(hint || note) && <span className="pet-hint" role="status">{hint ?? note}</span>}
+      <form className="pet-pill" data-recording={recording ? '' : undefined} data-handsfree={v?.open ? '' : undefined} data-hearing={v?.hearing ? '' : undefined} onSubmit={submit}>
         <input ref={input} className="pet-input" value={text} enterKeyHint="send" autoComplete="off" maxLength={500}
-          placeholder={recording ? COPY.recording : COPY.talkTo(p.name)} aria-label={COPY.talkTo(p.name)}
+          placeholder={recording || v?.open ? t('talk.recording') : t('talk.placeholder', { name: p.name })} aria-label={t('talk.placeholder', { name: p.name })}
           onFocus={() => p.onListen('text')}
           onBlur={() => { if (!text.trim() && !p.busy) p.onIdle(); }}
           onChange={(e) => {
@@ -231,10 +214,11 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
             if (pause.current) clearTimeout(pause.current);
             pause.current = setTimeout(() => latest.current.onTypingPause?.(), TYPING_PAUSE_MS);
           }} />
+        {v?.handsFree && p.onVoice && !text.trim() && <button type="button" className="pet-hf" aria-pressed={v.open} onClick={p.onHandsFree}>{t('voice.handsFree')}</button>}
         {text.trim()
-          ? <button type="submit" className="pet-send" aria-label={COPY.send} disabled={p.busy}><SendIcon /></button>
+          ? <button type="submit" className="pet-send" aria-label={t('ui.send')} disabled={p.busy}><SendIcon /></button>
           : p.onVoice && (
-            <button type="button" className="pet-mic" aria-label={COPY.holdToTalk} aria-pressed={recording} disabled={p.busy}
+            <button type="button" className="pet-mic" aria-label={t('talk.holdToTalk')} aria-pressed={recording} disabled={p.busy}
               onPointerDown={(e) => { e.preventDefault(); released.current = false; void micDown(); }}
               onPointerUp={() => micUp(false)}
               onPointerCancel={() => micUp(true)}

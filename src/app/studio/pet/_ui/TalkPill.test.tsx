@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { pickMicType, TalkPill, type TalkPillProps } from './TalkPill';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { pickMicType } from './mic';
+import { loadMic, TalkPill, type TalkPillProps } from './TalkPill';
 
 function setup(over: Partial<TalkPillProps> = {}) {
   const p = {
@@ -24,6 +25,8 @@ class FakeRecorder {
 }
 
 describe('TalkPill', () => {
+  // the recorder is its own chunk (mic.ts): loaded here as the page's idle prefetch would, so a hold runs as on a settled page
+  beforeAll(async () => { await loadMic(); });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it('perks to listening inside the focus handler (well under 100 ms)', () => {
@@ -99,6 +102,23 @@ describe('TalkPill', () => {
       expect(FakeRecorder.last).toBeNull();
       expect(props.onVoice).not.toHaveBeenCalled();
       expect(props.onRecording).not.toHaveBeenCalledWith(true);
+    });
+
+    it('a hold before the recorder chunk has loaded asks for the mic in the handler, then records once it lands', async () => {
+      vi.resetModules();
+      const fresh = await import('./TalkPill');
+      const p = { name: 'Mochi', onListen: vi.fn(), onIdle: vi.fn(), onSend: vi.fn(), onVoice: vi.fn(), onRecording: vi.fn() };
+      render(<fresh.TalkPill {...p} />);
+      const mic = screen.getByRole('button', { name: 'Hold to talk' });
+      fireEvent.pointerDown(mic);
+      expect(p.onListen).toHaveBeenCalledWith('mic');
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+      await act(async () => { await fresh.loadMic(); });
+      await vi.waitFor(() => expect(mic).toHaveAttribute('aria-pressed', 'true'));
+      expect(p.onRecording).toHaveBeenCalledWith(true);
+      act(() => { fireEvent.pointerCancel(mic); });
+      expect(p.onVoice).not.toHaveBeenCalled();
+      expect(p.onRecording).toHaveBeenLastCalledWith(false);
     });
 
     it('a stale permission grant cannot consume or cancel a newer hold', async () => {

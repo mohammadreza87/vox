@@ -93,9 +93,13 @@ export const ambient: Reaction<EventOf<'ambient'>> = (e, ctx) => {
   }
 };
 
+/** Signature moves: six Bond milestone fidgets (0–5); four more a lit growth moment can unlock (6–9, reactions/rooms.ts). */
+export const SIGNATURE_MOVES = 10;
+export const BOND_SIGNATURES = 6;
+
 /** Bond milestone fidgets (one per milestone, six in v1). */
 export const signature: Reaction<EventOf<'signature'>> = (e) => {
-  switch (((e.index % 6) + 6) % 6) {
+  switch (((e.index % BOND_SIGNATURES) + BOND_SIGNATURES) % BOND_SIGNATURES) {
     case 0: return end([beat(0, { sy: 0.93 }, 'snap'), beat(110, { rot: 360, sy: 1.05 }, 'pop', { springs: { rot: 'float' }, expr: 'happy' }), beat(700, { sy: 1 }, 'jelly', { expr: 'idle' })], 'jelly');
     case 1: return end([0, 1, 2].map((i) => beat(i * 260, { sy: 1 }, 'snap', { hop: { h: 6 - i, land: 0.08 } })), 'jelly');
     case 2: return end([beat(0, {}, 'pop', { osc: [osc('rot', 6, 3, 1200), osc('headTilt', 4, 3, 1200)], mouth: 'grin', expr: 'happy' }), cue(1250, { expr: 'idle', mouth: 'smile' })], 'pop');

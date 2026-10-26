@@ -11,6 +11,8 @@
     "lint": "eslint",
     "check:studio-style": "node scripts/check-studio-style.mjs",
     "check:pet-bundle": "node scripts/check-pet-bundle.mjs",
+    "check:pet-copy": "node scripts/check-pet-copy.mjs",
+    "check:pet": "node scripts/check-pet-gates.mjs",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",

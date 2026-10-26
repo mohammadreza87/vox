@@ -11,6 +11,7 @@
 import type { CloudFamily, CloudSpecies, Stage } from '@/lib/studio/types';
 import type { Expression } from '@/lib/studio/character';
 import type { Mood, NeedKey } from '@/lib/pet/types';
+import type { SeedKind, WearableId } from '@/lib/pet/play';
 import type { MotionTier } from '../../_lib/motion';
 import type { haptic } from '../../_lib/haptics';
 
@@ -232,7 +233,8 @@ export type MouthKey = Viseme | 'smile' | 'grin' | 'o' | 'w' | 'yawn' | 'sleep' 
 
 /* ---------- particles (§3.2 layer 3): HTML divs, transform + opacity only ---------- */
 
-export type ParticleKind = 'crumb' | 'heart' | 'z' | 'sparkle' | 'note' | 'wisp' | 'tear';
+/** `drop`: a raindrop (the Garden's rain): falls from under the body, straight, no spin (fx.css `.pet-p[data-kind="drop"]`). */
+export type ParticleKind = 'crumb' | 'heart' | 'z' | 'sparkle' | 'note' | 'wisp' | 'tear' | 'drop';
 /** Where a burst or gaze anchors on the character (resolved from the model each frame). */
 export type Anchor = 'head' | 'eyeL' | 'eyeR' | 'mouth' | 'cheekL' | 'cheekR' | 'belly' | 'body' | 'ground' | 'touch';
 export interface ParticleBurst {
@@ -240,6 +242,8 @@ export interface ParticleBurst {
   /** count at full tier (lite halves it, max 6; reduced draws one static icon instead) */
   n: number;
   at: Anchor;
+  /** the spawn spread (± px at a 200 px character), over the kind's own (the rain aimed at the Garden's pot: narrow) */
+  w?: number;
 }
 
 /* ---------- touch zones (§1.3) ---------- */
@@ -444,6 +448,11 @@ export interface SpeciesTuning {
   listenTilt: number;
   /** blink close / open ms (owl 90 / 140; default 60 / 90) */
   blink?: { close: number; open: number };
+  /**
+   * Felt weight (1 the vinyl baseline): heavier bodies settle slower and lower after an impact, lighter ones flick
+   * faster (scales the settle springs' duration by weight^0.5 and the flick springs' by weight^0.25).
+   */
+  weight?: number;
 }
 
 export interface FamilyTuning {
@@ -456,4 +465,63 @@ export interface FamilyTuning {
   gravity: number;
   /** extra idle lean toward the silhouette's side (deg; drift +1.5) */
   leanBias: number;
+  /** multiplier on the species weight (tower a little heavier, drift lighter) */
+  weight?: number;
 }
+
+/** The Garden's seed on the floor (design §4.5): planted, sprouted, bloomed. It never wilts. */
+export type GardenState = 'planted' | 'sprouted' | 'bloomed';
+
+/* ---------- motion vocabulary beyond the reaction table (rooms, growth, settle) ---------- */
+
+/** The rooms (design §4): one engine and one character across them; the room swaps the idle flavour. */
+export type Room = 'home' | 'play' | 'garden' | 'closet' | 'bedroom' | 'book';
+/** Left-to-right room order in English (design §4); a move to a higher index slides the backdrop left. */
+export const ROOM_ORDER: readonly Room[] = ['home', 'play', 'garden', 'closet', 'bedroom', 'book'];
+
+/**
+ * Engine-owned motions that are not reaction events (the UI calls them through named methods, never fire()):
+ * room transitions, per-room reactions (design §10.4, final names), lighting a growth moment (§10.3), the settle
+ * float (§3.1), the room idles and the anticipated happy hop. Played on the same Player as reactions.
+ */
+export type RoomReaction =
+  /* Play */ | 'catch' | 'nearMiss' | 'roundEnd'
+  /* Garden */ | 'rain' | 'bloom'
+  /* Closet */ | 'admire' | 'tryOn'
+  /* Guess (talk) */ | 'guessThink' | 'guessHeard' | 'guessRight' | 'guessWrong' | 'guessReveal'
+  /* Bedroom */ | 'storyNod'
+  /* Life Book */ | 'pageFlip' | 'ownDrawing';
+/** Guess my word's moments (engine.guessReact): it has a word, a question heard, a right or wrong guess, the reveal. */
+export type GuessBeat = 'think' | 'heard' | 'right' | 'wrong' | 'reveal';
+/** Engine motions: `roomArrive` the room's hello after a transition, `breathe` one guided-breath cycle, `attend` the
+ *  hands-free listening hold coming on, `breath` the small breath between queued sentences. */
+export type MotionKind = 'roomLeave' | 'roomArrive' | 'roomIdle' | 'growthLit' | 'settle' | 'hopIdle' | 'breathe' | 'attend' | 'breath' | RoomReaction;
+/**
+ * Options for a room reaction: a Play round's result, Zen (one preset softer, nothing flashes, no round-end flourish;
+ * Guess too), and `id`: the item a Closet `tryOn` admires in the mirror (a WearableId: its slot says where to glance).
+ */
+export interface RoomReactOpts { won?: boolean; zen?: boolean; id?: string }
+/** What the player plays: a reaction kind or an engine motion. */
+export type PlayKind = ReactionKind | MotionKind;
+
+
+/** Discrete motion cues for the UI (beyond EngineCue): subscribe with engine.onMotion(fn). */
+export type MotionCue =
+  /** about six minutes of continuous play: the pet floats content (the UI may show the T9 stopping cue) */
+  | { type: 'settle' }
+  /** mid room transition: swap the backdrop and the dock now (the character is at the top of its lean) */
+  | { type: 'roomSwap'; room: Room }
+  /**
+   * the growth moment's detail should fade in now (the glow is at its peak): `detail` (and `id` for keepsakes and
+   * the seasonal one) names it, `shown` false when this stage cannot wear it yet (it is kept for later)
+   */
+  | { type: 'litPeak'; detail?: 'glint' | 'pin' | 'charm' | 'keepsake' | 'seasonal'; id?: string; shown?: boolean }
+  /** the details the character shows changed (after setDetails, or a lit detail): what this stage can wear */
+  | { type: 'details'; details: { glint: boolean; pin: boolean; charm: boolean; keepsakes: string[]; seasonal: string | null; garden?: { kind: SeedKind; state: GardenState; wet?: boolean } | null } }
+  /**
+   * what the character wears now (after setWearing, or a stage change): per slot the item this stage can show (a
+   * wearable it cannot show yet is kept); `fresh` the `slot:id` just put on (the page may fade it in)
+   */
+  | { type: 'wearing'; wearing: { head: WearableId | null; neck: WearableId | null; hand: WearableId | null }; fresh?: string }
+  /** the frame-budget guard stepped the tier down (slow device) */
+  | { type: 'degraded'; tier: Tier; reason: 'frames' | 'script' };

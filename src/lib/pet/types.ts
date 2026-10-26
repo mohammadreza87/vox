@@ -7,6 +7,10 @@
 
 import type { AgentJoin, CharacterLook, Stage } from '../studio/types';
 import type { CircleDecision, CircleParticipationExport, NoteExport, PetCircle, PetNote } from '../circles/contracts';
+import type { PetPlay, PetPlayView } from './play';
+import type { PetGrowthView } from './growth';
+import type { AskId, TipId } from './play';
+import type { PetCheckinRecord, PetCheckinReplay, PetCheckinsView } from './checkins';
 
 export type { CharacterLook, PetCircle, PetNote, Stage };
 
@@ -104,7 +108,7 @@ export type PetRole = 'owner' | 'member' | 'guest';
 
 /** Every request carries the user's zone in this header (GET has no body). */
 export const PET_TZ_HEADER = 'x-pet-tz';
-/** `/api/studio/pet/:agentId` and `/export` (GET), `/care`, `/talk`, `/talk-voice`, `/forget` (POST). */
+/** `/api/studio/pet/:agentId` and `/export`, `/play`, `/checkins` (GET), `/care`, `/play`, `/talk`, `/talk-voice`, `/growth/confirm`, `/checkins`, `/forget` (POST). */
 export const PET_API_BASE = '/api/studio/pet';
 /** Page route: `/studio/pet/:agentId`. The menu button and the /start web_app button point here. */
 export const PET_PAGE_BASE = '/studio/pet';
@@ -143,6 +147,66 @@ export interface PetView {
   talkInDm?: true;
   /** the person's own data page in Vox (t.me/<VoxxBot>?startapp=mydata): export, erase, notes. The ⋯ menu's Settings opens it. */
   dataUrl?: string;
+  /** the person's play record (pet/play.ts, design §3.4); absent when it could not be read this time (the pet still opens) */
+  play?: PetPlayView;
+  /**
+   * Growth moments (pet/growth.ts, design §4.11): every moment (drafted or default, then the room and season templates)
+   * with `lit.at` when it is lit for the whole agent, and `mine`: the ids lit only for this person. Never a count.
+   * Absent when the growth store could not be read this time.
+   */
+  growth?: PetGrowthView;
+  /**
+   * UX-02's facts for the mic sheet (PRIVACY_AND_CONSENT.md §8), present when the page can hear. `providers` is who
+   * receives the person's audio, from configuration (the transcription provider). `locations` (processing locations)
+   * and `retention` (the verified audio retention line) are legal launch facts not resolved yet (PRIV-039, a legal
+   * to-do): the server leaves them out, and the sheet says the providers are listed in Privacy until all three are set.
+   */
+  voiceNotice?: { providers: string; locations?: string; retention?: string };
+  /**
+   * The page opened from a check-in's Open button (`?ci=<ref>`, design §5.1): the moment to replay instead of the hello.
+   * Present only when the reference is this person's own, for this agent, sent within the last week.
+   */
+  checkin?: PetCheckinReplay;
+  /**
+   * Check-ins for this agent (design §5.2): what the P1 sheet and "Choose moments" read, and `pausedNote` once after a
+   * pause. Members only (never a guest or a manager-signed launch); absent before the person ever answered P1 or when
+   * the store could not be read.
+   */
+  checkins?: PetCheckinsView;
+  /**
+   * Decisions' picks for this session (design §8.2), present only under STUDIO_PET_DECISIONS=on and only for questions
+   * that passed the calibration gate: `tip` / `ask` null means none / later. Absent: the page's local ranker decides.
+   */
+  suggest?: PetViewSuggest;
+  /** the creator, or an admin (who opens as `member`), may change the real look here (POST …/look); false for everyone else */
+  canEditLook?: boolean;
+}
+
+/**
+ * POST /api/studio/pet/:agentId/look `{ look: Partial look (hue, family, species, hair, hairTone, accessory, accent,
+ * features: { cheeks, lashes, brows }), sync?: boolean }`: the creator or an admin only (403 `look_forbidden`), agent-signed
+ * initData inside the 1 h window. `sync: false` saves without pushing the Telegram profile photo (Studio's editor pattern).
+ * An unknown catalogue value or a clash is 400. Answers the saved look.
+ */
+export interface LookRequest { look: Partial<Pick<CharacterLook, 'hue' | 'family' | 'species' | 'hair' | 'hairTone' | 'accessory' | 'accent'>> & { features?: Partial<CharacterLook['features']> }; sync?: boolean }
+export interface LookResponse { look: CharacterLook }
+
+/** The greeting variants Decisions chooses among (§8.2). */
+export type PetGreeting = 'plain' | 'morning' | 'welcome_back' | 'seasonal';
+export interface PetViewSuggest { tip?: TipId | null; ask?: AskId | null; greeting?: PetGreeting }
+
+/** pet_action (design §8.4): what a talk turn asked the pet to do, as the triage pre-pass read it. */
+export type PetActionKind = 'feed' | 'play_ball' | 'sleep' | 'open_play' | 'open_garden' | 'open_closet' | 'open_bedroom' | 'open_life_book' | 'start_guess';
+export const PET_ACTION_KINDS: readonly PetActionKind[] = ['feed', 'play_ball', 'sleep', 'open_play', 'open_garden', 'open_closet', 'open_bedroom', 'open_life_book', 'start_guess'];
+/**
+ * On talk and talk-voice responses (and the stream's `done`) only under STUDIO_PET_DECISIONS=on, for a calibrated
+ * language, when the choice is not none and `confidence` ≥ 0.75. The page acts after the spoken reply, through the
+ * existing care route; a wrong guess is a small reversible detour.
+ */
+export interface TalkAction {
+  /** never `none` from this server (no action means no field); `none` stays in the type for the page's own drafts */
+  kind: PetActionKind | 'none';
+  confidence: number;
 }
 
 /* ---------- the pet over a group (Circles S4): GET circle answers PetCircle ---------- */
@@ -177,9 +241,14 @@ export interface TalkResponse {
   goodbye?: boolean;
   /** this exchange crossed a Bond milestone */
   bondMilestone?: number;
+  /** pet_action (design §8.4): see TalkAction */
+  action?: TalkAction;
 }
 
-/** POST /talk-voice (multipart: `audio` Blob). Audio is base64 speech as callTurn returns it. */
+/**
+ * POST /talk-voice (multipart: `audio` Blob, optional `handsFree` = "true" in hands-free mode). Audio is base64 speech
+ * as callTurn returns it. With `?stream=1` the answer is NDJSON TalkVoiceStreamEvent lines instead (design §8A.3).
+ */
 export interface TalkVoiceResponse {
   transcript: string;
   reply: string;
@@ -188,7 +257,28 @@ export interface TalkVoiceResponse {
   care?: PetCare;
   goodbye?: boolean;
   bondMilestone?: number;
+  /** pet_action (design §8.4): see TalkAction */
+  action?: TalkAction;
 }
+
+/**
+ * POST /talk-voice?stream=1: `application/x-ndjson`, one event per line, in this order: `transcript`, `reply`, then one
+ * `sentence` per spoken piece (`i` from 0, in order; base64 `audio` with its `mimeType`, `audio/mpeg` for ElevenLabs and
+ * `audio/wav` for Gemini, absent when that piece could not be synthesized), then `done`. No `sentence` events at all
+ * when the agent has no voice or the server cannot speak. An empty transcript is `transcript` "" then `done`. A failure
+ * after the stream began is the last line, `error`, and nothing more is spoken (`settings_changed`: authority changed
+ * mid-reply). A failure before the first line is the route's ordinary JSON error with its HTTP status.
+ */
+export type TalkVoiceStreamEvent =
+  | { type: 'transcript'; text: string }
+  | { type: 'reply'; text: string }
+  | { type: 'sentence'; i: number; text: string; audio?: string; mimeType?: string }
+  | { type: 'done'; turnId?: string; care?: PetCare; goodbye?: boolean; bondMilestone?: number; action?: TalkAction }
+  | { type: 'error'; code: 'settings_changed' | 'pet_care_changed' | 'rate_limited' | 'conversation_failed' };
+
+/** POST /growth/confirm `{ momentId, noteId? }` (design §4.11): lit is 'agent', 'mine', or null when it already was. */
+export interface GrowthConfirmRequest { momentId: string; noteId?: string }
+export interface GrowthConfirmResponse { lit: 'agent' | 'mine' | null; growth?: PetGrowthView }
 
 /**
  * The person's care for every agent (the self-service copy of what the rights export carries), and its erasure.
@@ -198,9 +288,12 @@ export interface TalkVoiceResponse {
 /** agentChoices: the person's agent-card choices with their evidence (Circles), present only when any exist.
  * circles: their own group-circle participation (evidence, membership windows), present only when any exists. */
 /** notes: the requester's own note copies (Circles S3), present only when any exist. */
-export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[] }
+/** petPlay: their play records (design §3.4), present only when any exist. */
+/** petCheckins: their check-in record (design §5: consent evidence, moment types, content-free sent rows), present only when one exists. */
+export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[]; petPlay?: PetPlay[]; petCheckins?: PetCheckinRecord }
 /** choicesErased / circlesErased / notesErased: agent-card choices, circle rows and own note copies removed alongside pet care, present only when any were. */
-export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number; connectionsErased?: number; connectionsPending?: number }
+/** playErased: play records removed with pet care, present only when any were. checkinsErased: the check-in record, when one was. */
+export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number; connectionsErased?: number; connectionsPending?: number; playErased?: number; checkinsErased?: number }
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot
@@ -220,7 +313,12 @@ export type PetErrorCode =
   | 'circle_full' // 12 people already joined (or too many joins and leaves)
   | 'circle_stale' // the card changed: reload and choose again
   | 'circle_failed' // a store failed under a circle route: try again (never ends the pet)
-  | 'circle_use_vox'; // notes on agent-signed initData: read and erase them in Vox (My data) instead (403, never ends the pet)
+  | 'circle_use_vox' // notes on agent-signed initData: read and erase them in Vox (My data) instead (403, never ends the pet)
+  // check-ins (design §5.2), shown in place by the sheet, never the end of the pet session
+  | 'look_forbidden' // POST look by someone who is neither the agent's creator nor an admin (403)
+  | 'checkins_unavailable' // a guest, a manager-signed launch, or the check-in store failed (403 / 503)
+  | 'consent_required' // turning check-ins on without the P1 sheet's consent evidence (400)
+  | 'consent_invalid'; // the evidence does not hold (presented in the future or over a day ago), or every type off on a first yes (400)
 
 export interface PetErrorBody { error: PetErrorCode; message?: string }
 /** 403 body for a private agent: enough to draw the character asleep on the "This one's private" screen. */
