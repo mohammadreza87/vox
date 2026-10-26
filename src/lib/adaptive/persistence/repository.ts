@@ -1,3 +1,4 @@
+import { telegramArchivesSchema } from '../telegram-archive-state';
 import { rightsUseHoldsSchema, type RightsUseHolds, type RightsUseControls } from '../rights-use-holds/contracts';
 import { emptyRightsUseHolds, requireRightsUseHoldCapacity } from '../rights-use-holds/state';
 import { productPauseSchema, PRODUCT_PAUSE_RESERVED_BYTES, type ProductPauseV1, type ProductPauseUseControlsV1 } from '../product-pause/contracts';
@@ -57,6 +58,7 @@ const legacyDocumentSchema = z.object({ schemaVersion: z.literal(1), accountId: 
   experience: experienceDocumentSchema.default(emptyExperience),
   relationships: relationshipDocumentSchema.default(emptyRelationshipDocument),
   observer: observerDocumentSchema.default(emptyObserverDocument),
+  telegramArchives: telegramArchivesSchema.optional(),
   consentEvents: z.array(z.unknown()).max(2000), outbox: z.array(outboxSchema).max(2000),
 }).strict();
 const productPauseDocumentSchema = legacyDocumentSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseSchema }).strict();
@@ -119,6 +121,10 @@ function checkAdaptiveDocument(draft: AdaptiveDocument, accountId: string, now: 
     if (scope.accountId !== accountId || scope.personId !== draft.personId || scope.tenantId !== tenantIdFor(accountId) ||
         scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
         key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
+  }
+  for (const row of draft.telegramArchives ?? []) {
+    const scope = row.state?.scope;
+    if (scope && (scope.accountId !== accountId || scope.personId !== draft.personId || scope.agentId !== row.agentId || scope.space !== row.space || scope.containerId !== containerIdFor(accountId, row.space))) throw new Error('Invalid Telegram archive partition');
   }
   if (draft.schemaVersion >= 2) {
     if (draft.productPause!.scopes.some(s => s.latest && s.latest.recordedAt > now)) throw new Error('Invalid pause receipt time');

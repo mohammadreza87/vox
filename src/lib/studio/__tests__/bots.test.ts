@@ -91,7 +91,7 @@ describe('bot runner', () => {
     stop = startBots(h.studio).stop;
     await flush();
     expect(h.botFor).toHaveBeenCalledWith(token);
-    expect(h.bots.get(token)!.getUpdates).toHaveBeenCalledWith(undefined, 25, ['message', 'callback_query', 'my_chat_member', 'chat_member']);
+    expect(h.bots.get(token)!.getUpdates).toHaveBeenCalledWith(undefined, 25, ['message', 'edited_message', 'callback_query', 'my_chat_member', 'chat_member']);
 
     await h.studio.fire(org.admin, agent.id, { reason: '', memoryPolicy: 'archive', confirmName: 'Nova' });
     await vi.advanceTimersByTimeAsync(8000);
@@ -198,7 +198,7 @@ describe('bot runner', () => {
     h.logger.info.mockClear(); h.logger.warn.mockClear(); h.logger.error.mockClear();
     stop = startBots(h.studio).stop;
     await flushUntil(() => bot().getUpdates.mock.lastCall?.[0] === telegramCanary.update + 2);
-    expect(bot().getUpdates).toHaveBeenLastCalledWith(telegramCanary.update + 2, 25, ['message', 'callback_query', 'my_chat_member', 'chat_member']);
+    expect(bot().getUpdates).toHaveBeenLastCalledWith(telegramCanary.update + 2, 25, ['message', 'edited_message', 'callback_query', 'my_chat_member', 'chat_member']);
     expect(bot().sendMessage).toHaveBeenCalledTimes(1);
     expect(h.logger.error).toHaveBeenCalledTimes(1);
     expectContentFreeTelegramLogs([...h.logger.warn.mock.calls, ...h.logger.error.mock.calls, ...h.logger.info.mock.calls], [agent.id, agent.bot!.username]);

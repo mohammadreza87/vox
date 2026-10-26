@@ -27,6 +27,7 @@ export interface TelegramMessage {
   from?: TelegramUser;
   chat: TelegramChat;
   date: number;
+  edit_date?: number;
   text?: string;
   caption?: string;
   new_chat_members?: TelegramUser[];
@@ -70,6 +71,7 @@ export interface TelegramManagedBotUpdated {
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  edited_message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
   my_chat_member?: TelegramChatMemberUpdated;
   chat_member?: TelegramChatMemberUpdated;
@@ -195,6 +197,50 @@ export class TelegramBotClient {
 
   sendChatAction(chatId: number, action: 'typing' | 'record_voice'): Promise<boolean> {
     return this.call('sendChatAction', { chat_id: chatId, action });
+  }
+
+  /** Immutable memory artifacts. Authority is checked again at the actual POST;
+   * uncertain response failures are never automatically replayed. */
+  sendDocument(chatId: number, bytes: Uint8Array, options: { filename: string; authorizeNow: () => boolean; signal?: AbortSignal }): Promise<TelegramMessage> {
+    if (bytes.byteLength > 128 * 1024 || !/^vox-(events|manifest)-[A-Za-z0-9-]+\.json$/.test(options.filename)) throw new Error('Invalid archive document');
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('document', new Blob([new Uint8Array(bytes)], { type: 'application/json' }), options.filename);
+    form.append('disable_notification', 'true');
+    return this.call('sendDocument', form, options.signal, options.authorizeNow);
+  }
+
+  /** Bounded streaming download: metadata and response headers are hints; the
+   * byte counter is authoritative before allocating the final artifact. */
+  async downloadDocument(fileId: string, options: { maxBytes: number; authorizeNow: () => boolean; signal?: AbortSignal }): Promise<Uint8Array> {
+    if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || options.maxBytes > 128 * 1024) throw new Error('Invalid archive download limit');
+    const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, options.signal, options.authorizeNow);
+    assertExportAuthority(options);
+    if (!file.file_path || (file.file_size !== undefined && (!Number.isSafeInteger(file.file_size) || file.file_size < 0 || file.file_size > options.maxBytes))) throw new Error('Archive file unavailable');
+    const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal: options.signal });
+    assertExportAuthority(options);
+    if (!response.ok || !response.body) throw new Error('Archive file unavailable');
+    const declared = response.headers.get('content-length');
+    if (declared !== null && (!Number.isSafeInteger(Number(declared)) || Number(declared) > options.maxBytes || Number(declared) < 0)) {
+      await response.body.cancel(); throw new Error('Archive file too large');
+    }
+    const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        assertExportAuthority(options);
+        const next = await reader.read();
+        assertExportAuthority(options);
+        if (next.done) break;
+        size += next.value.byteLength;
+        if (size > options.maxBytes) throw new Error('Archive file too large');
+        chunks.push(next.value);
+      }
+    } catch (error) { await reader.cancel().catch(() => undefined); throw error; }
+    finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
   }
 
   /** showAlert: a modal only the tapper sees (Circles receipts), instead of a passing toast. */
