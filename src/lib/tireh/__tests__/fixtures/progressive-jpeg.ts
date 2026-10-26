@@ -1,0 +1,11 @@
+/**
+ * A 64x64 progressive JPEG (SOF2, 713 bytes), generated once offline with sharp (the encoder Studio's toJpeg
+ * uses): `sharp(rgbGradient, { raw: { width: 64, height: 64, channels: 3 } }).jpeg({ quality: 70, progressive: true })`.
+ * Markers: DQT DQT SOF2 DHT DHT SOS, then DHT/SOS pairs for the later scans, EOI. No APPn or COM segment.
+ */
+export const PROGRESSIVE_JPEG_64_BASE64 =
+  '/9j/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wgARCABAAEADASIAAhEBAxEB/8QAFwABAQEBAAAAAAAAAAAAAAAAAwIFBv/EABcBAQEBAQAAAAAAAAAAAAAAAAQCBgD/2gAMAwEAAhADEAAAAeRW17jVEpZqiUw1RKZkIiHyEIi0w0RaWa2tMx1tT5A1taYaolMNUSl5CIhshCItsNEWmGtrTP/EABUQAQEAAAAAAAAAAAAAAAAAAAEA/9oACAEBAAEFAggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggv/EABURAQEAAAAAAAAAAAAAAAAAAAIA/9oACAEDAQE/AQ4ODg4ODg4ODg4ODg4ODg7/xAAUEQEAAAAAAAAAAAAAAAAAAABA/9oACAECAQE/AQf/xAAUEAEAAAAAAAAAAAAAAAAAAABg/9oACAEBAAY/AgH/xAAUEAEAAAAAAAAAAAAAAAAAAABg/9oACAEBAAE/IQCqqqqqqqqqqqqqqqqqqqqr/9oADAMBAAIAAwAAABCiWXdVBkmm2TVdFkj/xAAUEQEAAAAAAAAAAAAAAAAAAABA/9oACAEDAQE/EAAAAAAH/8QAFREBAQAAAAAAAAAAAAAAAAAAAQD/2gAIAQIBAT8QGGGGGGGGGGGGGGGG/8QAFRABAQAAAAAAAAAAAAAAAAAAAGH/2gAIAQEAAT8Qiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii/9k=';
+
+export function progressiveJpeg64(): Uint8Array {
+  return Uint8Array.from(Buffer.from(PROGRESSIVE_JPEG_64_BASE64, 'base64'));
+}

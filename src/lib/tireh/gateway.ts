@@ -17,7 +17,7 @@ import { LLMAuthorizationError, streamText, type LLM, type LLMMessage, type WebS
 import { askedSkill, explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
 import { skillQuestion, type SkillChoice, type SkillRouting } from './skill-routing';
 import { triageQuestionSetNow } from './decisions/catalog';
-import { decisionLogRow, type DecisionLogSink } from './decisions/log';
+import { decisionLogRow, type DecisionLogSink, type NewDecisionLogRow } from './decisions/log';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -32,11 +32,11 @@ import { GroupWindow, quotedLine, replyQuote, speakerLabel, UNANSWERED_MARK, typ
 import { selectAdaptiveContext } from './memory/adaptive-context';
 import { lineageEventIds } from './memory/store';
 import { selectMemories } from './memory/retrieval';
-import { NEGATED_MEMORY_REQUEST } from './memory/requests';
+import { negatedMemoryRequest } from './memory/requests';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing, targetsSomeoneElse } from './group-addressing';
-import { forceQuickTriage, IMAGE_PLACEHOLDER_TEXT, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, suppressImageMemory, withholdImageReply, type ImageTurn } from './images';
+import { forceQuickTriage, imageDerivedMark, imageIngestionWanted, imagePlaceholderText, imageTurnLanguage, ingestTelegramImage, inheritedImageMark, textLanguage, withheldImageReplyText, withholdImageReply, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -262,8 +262,6 @@ export const PET_SURFACE_FRAME = [
 ].join(' ');
 
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
-/** The shared "do not keep this" rule (memory/requests.ts), also used by S12 image retention. */
-const NO_MEMORY = NEGATED_MEMORY_REQUEST;
 
 export class PersonaGateway {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -317,7 +315,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
           }
           return;
         }
-        if (NO_MEMORY.test(text) || this.deps.relationships.mode !== 'live') return;
+        // The shared "do not keep this" rule (memory/requests.ts), also read by S12 image retention.
+        if (negatedMemoryRequest(text) || this.deps.relationships.mode !== 'live') return;
         if (await this.deps.relationshipEnabled?.(personaId, speakerId, space) === false) return;
         const permit = await authority.resolve(telegramId, personaId, space);
         if (!permit) return;
@@ -512,7 +511,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // acknowledgement wait until the boundary has validated the audience (below).
     const imageWanted = !isVoice && imageIngestionWanted(message, chat);
     const caption = text;
-    if (imageWanted && !caption.trim()) text = IMAGE_PLACEHOLDER_TEXT;
+    // A captionless image's placeholder follows the sender's Telegram language_code (no history is read here).
+    if (imageWanted && !caption.trim()) text = imagePlaceholderText(imageTurnLanguage(caption, message.from?.language_code));
     if (!text.trim()) return 'ignored';
     if (parseExplicitControl(text) === 'forget') {
       await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
@@ -532,6 +532,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       return 'ignored';
     }
     let imageTurn: ImageTurn | null = null;
+    // S09 decision log for image-v1 triage (only while TIREH_DECISION_LOG is on, read now): the content-free row
+    // is held here and recorded once the turn's text triage has settled, after that triage's own row. A turn that
+    // ends before then (a captionless image dropped after triage, a member no longer allowed to reply) writes none.
+    const imageLogRows: NewDecisionLogRow[] = [];
+    const imageDecisionLog: DecisionLogSink | undefined = imageWanted && tirehFlags().decisionLog && this.deps.decisionLog
+      ? { record: (row) => { imageLogRows.push(row); } } : undefined;
     if (imageWanted) {
       // A public-only audience (Circles: an outsider who chose replies) is valid for the current turn only:
       // its image is never downloaded or triaged, as when ingestion required validateAudience itself.
@@ -545,7 +551,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) &&
           this.imageCapableNow(persona, chat, speaker.id, boundary.space) } : {}) };
       imageTurn = boundary.publicOnly || !await this.imageCapable(persona, chat, speaker.id, boundary.space) ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log,
-        authority: imageAuthority }, persona, chat, speaker.id, message, caption);
+        authority: imageAuthority, ...(imageDecisionLog ? { decisionLog: imageDecisionLog, clock: () => this.now() } : {}) }, persona, chat, speaker.id, message, caption);
       // A captionless image that could not be ingested is ignored, as before.
       if (!imageTurn && !caption.trim()) return 'ignored';
     }
@@ -573,6 +579,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       ? timed('triage', () => this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary, extras))
       : this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary, extras);
     const settled = (await triaged).triage;
+    for (const row of imageLogRows.splice(0)) {
+      try { this.deps.decisionLog?.record(row); } catch { /* the decision log never affects the turn */ }
+    }
     let assistantMessage: ChatMessage | undefined;
     let shouldReply = addressed;
     let action: 'reply' | 'proactive' = 'reply';
@@ -632,11 +641,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       currentStageTimer()?.markOnce('total');
       assistantMessage = {
         privacy: this.stamp(boundary, userMessage.privacy!.sourceEventIds),
-        role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? IMAGE_WITHHELD_REPLY_TEXT : delivered, at: this.now(), telegramMessageId: message.message_id,
+        role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? withheldImageReplyText(textLanguage(delivered)) : delivered, at: this.now(), telegramMessageId: message.message_id,
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
         // S12: a reply that could repeat what an earlier image showed carries that
-        // turn's mark forward (suppressed and/or people), see inheritedImageMark.
-        ...(imageTurn ? imageDerivedMark(imageTurn) : imageContext ?? {}),
+        // turn's mark forward (suppressed and/or people), see inheritedImageMark. On an
+        // image turn the current verdict joins the inherited one (a union: only fails closed).
+        ...(imageTurn ? imageDerivedMark({ suppressMemory: imageTurn.suppressMemory || imageContext?.imageDerived.suppressed === true,
+          containsPeople: imageTurn.containsPeople || imageContext?.imageDerived.people === true }) : imageContext ?? {}),
       };
       await this.retain(persona, chat, speaker.id, assistantMessage, boundary);
     } else {
@@ -646,7 +657,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // A useful group fact can be remembered without interrupting. A failed
     // classifier never causes passive extraction, and opt-outs are not saved.
     const remember = (chat.kind === 'group'
-      ? persona.groupRemember !== false && !NO_MEMORY.test(text) && (settled?.memorable === true || (addressed && settled === null))
+      ? persona.groupRemember !== false && !negatedMemoryRequest(text) && (settled?.memorable === true || (addressed && settled === null))
       : settled?.memorable !== false) && !imageTurn?.suppressMemory;
     if (remember) {
       try {
@@ -732,8 +743,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // S12 (STUDIO_IMAGES): an image attached outside Telegram (the Mini App) has no image triage on this path,
     // so it is treated exactly as a Telegram image whose triage is unknown: both rows are marked suppressed
     // (no extraction, now or later) with the people rule on, and the reply text is withheld from history.
+    // An untriaged image always fails closed, an explicit remember request included: suppressed is a constant.
     const untriagedImage = tirehFlags().images && (options.images?.length ?? 0) > 0
-      ? imageDerivedMark({ suppressMemory: suppressImageMemory(null, text), containsPeople: true }) : undefined;
+      ? imageDerivedMark({ suppressMemory: true, containsPeople: true }) : undefined;
     const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]), ...untriagedImage };
     await this.retain(persona, chat, speakerId, user, boundary);
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
@@ -745,7 +757,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     // S12: same history key as Telegram private chats, so the image mark carries here too.
     const assistant: ChatMessage = untriagedImage
-      ? { role: 'assistant', text: withholdImageReply(null) ? IMAGE_WITHHELD_REPLY_TEXT : reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...untriagedImage }
+      // Untriaged: the reply is always withheld, in the language of the person's message.
+      ? { role: 'assistant', text: withheldImageReplyText(textLanguage(text)), at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...untriagedImage }
       : { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...imageContext };
     await this.retain(persona, chat, speakerId, assistant, boundary);
     try {
