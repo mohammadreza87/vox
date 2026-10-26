@@ -1,0 +1,28 @@
+/* Wave B's living-page layer (Extras.tsx): sheets, coach chips, the lit chip, a tip's toy halo, hands-free. Loaded with
+   that chunk after hello, never with the route. No scroll: a sheet is a title, at most four lines and two buttons. */
+.pet-sheet { position: fixed; z-index: 30; left: 50%; bottom: calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 12px); width: min(100% - 24px, 420px); transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 8px; padding: 18px 18px 14px; border-radius: 24px; background: #16191E; border: 1px solid #ffffff1a; box-shadow: 0 12px 40px #0009; animation: petSheet .32s var(--ease-out); }
+.pet-sheet b { font: 600 18px/24px var(--f-display); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pet-sheet p { margin: 0; color: var(--text-2); font-size: var(--pet-sm); line-height: 1.45; }
+.pet-sheet-row { display: flex; gap: 10px; margin-top: 6px; }
+.pet-sheet-row button { flex: 1; min-height: 46px; padding: 8px 10px; border: 1px solid #ffffff24; border-radius: 999px; background: #ffffff10; font-weight: 600; }
+.pet-sheet-row .pet-sheet-yes { background: var(--volt); color: var(--on-volt); border-color: transparent; }
+@keyframes petSheet { from { opacity: 0; transform: translate(-50%, 24px); } }
+.pet-coach { position: fixed; z-index: 25; display: flex; align-items: center; gap: 2px; max-width: min(86vw, 320px); padding: 6px 4px 6px 14px; padding-inline: 14px 4px; border-radius: 16px;
+  background: var(--volt); color: var(--on-volt); font-size: 13px; line-height: 17px; transform: translateX(-50%); animation: petFade .3s var(--ease-out); }
+.pet-coach[data-above] { transform: translate(-50%, -100%); }
+.pet-coach span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pet-coach button { flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: 50%; background: none; font-weight: 700; }
+.pet-lit { position: absolute; z-index: 6; left: 50%; top: calc(var(--pet-safe-top,env(safe-area-inset-top,0px)) + 56px); transform: translateX(-50%); padding: 6px 14px; border-radius: 999px;
+  background: #ffffff1f; font-size: 14px; white-space: nowrap; animation: petDays 3.2s var(--ease-sine) forwards; }
+.pet-toy[data-tip] .pet-toy-face { animation: petWiggle 1.3s var(--ease-sine) 2; box-shadow: 0 0 0 4px #d6ff5c40, inset 0 -3px 0 #0003; }
+.pet-hf { flex-shrink: 0; height: 32px; padding: 0 10px; border: 1px solid #ffffff24; border-radius: 999px; background: none; font-size: 12px; color: var(--text-2); }
+.pet-hf[aria-pressed="true"] { background: var(--volt); color: var(--on-volt); border-color: transparent; }
+.pet-pill[data-handsfree] { border-color: var(--volt); box-shadow: 0 0 0 3px #d6ff5c33; }
+.pet-pill[data-hearing] { box-shadow: 0 0 0 6px #d6ff5c40; }
+.pet-root[data-tier="reduced"] :is(.pet-sheet, .pet-coach, .pet-lit) { animation: petFade .15s linear; }
+.pet-root[data-tier="reduced"] .pet-toy[data-tip] .pet-toy-face { animation: none; }
+.pet-details { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.pet-detail-in { transform-box: fill-box; transform-origin: center; animation: petDetailIn .42s var(--ease-over); }
+@keyframes petDetailIn { from { opacity: 0; transform: scale(.6); } }
+.pet-root[data-tier="reduced"] .pet-detail-in { animation: petFade .3s linear; }

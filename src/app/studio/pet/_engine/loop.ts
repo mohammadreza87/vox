@@ -28,6 +28,7 @@ import { createGestureClassifier } from './gestures';
 import { BODY, Secondary, bankAtRest, compose, makeBank, stepBank, RigWriter, type Bank, type Geom, type RigFrame, type SecondaryOut, type WriteStats } from './layers';
 import { lowerTier, polish, stageMotion, weightTime, type StageMotion } from './motion';
 import { AudioLipSync, TextLipSync } from './lipsync';
+import type { DetailName, Details } from './details';
 import { Particles, park, place } from './particles';
 import { Ball, Fling, Hop, velocityStretch, type Bounds } from './physics';
 import { Player, type Playing } from './player';
@@ -37,6 +38,8 @@ import { hopIdle } from './reactions/motions';
 
 /** Rooms, the settle rule, growth moments, unlockable moves, the OS switch: their own chunk, preloaded after start (§10.7). */
 type Extras = typeof import('./extras');
+type LipSource = import('./extras').LipSource;
+type SpeakItem = import('./extras').SpeakItem;
 import { chance, range, seeded, sign, variantHistory } from './rng';
 import { anchorModel, bodyHull, defaultScene, gazeTo, toModel, toStage, zoneAt, type Placement } from './scene';
 import { tuningFor, volumeSx, type Tuning } from './species';
@@ -44,7 +47,7 @@ import { atRest, jump, makeSpring, presetKC, retarget, step } from './spring';
 import {
   EVENT_PRIORITY, LOOP, MULTIPLY, NEUTRAL_POSE, PHYSICS, PRIORITY_ORDER, TIER_BUDGET,
   type Beat, type Channel, type LookTarget, type MotionCue, type MouthKey, type Oscillation, type PetExpr, type Point, type PoseTargets, type ReactionCtx,
-  type PriorityClass, type ReactionEvent, type Rng, type Room, type RoomReaction, type Spring, type SpringPreset, type Tier, type VariantHistory,
+  type PriorityClass, type ReactionEvent, type Rng, type Room, type RoomReaction, type RoomReactOpts, type Spring, type SpringPreset, type Tier, type VariantHistory,
 } from './types';
 
 /** A hop never takes off sooner than this after a landing: the squash reads before the next stretch. */
@@ -81,12 +84,26 @@ export interface PetMotionControls {
   setStage(stage: Stage): void;
   /** switch rooms: a 300 ms transition (counter-lean, lean with the slide, settle) and the room's idle flavour; reduced or instant: a cut */
   setRoom(room: Room, o?: { dir?: -1 | 1; instant?: boolean }): void;
-  /** a room's reaction by its final name (§10.4); the rooms' chunk loads on first use if needed */
-  roomReact(kind: RoomReaction, o?: { won?: boolean }): void;
+  /** a room's reaction by its final name (§10.4); Play's take `won` and `zen` (one preset softer, nothing flashes, no round-end flourish); the rooms' chunk loads on first use if needed */
+  roomReact(kind: RoomReaction, o?: RoomReactOpts): void;
   /** preload the rooms' motion chunk (setRoom away from Home loads it too) */
   loadRooms(): Promise<void>;
-  /** light a growth moment (§10.3): look up, slow blink, glow, nod (~1.2 s); `fidget` also unlocks that moment's move */
-  lightMoment(o?: { fidget?: string }): void;
+  /**
+   * light a growth moment (§10.3): look up, slow blink, glow, nod (~1.2 s); `fidget` also unlocks that moment's move;
+   * `detail` (and `id` for a keepsake or the seasonal one) joins the shown details at the `litPeak` cue, which names it
+   */
+  lightMoment(o?: { fidget?: string; detail?: DetailName; id?: string }): void;
+  /** the growth details this view has lit (§4.11): what the stage can wear shows (a `details` cue says what), the rest waits for its part */
+  setDetails(d: Details): void;
+  /** hands-free (§8A.2): hold an attentive listening pose while the mic is open (under the talk states; the listen perk still plays on speech) */
+  setListening(on: boolean): void;
+  /**
+   * sentences in a row (§8A.3): one continuous lip-sync, each sentence filling its ms with a short closing pause and a
+   * small breath; `more` keeps the queue open for further sentences (a later call appends; stopSpeaking ends it)
+   */
+  speakQueue(items: SpeakItem[], o?: { more?: boolean }): void;
+  /** steer the eyes to a stage point (Starfall's nearest star), null to let go; a finger or a reaction's look still wins */
+  setGaze(p: Point | null): void;
   /** a lit moment adds one signature move without touching Bond; returns false if it was already unlocked */
   unlockFidget(id: string): boolean;
   /** an erased moment takes its move back (silently) */
@@ -227,13 +244,13 @@ class Engine implements PetEngine {
   private suppressBy: number | null = null;
   private lastExpr: PetExpr = 'idle';
   private shownStructural = 'idle';
-  private finger: Point | null = null;
+  finger: Point | null = null;
   private drift = { x: 0, y: 0 };
   private glanceSide = 1;
   private lookAwayUntil = -Infinity;
 
   /* state */
-  private talkState: TalkState = 'idle';
+  talkState: TalkState = 'idle';
   asleep = false;
   dozing = false;
   sleeping = false; // the yawn → drift sequence is under way
@@ -261,7 +278,7 @@ class Engine implements PetEngine {
   private thinkSince = 0;
   private thinkCycle = 0;
   private wakeTapAt = -Infinity;
-  private lip: TextLipSync | AudioLipSync | null = null;
+  lip: LipSource | null = null;
   private lipOut = { open: 0, width: 0 };
   private onset = onsetDetector(TALK);
   /** the cookie as last written (frame sheets draw it) */
@@ -417,15 +434,20 @@ class Engine implements PetEngine {
 
   setRoom(room: Room, o: { dir?: -1 | 1; instant?: boolean } = {}): void { this.withX((x) => x.setRoom(this, room, o, (n) => this.noteInput(n))); }
 
-  roomReact(kind: RoomReaction, o: { won?: boolean } = {}): void {
+  roomReact(kind: RoomReaction, o: RoomReactOpts = {}): void {
     this.noteInput(this.clock.now());
     this.withX((x) => x.roomReact(this, kind, o));
   }
 
-  lightMoment(o: { fidget?: string } = {}): void {
+  lightMoment(o: { fidget?: string; detail?: DetailName; id?: string } = {}): void {
     if (o.fidget) this.unlockFidget(o.fidget);
-    this.withX((x) => x.lightMoment(this));
+    this.withX((x) => x.lightMoment(this, o));
   }
+
+  setDetails(d: Details): void { this.withX((x) => x.setDetails(this, d)); }
+  setListening(on: boolean): void { this.withX((x) => x.setListening(this, on)); }
+  speakQueue(items: SpeakItem[], o: { more?: boolean } = {}): void { this.withX((x) => x.speakQueue(this, items, o)); }
+  setGaze(p: Point | null): void { this.finger = p; this.wake(); }
 
   /** Load the motion extras chunk once (preloaded after start; the UI may call it earlier). */
   loadRooms(): Promise<void> {
@@ -463,7 +485,7 @@ class Engine implements PetEngine {
   setGuidedBreath(periodS: number | null): void {
     this.guidedBreath = periodS === null ? null : clamp(periodS, 2, 10);
     this.applyMood(this.clock.now());
-    this.wake();
+    this.withX((x) => x.guide(this));
   }
 
   onMotion(fn: (c: MotionCue) => void): () => void { this.motionFns.add(fn); return () => { this.motionFns.delete(fn); }; }
@@ -809,8 +831,8 @@ class Engine implements PetEngine {
     t.sparkle = 0;
     if (this.cookie.state === 'held' || this.cookie.state === 'flying') Object.assign(t, { pupil: 1.16, lidL: 1, lidR: 1, sparkle: 1 });
     if (this.drag) t.shadow = 0.8;
-    // the room's idle pose (§10.4): hovering over the pot, turned to the mirror, reading; never asleep or on reduced
-    if (!closed && this.tier !== 'reduced' && !listening) this.x?.pose(this, t);
+    // the held pose (extras): the room's (§10.4) or the hands-free hold; never asleep, face channels only on reduced
+    if (!closed) this.x?.pose(this, t, listening);
     const perk: ReadonlySet<Channel> = new Set<Channel>(listening ? ['sx', 'sy', 'pupil', 'browL', 'browR', 'earL', 'earR'] : []);
     for (const c of Object.keys(t) as Channel[]) {
       const s = this.base[c];
@@ -871,7 +893,7 @@ class Engine implements PetEngine {
     if (this.talkState === 'listening') return 'o';
     if (this.talkState === 'thinking') return 'smirk';
     if (this.cookie.state === 'held' && this.cookie.reach) return 'smile';
-    return 'X';
+    return this.x?.mouth(this) ?? 'X';
   }
 
   private stepFace(now: number, dt: number): void {
@@ -1700,7 +1722,7 @@ class Engine implements PetEngine {
     this.schedule('morph', 200, () => retarget(this.base.morph, 1, presetKC('float', 1.1)));
   }
 
-  private startSpeaking(now: number, mode: 'text' | 'audio'): void {
+  startSpeaking(now: number, mode: 'text' | 'audio'): void {
     if (this.asleep || this.dozing) this.wakeUp(now, this.asleep ? 'sleep' : 'doze');
     this.talkState = 'speaking';
     this.cancel('think'); this.cancel('glance');
@@ -1782,7 +1804,8 @@ class Engine implements PetEngine {
     const now = this.clock.now();
     if (this.canIdle() && this.tier !== 'reduced' && now - this.lastInput > 8000) {
       // away from home, the room's own idle beat takes most turns (§10.4); the mood keeps the rest
-      if (this.room !== 'home' && this.x && (this.mood.tone === 'content' || chance(this.rng, 0.6))) this.x.idleBeat(this, now);
+      // (at Home the content mood's own beat is the content float)
+      if (this.x && (this.room !== 'home' || this.mood.tone === 'content') && (this.mood.tone === 'content' || chance(this.rng, 0.6))) this.x.idleBeat(this, now);
       else if (this.mood.tone !== 'content') this.play(this.mood.tone === 'bored' ? { type: 'bored' } : { type: 'ambient', tone: this.mood.tone }, now);
     }
     this.jobs.set('ambient', { at: now + range(this.rng, 9000, 16000) * this.idleScale(), fn: () => this.ambientBeat() });

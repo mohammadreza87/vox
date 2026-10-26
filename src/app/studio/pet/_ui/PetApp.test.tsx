@@ -24,6 +24,8 @@ vi.mock('../_engine/loop', () => ({
 }));
 
 const { PetApp } = await import('./PetApp');
+/** the hold-to-talk recorder is its own chunk (mic.ts); a test hold awaits it as the page's idle prefetch would */
+const { loadMic } = await import('./TalkPill');
 
 function telegram() {
   const calls: string[] = [];
@@ -277,6 +279,7 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     const api = fast({ talkVoice: async () => ({ transcript: '', reply: '' }) });
     const { container } = render(<PetApp agentId="x" api={api} />);
     await ready(container);
+    await loadMic();
     const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
     const mic = screen.getByRole('button', { name: 'Hold to talk' });
     await act(async () => { fireEvent.pointerDown(mic); });

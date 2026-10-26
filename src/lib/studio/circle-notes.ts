@@ -32,6 +32,7 @@ import { claimed, usableCopies, type CircleNotes } from '../circles/notes';
 import { noteSelectorFor, type NoteSelection } from '../circles/note-selector';
 import { localeOf, notesCopy } from '../circles/notice';
 import { canUseAgent, visibilityOf } from './permissions';
+import { dimGrowthForNotes } from './pet-growth-store';
 import type { Studio } from './service';
 import type { Agent, StudioState } from './types';
 
@@ -325,6 +326,7 @@ export class StudioCircleNotes {
     const target = this.listed.get(`${agent.id}:${from.id}`)?.[Number.parseInt(arg ?? '', 10) - 1];
     if (!target) { await bot.sendMessage(chatId, copy.pick); return; }
     const erased = await this.ledger!.erase(from.id, target, this.host.now());
+    if (erased) await dimGrowthForNotes(this.studio, [erased]);
     await bot.sendMessage(chatId, erased ? copy.erased(clip(erased.text!)) : copy.gone);
   }
 
@@ -342,6 +344,7 @@ export class StudioCircleNotes {
     if (control === 'memories') { await this.list(agent, from, message.chat.id); return true; }
     if (control === 'forget') {
       const erased = await this.ledger!.eraseMany(from.id, mine.map((c) => c.copyId), this.host.now());
+      if (erased) await dimGrowthForNotes(this.studio, mine);
       this.listed.delete(`${agent.id}:${from.id}`);
       await bot.sendMessage(message.chat.id, copy.erasedAll(erased, agent.persona.name));
       return true;
@@ -362,6 +365,7 @@ export class StudioCircleNotes {
     const message = query.message, at = this.host.now();
     if (parsed.action === 'ce') {
       const erased = await this.ledger!.erase(from.id, parsed.id, at);
+      if (erased) await dimGrowthForNotes(this.studio, [erased]);
       await bot.answerCallbackQuery(query.id, erased ? copy.erased(clip(erased.text!, 150)) : copy.gone).catch(() => undefined);
       if (message?.chat.type === 'private') await this.list(agent, from, message.chat.id, message.message_id);
       return;
@@ -486,7 +490,9 @@ export class StudioCircleNotes {
   async eraseOwn(telegramId: number, copyId: string): Promise<boolean> {
     if (!this.ledger || receiptOwner(copyId) !== telegramId) return false;
     for (const key of [...this.listed.keys()]) if (key.endsWith(`:${telegramId}`)) this.listed.delete(key);
-    return !!await this.ledger.erase(telegramId, copyId, this.host.now());
+    const erased = await this.ledger.erase(telegramId, copyId, this.host.now());
+    if (erased) await dimGrowthForNotes(this.studio, [erased]);
+    return !!erased;
   }
 
   /* ---------- rights ---------- */
@@ -502,6 +508,11 @@ export class StudioCircleNotes {
    */
   async eraseFor(telegramId: number): Promise<number> {
     for (const key of [...this.listed.keys()]) if (key.endsWith(`:${telegramId}`)) this.listed.delete(key);
-    return this.ledger ? this.ledger.eraseAll(telegramId, this.on() ? this.host.now() : undefined) : 0;
+    if (!this.ledger) return 0;
+    // Read before erasing: the taught growth moments these copies lit dim with them (design §4.11, PRIV-033).
+    const before = (await this.ledger.read(telegramId).catch(() => null))?.copies.filter((c) => c.status === 'active') ?? [];
+    const erased = await this.ledger.eraseAll(telegramId, this.on() ? this.host.now() : undefined);
+    await dimGrowthForNotes(this.studio, before);
+    return erased;
   }
 }

@@ -7,7 +7,8 @@
 import { PRESET_LOOKS } from '@/lib/studio/character';
 import { PetError } from './errors';
 import { applyLocal, openLocal, talkLocal } from './care-local';
-import type { PetApi } from './contract';
+import { applyPlay, newPlay, playView, roomMoment, type PetPlay } from '@/lib/pet/play';
+import type { PetApi, PetGrowthView } from './contract';
 import type { CircleDecisionRequest, PetCare, PetCircle, PetNote, PetPrivateView, PetView, Stage, TalkResponse } from '@/lib/pet/types';
 
 export interface MockOptions {
@@ -20,6 +21,8 @@ export interface MockOptions {
   welcome?: boolean;
   /** play the stage-up celebration on open */
   stageUp?: boolean;
+  /** Wave B: the mic sheet (UX-02) has not been answered yet */
+  askMic?: boolean;
   /** starting needs and Bond (default: Tummy in "wants" so the rings, wiggle and thought bubble show) */
   care?: Partial<Pick<PetCare, 'tummy' | 'joy' | 'energy' | 'bond'>>;
   /** latency per call in ms (default 260 for care, 1400 for talk) */
@@ -61,6 +64,18 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     caps: { hourStart: t0, petJoy: 0, talkJoy: 0, careBond: 0, dayStart: t0 },
   };
   let turn = 0;
+  // Wave B demo: a play record (applied with play.ts, like the server) and a few growth moments
+  let play: PetPlay = newPlay('mock', 1, t0 - 3 * DAY);
+  // the demo person already said yes to the mic (UX-02), so hold-to-talk records at once (the sheet: ?mock=1&ask=mic)
+  if (!o.askMic) play.asks.P3 = { lastAskedAt: t0 - DAY, declined: 0, acceptedAt: t0 - DAY };
+  let growth: PetGrowthView = { mine: [], moments: [
+    { id: 'release', kind: 'taught', title: 'I learned how you plan a release', hint: 'Tell me how your team plans a release, then say “remember this”' },
+    { id: 'report', kind: 'task', title: 'I wrote our first weekly report together', hint: 'Ask me for a weekly report' },
+    { id: 'calendar', kind: 'access', title: 'I got the access I need to read the team calendar', hint: 'Let me read the team calendar', lit: { at: new Date(t0 - DAY).toISOString() } },
+    ...(['play', 'garden', 'closet', 'bedroom', 'book'] as const).map((r) => ({ id: roomMoment(r), kind: 'room' as const, title: `We found the ${r} together`, hint: `Peek into the ${r} with me sometime` })),
+  ] };
+  // personal moments (first room visits, own grants) show in `mine`, never as an agent-wide `lit`
+  const litMine = () => { growth = { ...growth, mine: play.litMine.map((l) => l.id) }; };
   // Circles S4 demo (`?mock=1&j=<16+ chars>`): a two-person group card and a few notes, in memory.
   let myState: PetCircle['myState'] = null;
   let notes: PetNote[] = [
@@ -90,7 +105,7 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     care = opened.care;
     return {
       agentId: 'mock', name: NAME, look, stage, formingDay: 5, botUsername: 'vox_mochi_bot', voice: false, listen: o.role !== 'guest',
-      role: o.role === 'guest' ? 'guest' : 'owner', care, now: t,
+      role: o.role === 'guest' ? 'guest' : 'owner', care, now: t, play: playView(play, t, tz), growth,
       ...(opened.welcome ? { welcome: { souvenir: 'I kept thinking about your trip to Shiraz.', awayMs: opened.welcome.awayMs } } : {}),
       ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
       ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
@@ -102,6 +117,7 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     care = talkLocal(care, now());
     return goodbye
       ? { reply: 'Bye for now! Come say hi whenever you like.', goodbye: true, care, turnId: `mock-${++turn}` }
+      : /remember/i.test(text) ? { reply: 'Okay, I saved that note.', care, turnId: `mock-${++turn}`, savedNote: true } as TalkResponse
       : { reply: REPLIES[turn++ % REPLIES.length], care, turnId: `mock-${turn}` };
   };
 
@@ -130,6 +146,23 @@ export function createMockApi(o: MockOptions = {}): PetApi {
       refuse();
       if (o.role === 'guest') throw new PetError(403, 'guest_talk', 'Guests talk in the DM');
       return { transcript: '(voice note)', ...talkReply('') };
+    },
+    async play(_agentId, req, opts) {
+      await sleep(o.latency?.care ?? 260, opts?.signal);
+      refuse();
+      const t = now();
+      const r = applyPlay(play, req, { now: t, tz, stage, formed: true, bond: care.bond, accessMoments: ['calendar'] });
+      play = r.play;
+      litMine();
+      return { play: playView(play, t, tz), now: t, ...(r.guard ? { guard: r.guard } : {}), ...(req.op === 'roomVisited' || req.op === 'askAccepted' ? { growth } : {}) };
+    },
+    async growthConfirm(_agentId, momentId, opts) {
+      await sleep(o.latency?.care ?? 260, opts?.signal);
+      refuse();
+      const was = growth.moments.find((m) => m.id === momentId);
+      if (!was) throw new PetError(404, 'invalid_request', 'moment_not_found');
+      growth = { ...growth, moments: growth.moments.map((m) => (m.id === momentId && !m.lit ? { ...m, lit: { at: new Date(now()).toISOString() } } : m)) };
+      return { lit: was.lit ? null : 'agent', growth };
     },
     async send<T>(_agentId: string, method: 'GET' | 'POST' | 'DELETE', action: string, body?: unknown, opts?: { signal?: AbortSignal }): Promise<T> {
       await sleep(o.latency?.care ?? 260, opts?.signal);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isGoodbye } from '../goodbye';
-import { PET_SURFACE_FRAME, PET_SURFACE_FRAME_VOICE } from '../../tireh/gateway';
+import { PET_SURFACE_FRAME, PET_SURFACE_FRAME_HANDS_FREE, PET_SURFACE_FRAME_VOICE } from '../../tireh/gateway';
 
 describe('goodbye intent', () => {
   it.each(['bye', 'ok bye!', 'Bye bye Mochi', 'good night', 'Goodnight :)', 'gn', 'see ya', 'gotta go', 'ttyl', 'sweet dreams',
@@ -15,7 +15,7 @@ describe('goodbye intent', () => {
 });
 
 describe('pet surface persona hint', () => {
-  it.each([['typed', PET_SURFACE_FRAME], ['spoken', PET_SURFACE_FRAME_VOICE]])('%s: keeps replies short and bans all six exit-manipulation tactics', (_, frame) => {
+  it.each([['typed', PET_SURFACE_FRAME], ['spoken', PET_SURFACE_FRAME_VOICE], ['hands-free', PET_SURFACE_FRAME_HANDS_FREE]])('%s: keeps replies short and bans all six exit-manipulation tactics', (_, frame) => {
     expect(frame).toMatch(/1-2 short sentences/);
     expect(frame).toMatch(/exactly one warm line/);
     for (const tactic of [
@@ -31,5 +31,12 @@ describe('pet surface persona hint', () => {
   it('the spoken frame is the typed frame plus one sentence: the person spoke and is listening', () => {
     expect(PET_SURFACE_FRAME_VOICE.startsWith(`${PET_SURFACE_FRAME} `)).toBe(true);
     expect(PET_SURFACE_FRAME_VOICE.slice(PET_SURFACE_FRAME.length + 1)).toBe('The person said this out loud and is listening for your reply; answer as speech.');
+  });
+
+  it('the hands-free frame is the spoken frame plus one sentence: a continuous conversation, may speak over, keep it short', () => {
+    expect(PET_SURFACE_FRAME_HANDS_FREE.startsWith(`${PET_SURFACE_FRAME_VOICE} `)).toBe(true);
+    const extra = PET_SURFACE_FRAME_HANDS_FREE.slice(PET_SURFACE_FRAME_VOICE.length + 1);
+    expect(extra).toBe('You are in a continuous voice conversation and they may speak over you, so keep each answer short.');
+    expect(extra.match(/[.!?](\s|$)/g)).toHaveLength(1);
   });
 });

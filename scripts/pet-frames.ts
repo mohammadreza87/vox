@@ -16,6 +16,12 @@
  *     → reports/character/motion-keyframes-v2.png (the polished reactions: anticipation, overlap, landing blinks),
  *       stages-motion-v2.png (one hello per stage: the wisp → formed vocabulary), rooms-transitions-v2.png (each
  *       room's transition and idle, a growth moment, the settle float, Garden rain, reduced motion)
+ *
+ *   node --import tsx scripts/pet-frames.ts --v3
+ *     → reports/character/rooms-idles-v3.png (each room: 3 transition frames, then 8 of its held idle and idle beat;
+ *       Garden rain with drops), details-v3.png (growth details across the four stages, and one fading in),
+ *       starfall-reactions-v3.png (catch, near miss, round end won / not won, Zen, eyes on a star),
+ *       listening-v3.png (the hands-free hold, the perk on speech, queued sentences, the guided breath, reduced)
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -28,6 +34,7 @@ import { breathPose, idleParams } from '../src/app/studio/pet/_engine/breath';
 import { createPetEngine, type PetMotionControls } from '../src/app/studio/pet/_engine/loop';
 import * as motionExtras from '../src/app/studio/pet/_engine/extras';
 import { roomIdle } from '../src/app/studio/pet/_engine/reactions/rooms';
+import { DETAIL_FADE_MS, detailFade, type Details } from '../src/app/studio/pet/_engine/details';
 import type { MotionCue, Room } from '../src/app/studio/pet/_engine/types';
 import type { Stage } from '../src/lib/studio/types';
 import { poseToSvg } from '../src/app/studio/pet/_engine/poseToSvg';
@@ -148,7 +155,11 @@ const LOOKS: Array<[string, CharacterLook]> = [
   ['cloud-drift', { ...PRESET_LOOKS[0], family: 'drift' }],
 ];
 
-const PARTICLE_COLOR: Record<string, string> = { crumb: '#C68B4E', heart: '#F27A9B', z: '#9FB3D9', sparkle: '#FFD45C', note: '#8CC9A0', wisp: '#DDE6F2', tear: '#7CC4F2' };
+const PARTICLE_COLOR: Record<string, string> = { crumb: '#C68B4E', heart: '#F27A9B', z: '#9FB3D9', sparkle: '#FFD45C', note: '#8CC9A0', wisp: '#DDE6F2', tear: '#7CC4F2', drop: '#7CC4F2' };
+/** A particle as the sheets draw it (a raindrop is a tall drop, the rest dots). */
+const partSvg = (p: { kind: string; x: number; y: number; s: number; o: number }) => p.kind === 'drop'
+  ? `<ellipse cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" rx="${(2.2 * p.s).toFixed(1)}" ry="${(4.2 * p.s).toFixed(1)}" fill="${PARTICLE_COLOR.drop}" opacity="${p.o.toFixed(2)}"/>`
+  : `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(3 * p.s).toFixed(1)}" fill="${PARTICLE_COLOR[p.kind] ?? '#fff'}" opacity="${p.o.toFixed(2)}"/>`;
 
 interface Sample { t: number; svg: string; sx: number; sy: number; y: number; rot: number; gx: number; ear: number; spring: string; parts: Array<{ kind: string; x: number; y: number; s: number; o: number }>; cookie: { x: number; y: number; s: number; o: number } }
 
@@ -324,6 +335,10 @@ interface V2Row {
   each?: (e: V2Engine, ms: number, t: number) => void;
   /** zoomed out (a toss travels off the usual crop) */
   wide?: boolean;
+  /** draw the growth details (the extras chunk's state) */
+  details?: boolean;
+  /** this row's view box (a close-up) */
+  vb?: string;
 }
 interface V2Frame { t: number; svg: string; mark: string; parts: Sample['parts']; sy: number; rot: number; y: number; cookie: Sample['cookie'] }
 
@@ -352,7 +367,9 @@ async function runV2(row: V2Row): Promise<{ frames: V2Frame[]; cues: string[] }>
       const f = eng.debug.frame!;
       const cue = cues.find((c) => c.t > lastSample && c.t <= t);
       lastSample = t;
-      out.push({ t: Math.round(t - t0), svg: poseToSvg(geom(), f), mark: cue ? cue.c.type : '', parts: eng.debug.particles(), sy: f.body.sy, rot: f.body.rot, y: f.body.y, cookie: eng.debug.cookie() });
+      const ds = row.details ? motionExtras.detailState(eng as never, DETAIL_FADE_MS) : null;
+      const details = ds ? { shown: ds.shown, fade: ds.fade ? { key: ds.fade.key, ...detailFade(ds.fade.u, (row.tier ?? 'full') === 'reduced') } : null } : undefined;
+      out.push({ t: Math.round(t - t0), svg: poseToSvg(geom(), f, { details }), mark: cue ? cue.c.type : '', parts: eng.debug.particles(), sy: f.body.sy, rot: f.body.rot, y: f.body.y, cookie: eng.debug.cookie() });
       k++;
       continue;
     }
@@ -368,24 +385,25 @@ async function runV2(row: V2Row): Promise<{ frames: V2Frame[]; cues: string[] }>
 /** Tile ids: every tile's paint servers get their own prefix (the model is built with uid 'pet'). */
 const reid = (svg: string, p: string) => svg.replace(/(id="|url\(#)pet/g, `$1${p}`);
 
-function v2Sheet(title: string, sub: string, rows: Array<{ row: V2Row; frames: V2Frame[]; note: string }>): string {
-  const tile = 118, pad = 8, lab = 20, left = 190, top = 60, rowH = tile + lab + pad + 8;
+function v2Sheet(title: string, sub: string, rows: Array<{ row: V2Row; frames: V2Frame[]; note: string; labels?: string[] }>, o: { tile?: number; vb?: string } = {}): string {
+  const tile = o.tile ?? 118, pad = 8, lab = 20, left = 190, top = 60, rowH = tile + lab + pad + 8;
   const cols = Math.max(...rows.map((r) => r.frames.length));
   const W = left + cols * (tile + pad) + pad, H = top + rows.length * rowH + pad;
-  const vb = '-20 -10 240 220';
-  const body = rows.map(({ row, frames, note }, ri) => {
+  const vb = o.vb ?? '-20 -10 240 220';
+  const [, vy, , vh] = vb.split(' ').map(Number);
+  const body = rows.map(({ row, frames, note, labels }, ri) => {
     const y0 = top + ri * rowH;
     const head = `<text x="12" y="${y0 + 22}" font-family="Helvetica,Arial" font-size="13" font-weight="bold" fill="#E8EDF5">${esc(row.label)}</text>`
       + note.split('|').map((l, i) => `<text x="12" y="${y0 + 40 + i * 14}" font-family="Helvetica,Arial" font-size="10.5" fill="#8A93A3">${esc(l)}</text>`).join('');
     const tiles = frames.map((f, i) => {
       const x = left + i * (tile + pad);
-      const parts = f.parts.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(3 * p.s).toFixed(1)}" fill="${PARTICLE_COLOR[p.kind] ?? '#fff'}" opacity="${p.o.toFixed(2)}"/>`).join('')
+      const parts = f.parts.map(partSvg).join('')
         + (f.cookie.o > 0.01 ? `<circle cx="${f.cookie.x.toFixed(1)}" cy="${f.cookie.y.toFixed(1)}" r="${(16 * f.cookie.s).toFixed(1)}" fill="#C68B4E" stroke="#8A5A2B" stroke-width="2" opacity="${f.cookie.o.toFixed(2)}"/>` : '');
       const ring = f.mark ? `<rect x="1" y="1" width="${tile - 2}" height="${tile - 2}" rx="9" fill="none" stroke="#FFD45C" stroke-width="2"/>` : '';
       return `<g transform="translate(${x} ${y0})"><rect width="${tile}" height="${tile}" rx="10" fill="#1E2632"/>`
-        + `<line x1="10" x2="${tile - 10}" y1="${(tile * (176 + 10) / 220).toFixed(1)}" y2="${(tile * (176 + 10) / 220).toFixed(1)}" stroke="#2A3340"/>`
-        + `<svg x="0" y="0" width="${tile}" height="${tile}" viewBox="${row.wide ? '-40 -170 420 420' : vb}" overflow="hidden">${reid(f.svg, `r${ri}t${i}`)}${parts}</svg>${ring}`
-        + `<text x="4" y="${tile + 13}" font-family="Helvetica,Arial" font-size="10" fill="#C9D1DE">${f.t} ms${f.mark ? ` · ${f.mark}` : ''}</text></g>`;
+        + `<line x1="10" x2="${tile - 10}" y1="${(tile * (166 - vy) / vh).toFixed(1)}" y2="${(tile * (166 - vy) / vh).toFixed(1)}" stroke="#2A3340"/>`
+        + `<svg x="0" y="0" width="${tile}" height="${tile}" viewBox="${row.wide ? '-40 -170 420 420' : row.vb ?? vb}" overflow="hidden">${reid(f.svg, `r${ri}t${i}`)}${parts}</svg>${ring}`
+        + `<text x="4" y="${tile + 13}" font-family="Helvetica,Arial" font-size="10" fill="#C9D1DE">${esc(labels?.[i] ?? `${f.t} ms`)}${f.mark ? ` · ${f.mark}` : ''}</text></g>`;
     }).join('');
     return head + tiles;
   }).join('');
@@ -468,4 +486,102 @@ async function v2() {
   console.log('v2 sheets → reports/character/{motion-keyframes,stages-motion,rooms-transitions}-v2.png');
 }
 
-if (process.argv.includes('--v2')) void v2(); else void main();
+/* ---------- v3 sheets (Wave B, design §10.4, §4.11, §8A, §10.6) ---------- */
+
+async function v3() {
+  const OUT3 = path.resolve(__dirname, '../reports/character');
+  const bowBunny = PRESET_LOOKS[3], cloud = PRESET_LOOKS[0], cat = PRESET_LOOKS.find((l) => l.species === 'cat')!;
+  const mc = (eng: V2Engine) => eng as unknown as PetMotionControls & { speakQueue(items: unknown[], o?: { more?: boolean }): void; setListening(on: boolean): void; setGaze(p: { x: number; y: number } | null): void; setDetails(d: Details): void };
+  const at = (ms: number, fn: (e: V2Engine) => void) => { let done = false; return (e: V2Engine, m: number) => { if (!done && m >= ms) { done = true; fn(e); } }; };
+  const build = async (rows: Array<V2Row & { labels?: string[] }>) => Promise.all(rows.map(async (row) => { const r = await runV2(row); return { row, frames: r.frames, labels: row.labels, note: `${stats(r.frames)}|${r.cues.slice(0, 6).join(' ')}` }; }));
+
+  // 1. rooms: from the neighbour, the transition (3 frames: counter-lean, the swap at the top of the lean, the settle),
+  //    then the held idle and one idle beat (8 frames)
+  const from: Record<Room, Room> = { home: 'play', play: 'home', garden: 'play', closet: 'garden', bedroom: 'closet', book: 'bedroom' };
+  const IDLE_AT = 1700, idleTimes = [0, 250, 500, 750, 1000, 1250, 1500, 1800].map((x) => IDLE_AT + x);
+  const roomRows: Array<V2Row & { labels?: string[] }> = (['home', 'play', 'garden', 'closet', 'bedroom', 'book'] as Room[]).map((room) => ({
+    label: `${room}`, look: bowBunny, warm: 900,
+    setup: (e) => mc(e).setRoom(from[room], { instant: true }),
+    start: (e) => mc(e).setRoom(room),
+    each: at(IDLE_AT, (e) => motionExtras.idleBeat(e as never, (e as unknown as { clock: { now(): number } }).clock.now())),
+    at: [50, 150, 260, ...idleTimes],
+    labels: ['lean 50 ms', 'swap 150 ms', 'settle 260 ms', ...idleTimes.map((x) => `idle +${x - IDLE_AT}`)],
+  }));
+  roomRows.push({ label: 'garden · rain (drops)', look: bowBunny, warm: 1200, setup: (e) => mc(e).setRoom('garden', { instant: true }), start: (e) => mc(e).roomReact('rain'), at: [0, 90, 420, 560, 700, 860, 1000, 1150, 1400, 1800, 2300] });
+  const roomFrames = await build(roomRows);
+  await png(v2Sheet('Rooms v3 · bunny with a bow · stage 4 · the transition, then the held idle and an idle beat',
+    'transition: crouched counter-lean 5°, the lean 10° with a 6 px lift and drift (swap ringed), one-overshoot settle, the room’s hello · each room holds its own pose, face and breath', roomFrames, { tile: 140, vb: '-5 20 210 175' }), path.join(OUT3, 'rooms-idles-v3.png'));
+
+  // 2. growth details across the stages (a wisp wears nothing; floor keepsakes at every stage), and one lighting
+  const ALL: Details = { glint: true, pin: true, charm: true, keepsakes: ['play', 'garden', 'book'], seasonal: 'yalda' };
+  const sets: Array<[string, Details]> = [['none', {}], ['glint', { glint: true }], ['pin', { pin: true }], ['charm', { charm: true }], ['keepsakes', { keepsakes: ['play', 'bedroom', 'book'] }], ['yalda', { seasonal: 'yalda' }], ['nowruz', { seasonal: 'nowruz' }], ['all', ALL]];
+  const detailRows: Array<V2Row & { labels?: string[] }> = ([1, 2, 3, 4] as Stage[]).map((st) => ({
+    label: `stage ${st}`, look: bowBunny, stage: st, warm: 300, details: true,
+    start: () => undefined,
+    each: (e, ms) => { const k = Math.floor(ms / 100); if (k < sets.length && ms % 100 < 17) mc(e).setDetails(sets[k][1]); },
+    at: sets.map((_, i) => i * 100 + 50), labels: sets.map(([n]) => n),
+  }));
+  detailRows.push({
+    label: 'stage 4 · close-up', look: bowBunny, warm: 300, details: true, vb: '50 75 100 100',
+    start: () => undefined,
+    each: (e, ms) => { const k = Math.floor(ms / 100); if (k < sets.length && ms % 100 < 17) mc(e).setDetails(sets[k][1]); },
+    at: sets.map((_, i) => i * 100 + 50), labels: sets.map(([n]) => n),
+  });
+  detailRows.push({
+    label: 'lit: a task moment (pin)', vb: '30 60 140 140', look: bowBunny, warm: 300, details: true,
+    setup: (e) => mc(e).setDetails({ glint: true, keepsakes: ['play'] }),
+    start: (e) => mc(e).lightMoment({ detail: 'pin' }),
+    at: [0, 250, 560, 620, 680, 760, 860, 1000, 1200],
+  });
+  detailRows.push({
+    label: 'lit: a room keepsake', look: cat, vb: '-5 60 140 140', warm: 300, details: true,
+    start: (e) => mc(e).lightMoment({ detail: 'keepsake', id: 'garden' }),
+    at: [0, 250, 560, 620, 680, 760, 860, 1000, 1200],
+  });
+  detailRows.push({ label: 'reduced · lit charm', look: bowBunny, tier: 'reduced', warm: 300, details: true, vb: '60 60 140 140', start: (e) => mc(e).lightMoment({ detail: 'charm' }), at: [0, 300, 600, 700, 800, 1000, 1200] });
+  const detailFrames = await build(detailRows);
+  await png(v2Sheet('Growth details v3 · bunny with a bow (cat for the keepsake) · by stage, then lit moments',
+    'glint: the second highlight (needs highlight2, stage 4) · pin and key charm: the accessory slot (stage 4) · keepsakes and the seasonal one stand on the floor at every stage · lit: fades in with one overshoot at litPeak', detailFrames, { tile: 170, vb: '0 30 200 155' }), path.join(OUT3, 'details-v3.png'));
+
+  // 3. Starfall reactions (Play room)
+  const play = (e: V2Engine) => mc(e).setRoom('play', { instant: true });
+  const react = (kind: 'catch' | 'nearMiss' | 'roundEnd', o: { won?: boolean; zen?: boolean } = {}) => (e: V2Engine) => mc(e).roomReact(kind, o);
+  const starRows: V2Row[] = [
+    { label: 'catch', look: bowBunny, warm: 1200, setup: play, start: react('catch'), at: [0, 40, 80, 120, 160, 210, 260, 320, 400, 500, 650] },
+    { label: 'catch · zen', look: bowBunny, warm: 1200, setup: play, start: react('catch', { zen: true }), at: [0, 40, 80, 120, 160, 210, 260, 320, 400, 500, 650] },
+    { label: 'near miss', look: bowBunny, warm: 1200, setup: play, start: react('nearMiss'), at: [0, 60, 120, 200, 280, 360, 440, 520, 620, 760, 900] },
+    { label: 'near miss · zen', look: bowBunny, warm: 1200, setup: play, start: react('nearMiss', { zen: true }), at: [0, 60, 120, 200, 280, 360, 440, 520, 620, 760, 900] },
+    { label: 'round end · won', look: bowBunny, warm: 1200, setup: play, start: react('roundEnd', { won: true }), at: [0, 60, 110, 170, 230, 300, 380, 460, 600, 800, 1100] },
+    { label: 'round end · not won', look: bowBunny, warm: 1200, setup: play, start: react('roundEnd', { won: false }), at: [0, 80, 160, 260, 330, 420, 520, 620, 760, 900, 1100] },
+    { label: 'round end · zen', look: bowBunny, warm: 1200, setup: play, start: react('roundEnd', { zen: true }), at: [0, 100, 200, 300, 400, 500, 650, 800, 1000] },
+    {
+      // the page steers the eyes to the nearest star as it falls (setGaze), left to right
+      label: 'eyes on a falling star', look: bowBunny, warm: 1200, setup: play, start: () => undefined,
+      each: (e, ms) => { const u = Math.min(1, ms / 1200); mc(e).setGaze({ x: -160 + 520 * u, y: -40 + 300 * u }); },
+      at: [0, 150, 300, 450, 600, 750, 900, 1050, 1200, 1400],
+    },
+  ];
+  const starFrames = await build(starRows);
+  await png(v2Sheet('Starfall reactions v3 · bunny with a bow · Play room',
+    'catch: a chomp, a small satisfied bounce, a glint in the eye (≤ 450 ms) · near miss: a cute wobble, never sad · round end: a happy hop, or a shrug and a wink · Zen: one preset softer, nothing flashes, no flourish', starFrames, { tile: 140, vb: '10 25 180 160' }), path.join(OUT3, 'starfall-reactions-v3.png'));
+
+  // 4. hands-free listening, queued sentences and the guided breath
+  const listenRows: Array<V2Row & { labels?: string[] }> = [
+    { label: 'hands-free hold on', look: bowBunny, start: (e) => mc(e).setListening(true), at: [0, 100, 200, 350, 500, 700, 900, 1200, 1600, 2000] },
+    { label: 'hold, then speech (perk)', look: bowBunny, warm: 600, setup: (e) => mc(e).setListening(true), start: (e) => e.talk('listening', 'mic'), at: [0, 40, 80, 140, 200, 300, 450, 650, 900, 1300] },
+    { label: 'hold → reply (3 sentences)', look: bowBunny, warm: 900, setup: (e) => mc(e).setListening(true),
+      start: (e) => mc(e).speakQueue([{ text: 'Hi Sara!', ms: 700 }, { text: 'I watered the seed.', ms: 1100 }, { text: 'Want to see?', ms: 800 }]),
+      at: [60, 200, 400, 640, 700, 900, 1300, 1730, 1800, 2100, 2500, 2700],
+      labels: ['60 s1', '200 s1', '400 s1', '640 pause', '700 s2', '900 s2', '1300 s2', '1730 pause', '1800 s3', '2100 s3', '2500 s3', '2700 rest'] },
+    { label: 'guided breath (6 s)', look: bowBunny, warm: 1200, setup: (e) => mc(e).setRoom('garden', { instant: true }), start: (e) => mc(e).setGuidedBreath(6), at: span(6000, 11) },
+    { label: 'reduced · hold on', look: bowBunny, tier: 'reduced', start: (e) => mc(e).setListening(true), at: [0, 100, 200, 400, 700, 1200] },
+    { label: 'reduced · guided breath', look: bowBunny, tier: 'reduced', warm: 600, setup: (e) => mc(e).setRoom('garden', { instant: true }), start: (e) => mc(e).setGuidedBreath(6), at: [0, 600, 1200, 2400, 3000, 4200, 5400] },
+  ];
+  const listenFrames = await build(listenRows);
+  await png(v2Sheet('Listening and speaking v3 · bunny with a bow · hands-free',
+    'hold: leans in, ears up slowly, slow attentive blinks, eyes on you (the perk still plays on speech) · queued sentences: one lip-sync, a short pause and a breath between · guided breath: in 40 %, out 60 % through a small “o”', listenFrames, { tile: 140, vb: '10 15 180 170' }), path.join(OUT3, 'listening-v3.png'));
+  console.log('v3 sheets → reports/character/{rooms-idles,details,starfall-reactions,listening}-v3.png');
+  void cloud;
+}
+
+if (process.argv.includes('--v3')) void v3(); else if (process.argv.includes('--v2')) void v2(); else void main();

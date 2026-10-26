@@ -232,7 +232,8 @@ export type MouthKey = Viseme | 'smile' | 'grin' | 'o' | 'w' | 'yawn' | 'sleep' 
 
 /* ---------- particles (§3.2 layer 3): HTML divs, transform + opacity only ---------- */
 
-export type ParticleKind = 'crumb' | 'heart' | 'z' | 'sparkle' | 'note' | 'wisp' | 'tear';
+/** `drop`: a raindrop (the Garden's rain): falls from under the body, straight, no spin (fx.css `.pet-p[data-kind="drop"]`). */
+export type ParticleKind = 'crumb' | 'heart' | 'z' | 'sparkle' | 'note' | 'wisp' | 'tear' | 'drop';
 /** Where a burst or gaze anchors on the character (resolved from the model each frame). */
 export type Anchor = 'head' | 'eyeL' | 'eyeR' | 'mouth' | 'cheekL' | 'cheekR' | 'belly' | 'body' | 'ground' | 'touch';
 export interface ParticleBurst {
@@ -483,7 +484,11 @@ export type RoomReaction =
   /* Closet */ | 'admire'
   /* Bedroom */ | 'storyNod'
   /* Life Book */ | 'pageFlip' | 'ownDrawing';
-export type MotionKind = 'roomLeave' | 'roomIdle' | 'growthLit' | 'settle' | 'hopIdle' | RoomReaction;
+/** Engine motions: `roomArrive` the room's hello after a transition, `breathe` one guided-breath cycle, `attend` the
+ *  hands-free listening hold coming on, `breath` the small breath between queued sentences. */
+export type MotionKind = 'roomLeave' | 'roomArrive' | 'roomIdle' | 'growthLit' | 'settle' | 'hopIdle' | 'breathe' | 'attend' | 'breath' | RoomReaction;
+/** Options for a room reaction: a Play round's result, and Zen (one preset softer, nothing flashes, no round-end flourish). */
+export interface RoomReactOpts { won?: boolean; zen?: boolean }
 /** What the player plays: a reaction kind or an engine motion. */
 export type PlayKind = ReactionKind | MotionKind;
 
@@ -494,7 +499,12 @@ export type MotionCue =
   | { type: 'settle' }
   /** mid room transition: swap the backdrop and the dock now (the character is at the top of its lean) */
   | { type: 'roomSwap'; room: Room }
-  /** the growth moment's detail should fade in now (the glow is at its peak) */
-  | { type: 'litPeak' }
+  /**
+   * the growth moment's detail should fade in now (the glow is at its peak): `detail` (and `id` for keepsakes and
+   * the seasonal one) names it, `shown` false when this stage cannot wear it yet (it is kept for later)
+   */
+  | { type: 'litPeak'; detail?: 'glint' | 'pin' | 'charm' | 'keepsake' | 'seasonal'; id?: string; shown?: boolean }
+  /** the details the character shows changed (after setDetails, or a lit detail): what this stage can wear */
+  | { type: 'details'; details: { glint: boolean; pin: boolean; charm: boolean; keepsakes: string[]; seasonal: string | null } }
   /** the frame-budget guard stepped the tier down (slow device) */
   | { type: 'degraded'; tier: Tier; reason: 'frames' | 'script' };

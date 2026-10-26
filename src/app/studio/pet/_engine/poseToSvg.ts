@@ -7,6 +7,7 @@
 import { BEAK_DROP, beakLowerD, beakMouth, GROUND, INK, mouthD, nodesToSvg, RIG_LAYERS, rootTransform, type CharacterModel, type RigLayer, type SvgNode } from '@/lib/studio/character';
 import { HIGHLIGHT } from '@/lib/studio/character/palette';
 import { SPARKLE, TONGUE, dotD, sparklePts, swirlD, swirlR, tongueBase } from '@/lib/studio/character/petFace';
+import { detailLayers, type DetailLayers, type ShownDetails } from './details';
 import { beakOpen, browsD, bulgePath, lerpPath, petEyeD, petMouthD } from './face';
 import type { Geom, RigFrame } from './layers';
 
@@ -27,6 +28,8 @@ export interface PoseSvgOpts {
   breath?: { sx: number; sy: number; rot: number };
   /** paint-server id prefix the model was built with (blush gradient), default 'pet' */
   uid?: string;
+  /** growth details (§4.11) to draw, and the one fading in (details.ts detailFade); none: the output is unchanged */
+  details?: { shown: ShownDetails; fade?: { key: string; o: number; s: number } | null };
 }
 
 /**
@@ -41,6 +44,7 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
   const sw = m.face.strokeW;
   const eyePaint = (i: 0 | 1) => ({ fill: INK, stroke: INK, 'stroke-width': r(f.eyeStroke[i] * sw), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
   const pivot = (k: keyof CharacterModel['pivots']): Pt => m.pivots[k];
+  const dl: DetailLayers | null = o.details ? detailLayers(m, o.details.shown, { fade: o.details.fade, swing: f.accSoft.rot, glint: f.glint }) : null;
 
   const rewrite = (nodes: SvgNode[]): SvgNode[] => nodes.map((nd) => {
     const part = nd.attrs['data-part'], rig = nd.attrs['data-rig'];
@@ -61,6 +65,7 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
         const sr = swirlR(m);
         for (const q of e) extra.push({ tag: 'path', attrs: { 'data-part': 'swirl', d: swirlD(q.cx, q.cy, sr), fill: 'none', stroke: INK, 'stroke-width': r(sw * 0.7), 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: r(f.swirl.o), transform: about([q.cx, q.cy], { x: f.swirl.x, y: f.swirl.y, rot: f.swirl.rot }) } });
       }
+      if (dl) extra.push(...dl.lids);
       out.children = [...(out.children ?? []), ...extra];
     }
     if (nd.tag === 'path' && part === undefined && nd.attrs.fill === HIGHLIGHT) out.attrs.opacity = r(f.glint);
@@ -110,5 +115,8 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
   const b = o.breath ?? { sx: 1, sy: 1, rot: 0 };
   const body = about([100, GROUND], { x: f.body.x, y: f.body.y, rot: f.body.rot + b.rot, sx: f.body.sx * b.sx, sy: f.body.sy * b.sy });
   const layers = RIG_LAYERS.filter((l) => m.layers[l].length).map(layer).join('');
-  return `<defs>${nodesToSvg(m.defs)}</defs><g transform="${body}"><g transform="${rootTransform(m)}">${layers}</g></g>`;
+  // the worn details ride the body over the face; floor keepsakes stay on the floor (outside the body's transform)
+  const worn = dl?.body.length ? `<g data-details="body">${nodesToSvg(dl.body)}</g>` : '';
+  const floor = dl?.floor.length ? `<g data-details="floor">${nodesToSvg(dl.floor)}</g>` : '';
+  return `<defs>${nodesToSvg(m.defs)}</defs>${floor}<g transform="${body}"><g transform="${rootTransform(m)}">${layers}${worn}</g></g>`;
 }

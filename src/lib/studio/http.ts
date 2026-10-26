@@ -216,7 +216,13 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }
       if (id && !action) {
         if (method === 'GET') return json({ agent: await studio.getAgent(me, id) });
-        if (method === 'PATCH') return json({ agent: await studio.updatePersona(me, id, ((await body(req)).persona ?? {}) as Json) });
+        if (method === 'PATCH') {
+          const b = await body(req);
+          // Growth moments (design §4.11) ride the persona edit: same lock, their own lint.
+          if (b.growth !== undefined && b.persona === undefined) return json({ agent: await studio.updateGrowth(me, id, b.growth) });
+          if (b.growth !== undefined) await studio.updateGrowth(me, id, b.growth);
+          return json({ agent: await studio.updatePersona(me, id, (b.persona ?? {}) as Json) });
+        }
         if (method === 'DELETE') { await studio.deleteDraft(me, id); return json({ ok: true }); }
       }
       if (id && action) {

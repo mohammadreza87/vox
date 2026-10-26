@@ -240,6 +240,12 @@ export const PET_SURFACE_FRAME = [
  */
 export const PET_SURFACE_FRAME_VOICE = `${PET_SURFACE_FRAME} The person said this out loud and is listening for your reply; answer as speech.`;
 
+/**
+ * Hands-free (design §8A.2): the voice frame plus one sentence. The mic stays open, so the person may talk over the
+ * reply; short answers keep the turn-taking natural. Per-turn frame only, never block A.
+ */
+export const PET_SURFACE_FRAME_HANDS_FREE = `${PET_SURFACE_FRAME_VOICE} You are in a continuous voice conversation and they may speak over you, so keep each answer short.`;
+
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
@@ -655,7 +661,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   async converse(personaId: string, speakerId: string, text: string, options: { space?: 'work' | 'personal'; images?: LLMMessage['images']; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean; onBoundaryFence?: (fence: () => boolean) => void;
     /** where the turn comes from when that changes the reply's shape (the pet page: short and playful) */ surface?: 'pet';
     /** how the reply will be delivered (speech is synthesized afterwards); unset keeps the prompt as it was */ replyFormat?: 'voice' | 'text';
-    /** how the person sent the turn: 'voice' says they spoke it and are listening (per-turn lines only, never block A) */ inputModality?: 'voice' | 'text' } = {}): Promise<string> {
+    /** how the person sent the turn: 'voice' says they spoke it and are listening (per-turn lines only, never block A) */ inputModality?: 'voice' | 'text';
+    /** a spoken pet turn from hands-free mode (§8A.2): the hands-free frame instead of the voice frame */ handsFree?: boolean } = {}): Promise<string> {
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
@@ -679,7 +686,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
     if (boundary.compact) options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow));
     const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow,
-      options.surface === 'pet' ? (options.inputModality === 'voice' ? PET_SURFACE_FRAME_VOICE : PET_SURFACE_FRAME) : undefined,
+      options.surface === 'pet' ? (options.inputModality === 'voice' ? (options.handsFree ? PET_SURFACE_FRAME_HANDS_FREE : PET_SURFACE_FRAME_VOICE) : PET_SURFACE_FRAME) : undefined,
       options.replyFormat, options.inputModality);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };

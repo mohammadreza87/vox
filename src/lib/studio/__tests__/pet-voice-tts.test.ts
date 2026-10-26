@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { InitDataUser } from '../auth';
 import { agentInit } from './initdata-keys';
 import { handlePetRequest } from '../pet-http';
-import { PendingGeminiSynthesizer, type SpeechSynthesizer } from '../tts';
+import { UnconfiguredGeminiSynthesizer, type SpeechSynthesizer } from '../tts';
 import { AdaptiveService } from '../../adaptive/persistence/service';
 import { AdaptiveRepository, accountIdFor } from '../../adaptive/persistence/repository';
 import { adaptiveOptionsFromManifest } from '../../adaptive/persistence/config';
@@ -81,17 +81,34 @@ describe('speech through deps.tts', () => {
 
   it('wired: the chosen synthesizer speaks the reply in the agent voice, and ElevenLabs is not called directly', async () => {
     const { h, giveVoice, talkVoice } = await setup();
-    const tts: SpeechSynthesizer = { provider: 'gemini', canSynthesize: true, committedTtsExportFence: true,
-      speak: vi.fn(async () => ({ audio: Buffer.from('wav-bytes'), mimeType: 'audio/wav' })) };
+    const tts: SpeechSynthesizer = { provider: 'eleven', canSynthesize: true, committedTtsExportFence: true,
+      speak: vi.fn(async () => ({ audio: Buffer.from('mp3-bytes'), mimeType: 'audio/mpeg' })) };
     h.studio.deps.tts = tts;
     await giveVoice();
-    expect(await talkVoice()).toMatchObject({ reply: 'Sure.', audio: Buffer.from('wav-bytes').toString('base64') });
+    expect(await talkVoice()).toMatchObject({ reply: 'Sure.', audio: Buffer.from('mp3-bytes').toString('base64') });
     expect(tts.speak).toHaveBeenCalledTimes(1);
     expect(vi.mocked(tts.speak).mock.calls[0].slice(0, 2)).toEqual(['Sure.', 'v1']);
     expect(h.eleven.speak).not.toHaveBeenCalled();
   });
 
-  it('a failing synthesizer leaves a text reply; Gemini before its adapter, or none, makes no speech and no voice flag', async () => {
+  it('Gemini speaks in the agent\'s Gemini voice with its style note, never with the ElevenLabs id; else the default voice and the voice brief', async () => {
+    const { h, giveVoice, talkVoice } = await setup();
+    const tts: SpeechSynthesizer = { provider: 'gemini', canSynthesize: true, committedTtsExportFence: true,
+      speak: vi.fn(async () => ({ audio: Buffer.from('wav-bytes'), mimeType: 'audio/wav' })) };
+    h.studio.deps.tts = tts;
+    await giveVoice();
+    expect(await talkVoice()).toMatchObject({ audio: Buffer.from('wav-bytes').toString('base64') });
+    const brief = (await h.store.read()).agents.find((a) => a.persona.name === 'Mochi')!.persona.voiceBrief;
+    expect(vi.mocked(tts.speak).mock.calls[0][0]).toBe('Sure.');
+    expect(vi.mocked(tts.speak).mock.calls[0][1]).toBe('');
+    expect(vi.mocked(tts.speak).mock.calls[0][2]).toMatchObject({ lang: 'en', ...(brief?.trim() ? { style: brief.trim() } : {}) });
+    await h.store.update((s) => { s.agents.find((a) => a.persona.name === 'Mochi')!.voice!.gemini = { voiceName: 'Sulafat', style: 'warm, a little quick' }; });
+    await talkVoice();
+    expect(vi.mocked(tts.speak).mock.calls[1].slice(0, 2)).toEqual(['Sure.', 'Sulafat']);
+    expect(vi.mocked(tts.speak).mock.calls[1][2]).toMatchObject({ style: 'warm, a little quick', lang: 'en' });
+  });
+
+  it('a failing synthesizer leaves a text reply; Gemini without a key, or none, makes no speech and no voice flag', async () => {
     const { h, call, giveVoice, talkVoice } = await setup();
     await giveVoice();
     h.studio.deps.tts = { provider: 'eleven', canSynthesize: true, committedTtsExportFence: true, speak: vi.fn(async () => { throw new Error('provider down'); }) };
@@ -99,7 +116,7 @@ describe('speech through deps.tts', () => {
     expect(failed).toMatchObject({ reply: 'Sure.' });
     expect(failed.audio).toBeUndefined();
 
-    h.studio.deps.tts = new PendingGeminiSynthesizer();
+    h.studio.deps.tts = new UnconfiguredGeminiSynthesizer();
     const pending = await talkVoice();
     expect(pending).toMatchObject({ reply: 'Sure.' });
     expect(pending.audio).toBeUndefined();

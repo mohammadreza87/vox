@@ -106,6 +106,8 @@ interface BubbleProps {
   cps?: number;
   /** faded out (or replaced) */
   onGone?: (id: number) => void;
+  /** a long-press on the bubble (a tip's reason line, §3.6) */
+  onHold?: () => void;
 }
 
 /**
@@ -114,7 +116,9 @@ interface BubbleProps {
  * sentence groups: dots show where you are, "more ›" goes on at once, and an unread page also turns by itself after
  * its hold. Nothing inside scrolls. While a paged reply shows, Telegram's BackButton closes it.
  */
-export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 290, cps = REVEAL_CPS, onGone }: BubbleProps) {
+export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 290, cps = REVEAL_CPS, onGone, onHold }: BubbleProps) {
+  const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const letGo = () => { if (hold.current) clearTimeout(hold.current); hold.current = null; };
   const textRef = useRef<HTMLSpanElement>(null);
   const [phase, setPhase] = useState<'reveal' | 'hold' | 'out'>('reveal');
   // the page belongs to its message: a new message starts on its first page in the same render
@@ -167,7 +171,9 @@ export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 
   if (!msg) return null;
   return (
     <div className="pet-bubble" role="status" aria-live="polite" dir={tdir} data-out={phase === 'out' ? '' : undefined}
-      style={{ top, ['--pet-lines' as string]: budget }} onTransitionEnd={(e) => { if (phase === 'out' && e.propertyName === 'opacity') goneRef.current?.(msg.id); }}>
+      style={{ top, ['--pet-lines' as string]: budget }}
+      onPointerDown={onHold && (() => { letGo(); hold.current = setTimeout(() => { hold.current = null; onHold(); }, 500); })} onPointerUp={letGo} onPointerCancel={letGo} onPointerLeave={letGo}
+      onTransitionEnd={(e) => { if (phase === 'out' && e.propertyName === 'opacity') goneRef.current?.(msg.id); }}>
       <span className="pet-sr">{msg.text}</span>
       {/* written only by the reveal effect (never React children), so a page turn always has its node */}
       <span ref={textRef} className="pet-bubble-text" aria-hidden="true" />

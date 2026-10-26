@@ -20,6 +20,8 @@ interface StageProps {
   onTouch?: () => void;
   /** a fast horizontal flick on the background, never on the character (design §4: switches rooms) */
   onSwipe?: (toward: 'left' | 'right') => void;
+  /** the character took a pointer (a tip signal: the body was touched) */
+  onBody?: () => void;
 }
 
 /** A flick, not a gaze drag: ≥ 60 px sideways, twice as far as up or down, within 320 ms. */
@@ -31,7 +33,7 @@ export const SWIPE = { px: 60, ms: 320 } as const;
  * also owns pointer input: every sample goes to the engine (on the character it squashes in the same
  * frame; off it, the eyes follow the finger), and the pointer is captured when the engine takes it.
  */
-export function Stage({ engine, backdrop, box, children, over, embed, style, onTouch, onSwipe }: StageProps) {
+export function Stage({ engine, backdrop, box, children, over, embed, style, onTouch, onSwipe, onBody }: StageProps) {
   const origin = useRef<{ left: number; top: number }>({ left: 0, top: 0 });
   const flick = useRef<{ id: number; x: number; y: number; t: number } | null>(null);
 
@@ -42,6 +44,7 @@ export function Stage({ engine, backdrop, box, children, over, embed, style, onT
     }
     const took = engine.pointer({ kind, id: e.pointerId, x: e.clientX - origin.current.left, y: e.clientY - origin.current.top, t: e.timeStamp || performance.now() });
     if (kind === 'down' && took) {
+      onBody?.();
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
     }
     // the engine took it (the character): poke, stroke, drag. Only a pointer it left alone can be a flick.

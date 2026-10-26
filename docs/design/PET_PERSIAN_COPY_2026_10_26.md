@@ -558,8 +558,8 @@ Never «شب بخیر» as a greeting: it means good night/goodbye.
 | Proposed key | Stage | Bubble | Life Book page |
 |---|---|---|---|
 | `stage.2` | Puff: mouth appears | «اِ! دهن درآوردم!» | «دهن درآوردم! اولین کلوچه!» (`book.page.mouth`) |
-| `stage.3` | Shaped: brows and lashes | «ببین، ابرو دارم! حالا می‌تونم تعجب کنم.» | «ابرو درآوردم. از امروز تعجب‌هام دیدنیه.» |
-| `stage.4` | Formed: accessory | «دیگه خود خودمم.» (`say.formed`) | «حالا کامل شدم. این صفحه مال هر دومونه.» |
+| `stage.3` | Shaped: brows and lashes | «ببین، ابرو دارم! حالا می‌تونم تعجب کنم.» | «ابرو درآوردم! حالا تعجبم دیدنیه.» |
+| `stage.4` | Formed: accessory | «دیگه خود خودمم.» (`say.formed`) | «کامل شدم. این صفحه مال هر دومونه.» |
 
 ### C.4 Reactions: extra variants for the voice pack (pet)
 
@@ -761,3 +761,141 @@ Written straight into the FA column of the 33 rows in [`PET_COPY_KEYS_2026_10_26
 | `voice.autoOff` | system | «میکروفون باز خاموش شد. برای روشن کردن بزنید.» | | Neutral; no reason given, no blame for the silence |
 | `voice.unavailable` | system | «میکروفون باز اینجا کار نمی‌کند. با نگه داشتن دکمه حرف بزنید.» | | |
 
+---
+
+## H. Life Book pages, why-lines, labels and room lines (keys added after Wave A QA)
+
+Written straight into the FA cells of the 40 rows marked "Added after Wave A QA" in [`PET_COPY_KEYS_2026_10_26.md`](./PET_COPY_KEYS_2026_10_26.md) on 26 October 2026, plus shortened Persian for `book.page.stage3` and `book.page.stage4`. Placeholders are wrapped in U+2068 … U+2069 in the keys file and shown bare here.
+
+### H.1 Life Book pages (pet, one line)
+
+| Key | FA | Variants | Note |
+|---|---|---|---|
+| `book.page.stage3` | «ابرو درآوردم! حالا تعجبم دیدنیه.» | | Shortened from «ابرو درآوردم. از امروز تعجب‌هام دیدنیه.» to fit Peek 1 line |
+| `book.page.stage4` | «کامل شدم. این صفحه مال هر دومونه.» | | Shortened from «حالا کامل شدم…» |
+| `book.page.formed` | «از امروز، این منم.» | | Calm pride, not an ending |
+| `book.page.bond1` | «یه چرخ شادی یاد گرفتم!» | | Spin |
+| `book.page.bond2` | «یه پرش لی‌لی‌لی از خودم درآوردم!» | | Three hops, said as a sound rather than a number |
+| `book.page.bond3` | «یاد گرفتم تاب بخورم و ریز بخندم!» | | Sway and giggle |
+| `book.page.bond4` | «یه دالی‌بازی از خودم درآوردم!» | | «دالی» is the Persian peekaboo |
+| `book.page.bond5` | «یه تکون‌تکون کوچولو یاد گرفتم!» | | Shimmy; «قر» avoided (see voice guide 10.8) |
+| `book.page.bond6` | «یاد گرفتم پف کنم و برق بزنم!» | | Puff and sparkle |
+| `book.page.bloom` | «دونه‌مون گل داد.» | | |
+| `book.page.yalda` | «بلندترین شب سال، کنار هم.» | | |
+| `book.page.suri` | «از روی آتیش‌های کوچولو پریدیم.» | | In-app fire only |
+| `book.page.nowruz` | «اولین نوروزمون با هم.» | | |
+| `book.page.bestBop` | «بهترین روپایی‌ای که تا حالا زدم!» | | Verb «روپایی زدن»; no number |
+| `book.page.bestStarfall` | «یه آسمون ستاره گرفتیم!» | | |
+| `book.page.bestHum` | «این بار هم‌آوازیمون حرف نداشت!» | | «حرف نداشت» = flawless |
+
+Bond pages and best pages appear once each, so they need no variants.
+
+### H.2 Why-lines under a page (system)
+
+| Key | FA | Note |
+|---|---|---|
+| `book.why.met` | «اولین روزی که با {name} آشنا شدید.» | |
+| `book.why.stage` | «رشد هفتهٔ اول: {name} آمادهٔ یاد گرفتن شد.» | "Forming week" as «هفتهٔ اول», which users understand without a glossary |
+| `book.why.formed` | «روزی که شخصیت {name} برای همیشه شکل گرفت.» | |
+| `book.why.bond` | «حاصل وقت‌هایی که با هم گذراندید.» | |
+| `book.why.bloom` | «دانه‌ای که کاشتید گل داد.» | |
+| `book.why.season` | «اولین باری که این جشن را با {name} گرفتید.» | |
+| `book.why.best` | «بهترین دور تازهٔ شما، برای یادگاری.» | |
+
+### H.3 UI labels (system, screen readers)
+
+| Key | FA | Note |
+|---|---|---|
+| `ui.send` | «فرستادن» | Update `TalkPill.test.tsx:65` if it finds the button by its Persian name |
+| `ui.toys` | «اسباب‌بازی‌ها» | `Dock.test.tsx:17` finds the group by name; no digits either way |
+| `ui.rooms` | «اتاق‌ها» | |
+| `need.tummy` | «غذا» | **Flag:** «شکم» (tummy) is a body part, not a need, and does not fit the wants template. «غذا» works as the ring label and in «کمی غذا می‌خواهد» |
+| `need.joy` | «شادی» | |
+| `need.energy` | «انرژی» | |
+| `need.wantsSuffix` | «کمی {need} می‌خواهد» | **Flag: a suffix cannot work in Persian.** The need sits inside the verb phrase: «کمی شادی می‌خواهد», «کمی انرژی می‌خواهد». Engineering should switch to this template and read it in place of the bare need name. If a suffix is unavoidable, «، کمی کم است» is the least bad option, but it sounds closer to an alarm |
+
+### H.4 Starfall (Play room)
+
+| Key | Voice | FA | Variants | Note |
+|---|---|---|---|---|
+| `play.starfall.title` | system | «ستاره‌باران» | | Same word as `toy.play.starfall` |
+| `play.starfall.start` | pet | «بیا با هم ستاره بگیریم!» | v2 «آماده‌ای؟ ستاره‌ها دارن میان!» | No countdown |
+| `play.starfall.howTo` | pet | «منو بکش ببر زیر ستاره‌ها.» | | «منو» is the spoken «من را», allowed like «اینو» |
+| `play.starfall.zenOn` | system | «بی‌عجله: نه ساعت، نه باخت» | | |
+| `play.starfall.pips` | system | «پیشرفت این دور» | | Never a count |
+| `play.starfall.good` | pet | «ببین چقدر نور ستاره جمع کردیم!» | v2 «آسمون رو خالی کردیم!» v3 «چه دستی داری!» | Credits the person |
+| `play.starfall.nearMiss` | pet | «نزدیک بود! اون یکی خجالتی بود.» | v2 «اون ستاره ناز کرد! عیب نداره.» v3 «تقریباً گرفتیمش!» | Never sad; «ناز کردن» = played coy |
+| `play.starfall.zenEnd` | pet | «چه رویایی بود.» | v2 «انگار خواب ستاره دیدیم.» | |
+
+### H.5 Bedroom
+
+| Key | Voice | FA | Variants | Note |
+|---|---|---|---|---|
+| `bed.tuck.start` | pet | «اوم… وقت پتوئه.» | v2 «لحافم رو بکش روم.» | |
+| `bed.lamp.dim` | pet | «نور کم شد…» | v2 «حالا شد، یه کم تاریک‌تر…» | |
+| `bed.tuck.notSleepy` | pet | «هنوز خوابم نمیاد، ولی گرم و نرمه.» | v2 «خوابم نمیاد، ولی همین‌جوری هم خوبه.» | No "one more game" |
+
+### H.6 "What I've learned" empty state
+
+| Key | Voice | FA | Note |
+|---|---|---|---|
+| `book.learned.empty` | pet | «دفترم هنوز سفیده. از کار تیمت تعریف کن، آخرش بگو «یادت باشه».» | **Flag:** "Nothing here yet. Teach me something" sounds like an empty-handed trainee. A blank page («سفیده») is a fresh start, and «تعریف کن» (tell me about it) asks for a story, not a lesson. «یادت باشه» is a supported trigger (`note-selector.ts:39`) |
+
+Self-check on the 42 strings: no Arabic letters, no digits, no Latin punctuation, every half-space in place; no pet line uses formal forms and no system line uses spoken forms. The lint rows in section D pass, including the new growth rows.
+
+---
+
+## I. Default growth moments in code (`src/lib/pet/growth.ts`, `src/lib/studio/growth.ts`)
+
+On 26 October 2026 I rewrote only the Persian string literals; ids, keys, English and structure are unchanged. Every Persian moment passes `lintMoment` (title ≤ 40, hint ≤ 80, "we" in the title, no digits, no sensitive topics, the pet-copy lint). `npx vitest run src/lib/pet/__tests__ src/lib/studio/__tests__/pet-growth.test.ts` passed 108 of 108, and `node scripts/check-pet-copy.mjs` reported 724 strings with 0 violations. No test asserted an exact Persian string, so no test changed.
+
+**Rules applied.**
+- Titles say "we" as the team, with the agent inside it («یاد گرفتیم اینجا چطور تصمیم می‌گیریم»).
+- Titles describe the team's ways, not a skill the agent lacked: «یاد گرفتیم چطور تصمیم بگیریم» ("we learned how to decide") became «یاد گرفتیم اینجا چطور تصمیم می‌گیریم» ("we learned how decisions are made here").
+- Hints speak to one person (تو) and end the same way: «آخرش بگو «یادت باشه»». «یادم بده» (teach me) is gone: the agent asks to be *told* or *shown* («بگو», «نشونم بده», «برام تعریف کن», «برام معنی کن»).
+- Room hints invite without timing («هر وقت دلت خواست، با هم یه سر به … بزنیم»); season hints use the spoken «… که برسه».
+- `ROOM_NAME.fa.play` is now «اتاق بازی»: inside a sentence, «بازی رو با هم کشف کردیم» would read "we discovered playing".
+- Work vocabulary: «ارجاع دادن» (escalate), «بازبینی» (code review), «منتشر کردن» (release), «صلاح دونستی» (when you see fit) for access.
+- The drafter's example in `src/lib/studio/growth.ts` (`GROWTH_RULES`) now uses the same release title and hint, so generated Persian follows this shape.
+
+Room and season rows below show the isolates removed; in code the room and festival names stay wrapped in U+2068 … U+2069.
+
+| Id | Title | Hint |
+|---|---|---|
+| `taught-team-ways` | «یاد گرفتیم تیممون چطور کار می‌کنه» | «از روال کار تیمت برام بگو، آخرش بگو «یادت باشه»» |
+| `taught-words` | «اصطلاح‌های خودمونی تیم رو یاد گرفتیم» | «یه اصطلاح خودمونی تیمت رو برام معنی کن، آخرش بگو «یادت باشه»» |
+| `taught-good-week` | «یاد گرفتیم هفتهٔ خوب برامون یعنی چی» | «تعریف کن یه هفتهٔ خوب برای تیمت چه شکلیه، آخرش بگو «یادت باشه»» |
+| `task-first-job` | «اولین کارمون رو با هم تموم کردیم» | «یه کار کوچیک بهم بسپار، با هم انجامش می‌دیم» |
+| `access-calendar` | «دسترسی برنامه‌ریزی رو با هم راه انداختیم» | «هر وقت صلاح دونستی، اجازه بده توی برنامه‌ریزی کمکت کنم» |
+| `access-checkins` | «با هم قرار سر زدن‌ها رو گذاشتیم» | «خودت انتخاب کن کی و چطور بهت سر بزنم» |
+| `taught-tone` | «یاد گرفتیم با مشتری‌ها چطور حرف بزنیم» | «نشونم بده تیمت چطور جواب مشتری رو می‌ده، آخرش بگو «یادت باشه»» |
+| `taught-escalate` | «یاد گرفتیم کی پرونده رو ارجاع بدیم» | «بگو کی یه پرونده باید ارجاع بشه، آخرش بگو «یادت باشه»» |
+| `task-first-reply` | «اولین جوابمون رو با هم نوشتیم» | «ازم بخواه یه جواب رو با هم بنویسیم» |
+| `room-play` | «اتاق بازی رو با هم کشف کردیم» | «هر وقت دلت خواست، با هم یه سر به اتاق بازی بزنیم» |
+| `room-garden` | «باغچه رو با هم کشف کردیم» | «هر وقت دلت خواست، با هم یه سر به باغچه بزنیم» |
+| `room-closet` | «کمد رو با هم کشف کردیم» | «هر وقت دلت خواست، با هم یه سر به کمد بزنیم» |
+| `room-bedroom` | «اتاق خواب رو با هم کشف کردیم» | «هر وقت دلت خواست، با هم یه سر به اتاق خواب بزنیم» |
+| `room-book` | «دفتر خاطرات رو با هم کشف کردیم» | «هر وقت دلت خواست، با هم یه سر به دفتر خاطرات بزنیم» |
+| `season-yalda` | «یلدا رو با هم جشن گرفتیم» | «یلدا که برسه، با هم جشنش می‌گیریم» |
+| `season-suri` | «چهارشنبه‌سوری رو با هم جشن گرفتیم» | «چهارشنبه‌سوری که برسه، با هم جشنش می‌گیریم» |
+| `season-nowruz` | «نوروز رو با هم جشن گرفتیم» | «نوروز که برسه، با هم جشنش می‌گیریم» |
+| `taught-sources` | «یاد گرفتیم به چه منابعی اعتماد کنیم» | «بگو تیمت به چه منابعی اعتماد داره، آخرش بگو «یادت باشه»» |
+| `taught-report-shape` | «یاد گرفتیم گزارش‌هامون چه شکلیه» | «نشونم بده گزارش‌های تیمت چه شکلیه، آخرش بگو «یادت باشه»» |
+| `task-first-summary` | «اولین خلاصه‌مون رو با هم نوشتیم» | «ازم بخواه یه چیزی رو با هم خلاصه کنیم» |
+| `taught-brand-voice` | «یاد گرفتیم برندمون با چه لحنی حرف می‌زنه» | «بگو برندتون با چه لحنی حرف می‌زنه، آخرش بگو «یادت باشه»» |
+| `taught-review` | «یاد گرفتیم ایده‌ها رو چطور بررسی کنیم» | «بگو تیمت ایده‌ها رو چطور بررسی می‌کنه، آخرش بگو «یادت باشه»» |
+| `task-first-draft` | «اولین پیش‌نویسمون رو با هم ساختیم» | «ازم بخواه یه پیش‌نویس رو با هم شروع کنیم» |
+| `taught-release` | «یاد گرفتیم نسخه‌ها رو چطور منتشر می‌کنیم» | «بگو تیمت نسخهٔ تازه رو چطور منتشر می‌کنه، آخرش بگو «یادت باشه»» |
+| `taught-review-code` | «یاد گرفتیم تغییرها رو چطور بازبینی کنیم» | «بگو تیمت تغییرها رو چطور بازبینی می‌کنه، آخرش بگو «یادت باشه»» |
+| `task-first-fix` | «اولین مشکلمون رو با هم حل کردیم» | «یه مشکل کوچیک بیار، با هم حلش می‌کنیم» |
+| `taught-decisions` | «یاد گرفتیم اینجا چطور تصمیم می‌گیریم» | «بگو تیمت چطور تصمیم می‌گیره، آخرش بگو «یادت باشه»» |
+| `taught-priorities` | «یاد گرفتیم اولویت‌هامون چیه» | «بگو برای تیمت چی از همه مهم‌تره، آخرش بگو «یادت باشه»» |
+| `task-first-plan` | «اولین برنامه‌مون رو با هم چیدیم» | «ازم بخواه یه برنامه رو با هم بچینیم» |
+| `taught-onboarding` | «رسم خوشامدگویی تیممون رو یاد گرفتیم» | «بگو تیمت چطور از یه تازه‌وارد استقبال می‌کنه، آخرش بگو «یادت باشه»» |
+| `taught-rituals` | «رسم‌های تیممون رو یاد گرفتیم» | «یکی از رسم‌های تیمت رو برام تعریف کن، آخرش بگو «یادت باشه»» |
+| `task-first-guide` | «اولین راهنمامون رو با هم نوشتیم» | «ازم بخواه یه راهنمای کوتاه رو با هم بنویسیم» |
+| `taught-handoff` | «یاد گرفتیم کارها رو چطور دست به دست کنیم» | «بگو اینجا کارها چطور دست به دست می‌شه، آخرش بگو «یادت باشه»» |
+| `taught-tools` | «ابزارهای تیممون رو یاد گرفتیم» | «بگو تیمت به چه ابزارهایی تکیه می‌کنه، آخرش بگو «یادت باشه»» |
+| `task-first-list` | «اولین فهرستمون رو با هم مرتب کردیم» | «ازم بخواه یه فهرست رو با هم مرتب کنیم» |
+
+**Note for the keys file:** `growth.example.title.1` there is «یاد گرفتم برنامهٔ انتشار نسخه رو چطور می‌چینید» (first person singular, as its English was). The code's lint requires "we" in titles, so the drafter now sees «یاد گرفتیم نسخه‌ها رو چطور منتشر می‌کنیم». If the keys file is meant to match the code, its exemplar should change to this line.

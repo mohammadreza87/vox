@@ -10,6 +10,8 @@ import type { Accessory, AgentLook, CloudFamily, CloudSpecies, HairStyle, HairTo
 import { HUES } from './types';
 import { ACCENT_COLORS, ACCESSORIES, DEFAULT_ACCENT, FAMILY_IDS, HAIR_STYLES, HAIR_TONES, SPECIES, isCompatible, suggestAccessories } from './character/look';
 import { MAX_AGENT_SKILLS, type AgentRole, type AgentSkill } from './skills/types';
+import { draftedGrowth, GROWTH_RULES, promptGrowthSchema } from './growth';
+import type { AgentGrowth } from '../pet/growth';
 
 /** One short exchange in the persona's own voice (a style example, never a memory). */
 const voiceExampleSchema = z.object({
@@ -82,9 +84,11 @@ const draftSchema = z.object({
   persona: personaSchema,
   // Validated separately: a bad look falls back to randomLook instead of failing the draft.
   look: z.unknown().optional(),
+  // Growth moments (design §4.11), validated and linted separately (growth.ts): a bad block falls back to the role's default set.
+  growth: z.unknown().optional(),
 });
 
-export type PersonaDraft = { names: string[]; persona: PersonaSpec; look: AgentLook };
+export type PersonaDraft = { names: string[]; persona: PersonaSpec; look: AgentLook; growth: AgentGrowth };
 
 /** The library role and skills an agent is built from (validated by the caller). */
 export interface PersonaLibrary {
@@ -319,11 +323,12 @@ export async function draftPersona(llm: LLM, brief: SpawnBrief, orgName: string,
   const parsed = await generateValidated(llm, {
     schema,
     // A malformed look still gets a random fallback at validation time.
-    promptSchema: draftSchema.extend({ persona: promptPersonaSchema, look: promptLookSchema }),
+    promptSchema: draftSchema.extend({ persona: promptPersonaSchema, look: promptLookSchema, growth: promptGrowthSchema }),
     system: `You design AI personas for ${orgName}: a colleague, general assistant or companion as requested by the brief. Given a brief, propose a complete persona.
 ${PERSONA_RULES}
 Include every requested language in persona.languages using the names given in the brief.
 ${context ? `${context}\n` : ''}${LOOK_RULES}
+${GROWTH_RULES}
 Offer up to three names in names, with your pick first and matching persona.name.
 Seed for variety (use it to vary colour and shape): ${Math.floor(Math.random() * 1e6)}`,
     user: briefToText(brief),
@@ -331,7 +336,8 @@ Seed for variety (use it to vary colour and shape): ${Math.floor(Math.random() *
   });
   const persona = tidyCharacter(parsed.persona as PersonaSpec);
   const look = lookSchema.safeParse(parsed.look);
-  return { names: parsed.names, persona, look: look.success ? repairLook(look.data as AgentLook) : randomLook(persona.presentation, Math.random, persona.role) };
+  return { names: parsed.names, persona, look: look.success ? repairLook(look.data as AgentLook) : randomLook(persona.presentation, Math.random, persona.role),
+    growth: draftedGrowth(parsed.growth, persona) };
 }
 
 /** Validate a hand-edited persona (PATCH): Claude's limits plus the library ids; unknown keys are refused. */

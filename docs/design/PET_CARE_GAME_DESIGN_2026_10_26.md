@@ -79,7 +79,7 @@ Engineers: keep everything in the left column. This design only adds.
 | Toys and dock | Cookie (drag or tap), ball (Bop), moon; rings; "wants" wiggle; no digits | `src/app/studio/pet/_ui/Dock.tsx:21-118`; `Dock.test.tsx:9-18` | The dock becomes room-aware: each room shows its own three verbs (§4) |
 | Talk | Text and hold-to-talk mic; goodbye detection; voice replies when the agent has a voice; guests chat in DM | `src/app/studio/pet/_ui/TalkPill.tsx`; `src/lib/pet/goodbye.ts:17-20`; `src/lib/studio/pet-http.ts:363-399` | Talk commands routed to rooms and verbs (§8.4); suggestion chips |
 | Bubble | Reveal at 28 chars/s; > 220 chars shows "more", which expands and scrolls inside | `src/app/studio/pet/_ui/Bubble.tsx:9-20`, `:28-29`; `pet.css:72` | Paged bubble that never scrolls (§9.4) |
-| Copy | English only, except one Persian string (`reopenFa`) | `src/app/studio/pet/_ui/copy.ts:9-64` | Full EN/FA copy catalogue (`copy.fa.ts`), lazy-loaded per language |
+| Copy | English only, except one Persian string (`reopenFa`); screen-reader labels hard-coded in English ("Send" `copy.ts:42`, "Toys" `Dock.tsx:90`, "Rooms" `rooms/RoomRail.tsx:11`, need names `copy.ts:32`, ", wants some" `Dock.tsx:101`) | `src/app/studio/pet/_ui/copy.ts:9-64` | Full EN/FA catalogue generated from the keys file (`strings/generate.mjs`), lazy-loaded per language; the hard-coded labels get keys `ui.send`, `ui.toys`, `ui.rooms`, `need.tummy`, `need.joy`, `need.energy`, `need.wantsSuffix` |
 | Quiet screens | Private, outside Telegram, resting, offline, unavailable, chat access off | `src/app/studio/pet/_ui/Sleeper.tsx:12-21` | FA copy for each; unchanged behaviour |
 | Circles | Group halo, Join sheet (18+), notes; write-access ask after Join | `src/app/studio/pet/_ui/Circle.tsx:134-141`; `src/lib/studio/circle-pet.ts:1-12` | Visits reuse the circle membership check (§4.8) |
 | Server routes | `view`, `care`, `talk`, `talk-voice`, circle routes; export/forget moved to My data (410) | `src/lib/studio/pet-http.ts:156-175` | `GET/POST play` for the new per-person play store (§3.4) |
@@ -228,6 +228,7 @@ Each round is short (30-60 s). Every game has **Zen** «بی‌عجله»: no ti
 
 - **States.** ready (pet crouches, eyes on you), playing, round end (celebrate or a shrug-smile), tired guard (pet yawns, suggests the Bedroom), guest (Guess opens the DM, like talk).
 - **Score.** Rounds show progress as pips, never digits on toys or rooms. A "best moment" flag (a new personal best) adds a Life Book page, with no number shown.
+- **Starfall copy** (keys `play.starfall.*`): title, a start line ("Catch the stars with me!"), a first-round how-to, the zen chip, the pips' screen-reader name ("Round progress", never a count), a good-round line ("Look at all that starlight!"), a near-miss line ("So close! That one was shy.") and a zen goodbye ("That was dreamy."). Again/Done/Zen reuse `play.again`, `play.done`, `play.zen`.
 - **Data.** `PetPlay.games`. Guess turns are ordinary talk turns: they reach the same DM chat and memory as today (`pet-http.ts:365-367`), so the game card says so.
 - **Server/client.** Game physics on the client, inside the engine's frame loop. The server records only the outcome enum (`finished`, `zen`, `best`) with rate limits.
 
@@ -249,6 +250,7 @@ Two different closets, clearly labelled:
 - **Purpose.** A calm place for the existing sleep verb.
 - **Interaction.** Moon puts the pet to bed (existing `sleep`). The lamp dims the room (the engine's existing `dim` overlay, `Stage.tsx:55`). **Story** «قصه» asks for a three-line bedtime story in the agent's voice.
 - **States.** awake, yawning, drifting, asleep, dreaming twitch, quiet hours (nothing drops; Energy refills).
+- **Lines** (keys `bed.*`): tuck-in "Mmm, blanket time.", lamp "Lights low…", and "Not sleepy yet, but cozy is nice." when the moon is tapped with Energy high. "No story tonight" is `bed.storyFallback` (story unavailable) or `err.storyLimit` (already told one today).
 - **What the AI adds.** The bedtime story. Members only (guests see the moon and lamp). At most one story a day. Generated on the pet surface without writing to the DM history or memory (a new non-memory turn type; see open decision 6).
 - **Data.** `PetCare.asleep` via existing actions; `PetPlay` for the story cap.
 
@@ -275,7 +277,7 @@ Pou's Health meter is the one that makes Pou sick. Vox replaces it with **Glow**
 
 A small book, not a list. Each spread is one moment with a drawing of the pet at that time.
 
-- **Pages** «صفحه‌ها»: first day together, each stage-up, each Bond milestone, first bloom, first seasonal celebration, a best game moment, the day the agent formed.
+- **Pages** «صفحه‌ها»: first day together, each stage-up, each Bond milestone, first bloom, first seasonal celebration, a best game moment, the day the agent formed. The server grants pages by id (`src/lib/pet/play.ts:81-85`): `met`, `stage2`, `stage3`, `stage4`, `formed`, `bond1`…`bond6`, `bloom`, `yalda`, `suri`, `nowruz`, `bestBop`, `bestStarfall`, `bestHum`. Each has a title key `book.page.<id>` (pet voice, one line, no digits; Bond pages are named after their signature move, never "Bond 3") and a shared one-line why under `book.why.*` (system voice). The empty "What I've learned" tab says "Nothing here yet. Teach me something and say “remember this”." (`book.learned.empty`).
 - **Keepsakes** «یادگاری‌ها»: earned items, with how each was earned.
 - **What I've learned** (new tab, FA from the copywriter): every lit growth moment as a page with its drawing, its title and its one-line why; unlit moments show only their hint ("Tell me how your team plans a release"), never a count or a progress bar.
 - **About me** «دربارهٔ من»: the AI disclosure, in the pet's voice: "I'm Mochi, an AI colleague. This little cloud is a game we play together." «من موچی هستم، یه همکار هوش مصنوعی. این ابرک فقط یه بازیه، بازی من و تو.»

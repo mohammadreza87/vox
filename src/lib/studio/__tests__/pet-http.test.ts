@@ -65,6 +65,8 @@ describe('per-agent authentication and roles', () => {
     expect(view).toMatchObject({ agentId: mochi.agent.id, name: 'Mochi', role: 'owner', stage: 1, formingDay: 1, voice: false, listen: true,
       care: { agentId: mochi.agent.id, userId: ID.alice, tummy: 75, joy: 80, energy: 85, tz: 'UTC', asleep: false } });
     expect(view.botUsername).toBe(mochi.agent.bot!.username);
+    // UX-02: the provider that hears the audio; locations and retention stay unresolved (a legal to-do)
+    expect(view.voiceNotice).toEqual({ providers: 'OpenAI' });
     expect(view).not.toHaveProperty('access');
     expect(view).not.toHaveProperty('blocked');
     expect(JSON.stringify(view)).not.toContain('tokenEnc');
@@ -103,6 +105,7 @@ describe('per-agent authentication and roles', () => {
     const view = await (await call([], { as: ID.stranger })).json() as PetView;
     expect(view.role).toBe('guest');
     expect(view.listen).toBe(false);
+    expect(view).not.toHaveProperty('voiceNotice');
     const fed = await call(['care'], { as: ID.stranger, body: { action: 'feed' } });
     expect(fed.status).toBe(200);
     expect((await fed.json()).care.tummy).toBe(100);

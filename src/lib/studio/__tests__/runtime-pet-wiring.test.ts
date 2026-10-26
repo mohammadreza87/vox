@@ -42,7 +42,7 @@ it('keeps FILE Pet authority available when instrumentation and routes use diffe
   expect(network).not.toHaveBeenCalled();
 });
 
-it('wires the play store and the speech seam explicitly, so route bundles never derive them by instanceof', async () => {
+it('wires the play and growth stores and the speech seam explicitly, so route bundles never derive them by instanceof', async () => {
   dir = mkdtempSync(join(tmpdir(), 'vox-pet-runtime-'));
   const env = {
     NODE_ENV: 'test', STUDIO_STORAGE: 'file', STUDIO_DATA_DIR: dir,
@@ -54,7 +54,7 @@ it('wires the play store and the speech seam explicitly, so route bundles never 
     STUDIO_MAINTENANCE: '', STUDIO_REMINDER_DELIVERY: '', STUDIO_REQUESTED_ROUTINES: '',
     STUDIO_EXPERIMENTS_ENABLED: '', STUDIO_IMPROVEMENT_TRUST_JSON: '',
     STUDIO_VOICE_RECOGNITION: '', VOICEPRINT_KEY: '',
-    OPENAI_API_KEY: '', ELEVENLABS_API_KEY: '', STUDIO_TTS_PROVIDER: 'gemini',
+    OPENAI_API_KEY: '', ELEVENLABS_API_KEY: '', STUDIO_TTS_PROVIDER: 'gemini', GEMINI_API_KEY: '', GOOGLE_API_KEY: '',
     K_SERVICE: '', FUNCTION_TARGET: '', FUNCTION_NAME: '', VERCEL: '',
   };
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
@@ -66,6 +66,9 @@ it('wires the play store and the speech seam explicitly, so route bundles never 
   vi.resetModules();
   const { petPlayStoreFor } = await import('../pet-play-store');
   expect(await petPlayStoreFor(studio)).toBe(studio.deps.petPlay);
+  const { petGrowthStoreFor } = await import('../pet-growth-store');
+  expect(await petGrowthStoreFor(studio)).toBe(studio.deps.petGrowth);
+  expect(studio.deps.petGrowth).toBeDefined();
   expect(studio.deps.tts).toMatchObject({ provider: 'gemini', canSynthesize: false });
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('STUDIO_TTS_PROVIDER=gemini'));
 });

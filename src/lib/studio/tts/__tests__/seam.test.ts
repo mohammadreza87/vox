@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSpeechSynthesizer, ElevenSpeechSynthesizer, GEMINI_TTS_PENDING, parseTtsProvider, PendingGeminiSynthesizer, SpeechUnavailableError } from '..';
+import { createSpeechSynthesizer, ElevenSpeechSynthesizer, GEMINI_TTS_NO_KEY, parseTtsProvider, UnconfiguredGeminiSynthesizer, SpeechUnavailableError } from '..';
 import type { ElevenLabsStudio } from '../../media';
 
 const fakeEleven = (fence = true) => ({ committedTtsExportFence: fence, speak: vi.fn(async () => Buffer.from('mp3-bytes')) });
@@ -25,15 +25,15 @@ describe('the SpeechSynthesizer seam (design §8A.3)', () => {
     expect(new ElevenSpeechSynthesizer(fakeEleven(false)).committedTtsExportFence).toBeUndefined();
   });
 
-  it('Gemini is a stub until its adapter lands: it cannot synthesize and says why', async () => {
-    const tts = createSpeechSynthesizer('gemini', { eleven: fakeEleven() as unknown as ElevenLabsStudio })!;
-    expect(tts).toBeInstanceOf(PendingGeminiSynthesizer);
+  it('Gemini without a key cannot synthesize and says why', async () => {
+    const tts = createSpeechSynthesizer('gemini', { eleven: fakeEleven() as unknown as ElevenLabsStudio, env: {} })!;
+    expect(tts).toBeInstanceOf(UnconfiguredGeminiSynthesizer);
     expect(tts.canSynthesize).toBe(false);
     expect(tts.committedTtsExportFence).toBeUndefined();
     const error = await tts.speak('Hello.', 'voice-1').catch((e: unknown) => e);
     expect(SpeechUnavailableError.is(error)).toBe(true);
     expect((error as SpeechUnavailableError).code).toBe('unavailable');
-    expect((error as Error).message).toBe(GEMINI_TTS_PENDING);
+    expect((error as Error).message).toBe(GEMINI_TTS_NO_KEY);
   });
 
   it('eleven without credentials is no synthesizer at all', () => {

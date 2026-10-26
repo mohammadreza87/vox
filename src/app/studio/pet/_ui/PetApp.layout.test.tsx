@@ -242,15 +242,21 @@ describe('rooms on the page', () => {
     expect(container.querySelector('[data-toy="cookie"]')).toBeTruthy();
   });
 
-  it('every room’s placeholder names the room and its three verbs, with no digits', async () => {
+  it('every placeholder room names the room and its three verbs; the Wave B rooms show their verbs; no digits anywhere', async () => {
     telegram({ stable: 844 });
     const { container } = render(<PetApp agentId="x" api={api()} />);
     await open(container);
-    for (const name of ['Play', 'Garden', 'Closet', 'Bedroom', 'Life Book']) {
+    for (const name of ['Garden', 'Closet']) {
       fireEvent.click(screen.getByRole('tab', { name }));
       await waitFor(() => expect(container.querySelector('.pet-soon b')?.textContent).toBe(name));
       expect(container.querySelector('.pet-soon span')!.textContent!.split(' · ')).toHaveLength(3);
       expect(container.querySelector('.pet-rail')!.textContent + container.querySelector('.pet-soon')!.textContent).not.toMatch(/\d/);
+    }
+    // Wave B: Play, Bedroom and Life Book have their own verbs (rooms/*.test.tsx test them)
+    for (const [name, room] of [['Play', 'play'], ['Bedroom', 'bedroom'], ['Life Book', 'book']] as const) {
+      fireEvent.click(screen.getByRole('tab', { name }));
+      await waitFor(() => expect(container.querySelector(`#pet-room [data-room="${room}"]`)).toBeTruthy());
+      expect(container.querySelector('#pet-room')!.textContent).not.toMatch(/\d/);
     }
   });
 

@@ -207,4 +207,14 @@ describe('sanitized ElevenLabs speech failures', () => {
     expect(new StudioVoiceService(null, null).canSynthesize).toBe(false);
     expect(new StudioVoiceService(null, new ElevenLabsStudio('k', fetchFn)).canSynthesize).toBe(true);
   });
+
+  it('ELEVENLABS_LIVE_TTS_MODEL (or the config) overrides the live-call model; unset keeps eleven_flash_v2_5', () => {
+    const base = { name: 'Synthetic', llmUrl: 'u', llmSecretId: 's', maxCallSeconds: 1 };
+    vi.stubEnv('ELEVENLABS_LIVE_TTS_MODEL', undefined);
+    expect(voiceAgentBody(base).conversation_config.tts.model_id).toBe('eleven_flash_v2_5');
+    vi.stubEnv('ELEVENLABS_LIVE_TTS_MODEL', 'eleven_v4_turbo');
+    expect(voiceAgentBody(base).conversation_config.tts.model_id).toBe('eleven_v4_turbo');
+    expect(voiceAgentBody({ ...base, ttsModel: 'eleven_other' }).conversation_config.tts.model_id).toBe('eleven_other');
+    vi.unstubAllEnvs();
+  });
 });

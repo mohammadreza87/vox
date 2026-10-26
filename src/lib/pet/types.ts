@@ -8,6 +8,7 @@
 import type { AgentJoin, CharacterLook, Stage } from '../studio/types';
 import type { CircleDecision, CircleParticipationExport, NoteExport, PetCircle, PetNote } from '../circles/contracts';
 import type { PetPlay, PetPlayView } from './play';
+import type { PetGrowthView } from './growth';
 
 export type { CharacterLook, PetCircle, PetNote, Stage };
 
@@ -105,7 +106,7 @@ export type PetRole = 'owner' | 'member' | 'guest';
 
 /** Every request carries the user's zone in this header (GET has no body). */
 export const PET_TZ_HEADER = 'x-pet-tz';
-/** `/api/studio/pet/:agentId` and `/export`, `/play` (GET), `/care`, `/play`, `/talk`, `/talk-voice`, `/forget` (POST). */
+/** `/api/studio/pet/:agentId` and `/export`, `/play` (GET), `/care`, `/play`, `/talk`, `/talk-voice`, `/growth/confirm`, `/forget` (POST). */
 export const PET_API_BASE = '/api/studio/pet';
 /** Page route: `/studio/pet/:agentId`. The menu button and the /start web_app button point here. */
 export const PET_PAGE_BASE = '/studio/pet';
@@ -146,6 +147,19 @@ export interface PetView {
   dataUrl?: string;
   /** the person's play record (pet/play.ts, design §3.4); absent when it could not be read this time (the pet still opens) */
   play?: PetPlayView;
+  /**
+   * Growth moments (pet/growth.ts, design §4.11): every moment (drafted or default, then the room and season templates)
+   * with `lit.at` when it is lit for the whole agent, and `mine`: the ids lit only for this person. Never a count.
+   * Absent when the growth store could not be read this time.
+   */
+  growth?: PetGrowthView;
+  /**
+   * UX-02's facts for the mic sheet (PRIVACY_AND_CONSENT.md §8), present when the page can hear. `providers` is who
+   * receives the person's audio, from configuration (the transcription provider). `locations` (processing locations)
+   * and `retention` (the verified audio retention line) are legal launch facts not resolved yet (PRIV-039, a legal
+   * to-do): the server leaves them out, and the sheet says the providers are listed in Privacy until all three are set.
+   */
+  voiceNotice?: { providers: string; locations?: string; retention?: string };
 }
 
 /* ---------- the pet over a group (Circles S4): GET circle answers PetCircle ---------- */
@@ -182,7 +196,10 @@ export interface TalkResponse {
   bondMilestone?: number;
 }
 
-/** POST /talk-voice (multipart: `audio` Blob). Audio is base64 speech as callTurn returns it. */
+/**
+ * POST /talk-voice (multipart: `audio` Blob, optional `handsFree` = "true" in hands-free mode). Audio is base64 speech
+ * as callTurn returns it. With `?stream=1` the answer is NDJSON TalkVoiceStreamEvent lines instead (design §8A.3).
+ */
 export interface TalkVoiceResponse {
   transcript: string;
   reply: string;
@@ -192,6 +209,25 @@ export interface TalkVoiceResponse {
   goodbye?: boolean;
   bondMilestone?: number;
 }
+
+/**
+ * POST /talk-voice?stream=1: `application/x-ndjson`, one event per line, in this order: `transcript`, `reply`, then one
+ * `sentence` per spoken piece (`i` from 0, in order; base64 `audio` with its `mimeType`, `audio/mpeg` for ElevenLabs and
+ * `audio/wav` for Gemini, absent when that piece could not be synthesized), then `done`. No `sentence` events at all
+ * when the agent has no voice or the server cannot speak. An empty transcript is `transcript` "" then `done`. A failure
+ * after the stream began is the last line, `error`, and nothing more is spoken (`settings_changed`: authority changed
+ * mid-reply). A failure before the first line is the route's ordinary JSON error with its HTTP status.
+ */
+export type TalkVoiceStreamEvent =
+  | { type: 'transcript'; text: string }
+  | { type: 'reply'; text: string }
+  | { type: 'sentence'; i: number; text: string; audio?: string; mimeType?: string }
+  | { type: 'done'; turnId?: string; care?: PetCare; goodbye?: boolean; bondMilestone?: number }
+  | { type: 'error'; code: 'settings_changed' | 'pet_care_changed' | 'rate_limited' | 'conversation_failed' };
+
+/** POST /growth/confirm `{ momentId, noteId? }` (design §4.11): lit is 'agent', 'mine', or null when it already was. */
+export interface GrowthConfirmRequest { momentId: string; noteId?: string }
+export interface GrowthConfirmResponse { lit: 'agent' | 'mine' | null; growth?: PetGrowthView }
 
 /**
  * The person's care for every agent (the self-service copy of what the rights export carries), and its erasure.

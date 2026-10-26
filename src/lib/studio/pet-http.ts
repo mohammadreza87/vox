@@ -35,9 +35,13 @@ import { boundedStudioRequest } from './http';
 import { canUseAgent, formingDay, visibilityOf } from './permissions';
 import { petStoreFor, sweepPetCare, PetCareChangedError } from './pet-store';
 import { petPlayStoreFor, sweepPetPlay } from './pet-play-store';
+import { lightAgentMoment, petGrowthStoreFor } from './pet-growth-store';
+import { agentMoments, noteRef } from './growth';
+import { growthView, SEASON_MOMENT, type PetGrowthView } from '../pet/growth';
+import { receiptOwner } from '../circles/codec';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { trustedStudioRequestOrigin } from './request-origin';
-import { StudioError, type Studio } from './service';
+import { StudioError, type CallTurnSink, type Studio } from './service';
 import type { Agent, StudioState } from './types';
 import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
 import { digest } from '../adaptive/persistence/repository';
@@ -46,12 +50,12 @@ import { agentShortCode, parsePetLaunch, sameShort } from '../circles/codec';
 import { apply, decay, newCare, open, safeZone, talk, type CareResult } from '../pet/care';
 import { isGoodbye } from '../pet/goodbye';
 import {
-  activeSeason, applyPlay, ASK_IDS, BOOK_MOMENT_IDS, GAME_IDS, KEEPSAKE_IDS, newPlay, PLAY_ROOMS, playView, ROUND_OUTCOMES, SEASON_IDS,
+  activeSeason, applyPlay, ASK_IDS, BOOK_MOMENT_IDS, GAME_IDS, KEEPSAKE_IDS, MOMENT_ID, newPlay, PLAY_LIMITS, PLAY_ROOMS, playView, roomMoment, ROUND_OUTCOMES, SEASON_IDS,
   SEED_KINDS, TIP_IDS, WEAR_SLOTS, WEARABLE_IDS, type PetPlayView, type PlayResponse, type SeasonId,
 } from '../pet/play';
 import {
-  PET_ACTIONS, PET_TZ_HEADER, type CareResponse, type PetAction, type PetCare, type PetErrorCode,
-  type PetPrivateView, type PetRole, type PetView, type TalkResponse, type TalkVoiceResponse,
+  PET_ACTIONS, PET_TZ_HEADER, type CareResponse, type GrowthConfirmResponse, type PetAction, type PetCare, type PetErrorCode,
+  type PetPrivateView, type PetRole, type PetView, type TalkResponse, type TalkVoiceResponse, type TalkVoiceStreamEvent,
 } from '../pet/types';
 
 const AGENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -86,9 +90,14 @@ const playSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('tipDismissed'), tip: oneOf(TIP_IDS) }).strict(),
   z.object({ op: z.literal('askSeen'), ask: oneOf(ASK_IDS) }).strict(),
   z.object({ op: z.literal('askDeclined'), ask: oneOf(ASK_IDS) }).strict(),
+  z.object({ op: z.literal('askAccepted'), ask: oneOf(ASK_IDS) }).strict(),
   z.object({ op: z.literal('seasonCelebrated'), season: oneOf(SEASON_IDS) }).strict(),
   z.object({ op: z.literal('roomVisited'), room: oneOf(PLAY_ROOMS) }).strict(),
 ]);
+const NOTE_COPY_ID = /^[0-9a-z]{1,11}-[A-Za-z0-9_-]{12}$/;
+/** POST growth/confirm (design §4.11): the person tapped yes on "Shall I keep this as …?" after an explicit save. */
+const growthConfirmSchema = z.object({ momentId: z.string().regex(MOMENT_ID), noteId: z.string().regex(NOTE_COPY_ID).optional() }).strict();
+const MAX_GROWTH_BYTES = 512;
 /** An open moves the play record's `seenAt` (the guest sweep's clock) at most this often: one small write a day, not one per open. */
 const PLAY_SEEN_EVERY_MS = 12 * 60 * 60 * 1000;
 
@@ -177,7 +186,7 @@ export function souvenir(agentId: string, userId: number, now: number): string {
 /** Server time the care rules run on (the Studio clock, so tests control it). */
 const clock = (studio: Studio) => (studio.deps.now?.() ?? new Date()).getTime();
 
-type PetRoute = 'view' | 'export' | 'care' | 'play' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase';
+type PetRoute = 'view' | 'export' | 'care' | 'play' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase' | 'growth-confirm';
 /** What a manager-signed launch (S4) may do: the person's own pet and the circle. Talk stays with the agent's own bot (the DM). */
 const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play', 'circle', 'circle-decision', 'circle-leave', 'notes', 'notes-erase']);
 /**
@@ -186,7 +195,7 @@ const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play', 'c
  */
 const RELAXABLE: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play']);
 /** Agent-signed routes that act as the person (talk) or record their consent: a 1 h window instead of 24 h. */
-const STRICT_AGE: ReadonlySet<PetRoute> = new Set(['talk', 'talk-voice', 'circle-decision', 'circle-leave']);
+const STRICT_AGE: ReadonlySet<PetRoute> = new Set(['talk', 'talk-voice', 'circle-decision', 'circle-leave', 'growth-confirm']);
 /** Moved to the VoxxBot-signed My data page (my-data-http.ts): never authorised by any pet initData again. */
 const MOVED: ReadonlySet<PetRoute> = new Set(['export', 'forget']);
 const COPY_ID = /^[0-9a-z]{1,11}-[A-Za-z0-9_-]{12}$/;
@@ -196,6 +205,7 @@ function routeOf(method: string, path: string[]): { route: PetRoute; copyId?: st
   if (method === 'DELETE') return path.length === 2 && path[0] === 'notes' && COPY_ID.test(path[1]) ? { route: 'notes-erase', copyId: path[1] } : null;
   if (method !== 'POST') return null;
   if (action === 'circle/decision' || action === 'circle/leave') return { route: action === 'circle/decision' ? 'circle-decision' : 'circle-leave' };
+  if (action === 'growth/confirm') return { route: 'growth-confirm' };
   return action === 'care' || action === 'play' || action === 'talk' || action === 'talk-voice' || action === 'forget' ? { route: action } : null;
 }
 
@@ -341,20 +351,44 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       }
     };
 
+    /**
+     * The growth moments as this person sees them (design §4.11): the agent's definitions, the agent-wide lit records
+     * and this person's own (`litMine`). Undefined when the growth store fails: a broken store never closes the pet.
+     */
+    const readGrowth = async (litMine: ReadonlyArray<{ id: string }>): Promise<PetGrowthView | undefined> => {
+      try {
+        return growthView(agentMoments(agent), await (await petGrowthStoreFor(studio)).get(agent.id), litMine);
+      } catch {
+        (studio.deps.logger ?? console).warn('[studio] pet_growth_read_failed');
+        return undefined;
+      }
+    };
+    /** Lights an agent-wide moment after a play op; never fails the request (logged, content-free). */
+    const lightShared = async (id: string, kind: 'room' | 'season', at: number) => {
+      try { await lightAgentMoment(studio, agent.id, { id, kind, at }); }
+      catch { (studio.deps.logger ?? console).warn('[studio] pet_growth_light_failed'); }
+    };
+
     if (route === 'view') {
       const dataUrl = studio.dataLink();
       const opened = await step((care, at) => { const o = open(care, at, stage); return { care: o.care, result: { ...o, at } }; });
       const play = await readPlay(opened.at, opened.care.tz);
+      // Growth moments belong to the agent's circle (design §4.11): a guest of a public agent never sees them.
+      const growth = role === 'guest' ? undefined : await readGrowth(play?.litMine ?? []);
+      const listen = role !== 'guest' && !launched && (!!studio.deps.openai || !!studio.deps.eleven);
       const view: PetView = {
         careEpoch: expectedEpoch, agentId: agent.id, name: agent.persona.name, look: normalizeLook(agent.look), stage, formingDay: formingDay(agent, new Date(now)),
         botUsername: agent.bot.username, voice: !!agent.voice && (studio.deps.tts !== undefined ? !!studio.deps.tts?.canSynthesize : !!studio.deps.eleven),
-        listen: role !== 'guest' && !launched && (!!studio.deps.openai || !!studio.deps.eleven), role, care: opened.care, now: opened.at,
+        listen, role, care: opened.care, now: opened.at,
+        // UX-02: who hears the audio is the transcription provider callTurn uses (OpenAI first); locations and retention are unresolved
+        ...(listen ? { voiceNotice: { providers: studio.deps.openai ? 'OpenAI' : 'ElevenLabs' } } : {}),
         ...(launched ? { talkInDm: true as const } : {}),
         ...(dataUrl ? { dataUrl } : {}),
         ...(opened.welcome ? { welcome: { souvenir: souvenir(agent.id, user.id, opened.at), awayMs: opened.welcome.awayMs } } : {}),
         ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
         ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
         ...(play ? { play } : {}),
+        ...(growth ? { growth } : {}),
       };
       finalCareFence();
       return json(view);
@@ -382,15 +416,68 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
           if (elsewhere) celebratedElsewhere = new Set([input.season]);
         }
       }
+      const moments = agentMoments(agent);
+      const accessMoments = input.op === 'askAccepted' ? moments.filter((m) => m.kind === 'access').map((m) => m.id) : undefined;
       const done = await plays.update(agent.id, user.id, (current) => {
         if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
         const at = Math.max(clock(studio), current?.updatedAt ?? 0);
         const r = applyPlay(current ?? newPlay(agent.id, user.id, at), input, { now: at, tz: zone, stage, formed, bond: care?.bond ?? 0,
-          ...(celebratedElsewhere ? { celebratedElsewhere } : {}) });
+          ...(celebratedElsewhere ? { celebratedElsewhere } : {}), ...(accessMoments ? { accessMoments } : {}) });
         return { play: r.play, result: { ...r, at } };
       }, expectedEpoch);
+      // Growth (§4.11), server-side only: a first room visit also lights the agent-wide room moment the first time anyone
+      // visits; a first festival celebration lights its season moment for the whole agent. An accepted ask lit a personal
+      // access moment inside applyPlay. Nothing is lit on a guard (a repeat, a cap, out of season).
+      // visits. A guest's play never lights the agent's moments and never sees them (§4.11: the circle's, not the public's).
+      const shares = !done.guard && role !== 'guest';
+      if (shares && input.op === 'roomVisited') await lightShared(roomMoment(input.room), 'room', done.at);
+      if (shares && input.op === 'seasonCelebrated') await lightShared(SEASON_MOMENT(input.season), 'season', done.at);
+      const view = playView(done.play, done.at, zone);
+      const growth = role !== 'guest' && (input.op === 'roomVisited' || input.op === 'seasonCelebrated' || input.op === 'askAccepted') ? await readGrowth(view.litMine) : undefined;
       finalCareFence();
-      const body: PlayResponse = { play: playView(done.play, done.at, zone), now: done.at, ...(done.guard ? { guard: done.guard } : {}) };
+      const body: PlayResponse = { play: view, now: done.at, ...(done.guard ? { guard: done.guard } : {}), ...(growth ? { growth } : {}) };
+      return json(body);
+    }
+
+    // Growth confirm (§4.11): the only way a taught moment lights. The person made an explicit "remember this" save and
+    // then tapped yes on the pet's suggested match; never inferred from conversation. Members only, like talk.
+    if (route === 'growth-confirm') {
+      if (role === 'guest') return fail('guest_talk', 403, { botUsername: agent.bot.username });
+      if (contentType(request) !== 'application/json') return fail('json_required', 415);
+      await limiter.consume('mutation', user.id);
+      const input = growthConfirmSchema.parse(await jsonBody(request, MAX_GROWTH_BYTES));
+      const moment = agentMoments(agent).find((m) => m.id === input.momentId && m.kind === 'taught');
+      if (!moment) return fail('invalid_request', 404, { message: 'moment_not_found' });
+      // The source note: the person's own active copy that names this agent (the id names its owner; nobody else's is read).
+      let origin: 'dm' | 'group' | undefined;
+      if (input.noteId) {
+        const at = clock(studio);
+        const copy = receiptOwner(input.noteId) === user.id && studio.deps.notesLedger
+          ? (await studio.deps.notesLedger.read(user.id))?.copies.find((c) => c.copyId === input.noteId && c.status === 'active'
+            && c.agentIds.includes(agent.id) && Date.parse(c.expiresAt) > at) : undefined;
+        if (!copy) return fail('invalid_request', 404, { message: 'note_not_found' });
+        origin = copy.origin;
+      }
+      const ref = input.noteId ? noteRef(studio.deps.secret, input.noteId) : undefined;
+      let lit: GrowthConfirmResponse['lit'] = null;
+      // A fact saved for the circle teaches the whole agent; a private save (or no note named) lights it for this person only.
+      if (origin === 'group') {
+        if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
+        lit = await lightAgentMoment(studio, agent.id, { id: moment.id, kind: 'taught', at: clock(studio), ...(ref ? { ref } : {}) }) ? 'agent' : null;
+      } else {
+        const plays = await petPlayStoreFor(studio);
+        lit = await plays.update(agent.id, user.id, (current) => {
+          if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
+          const at = Math.max(clock(studio), current?.updatedAt ?? 0);
+          const play = current ?? newPlay(agent.id, user.id, at);
+          if (play.litMine.some((l) => l.id === moment.id) || play.litMine.length >= PLAY_LIMITS.litMine) return { play: null, result: null };
+          return { play: { ...play, updatedAt: at, seenAt: Math.max(play.seenAt, at), litMine: [...play.litMine, { id: moment.id, litAt: at, ...(ref ? { ref } : {}) }] }, result: 'mine' as const };
+        }, expectedEpoch);
+      }
+      const current = await (await petPlayStoreFor(studio)).get(agent.id, user.id);
+      const growth = await readGrowth(current?.litMine ?? []);
+      finalCareFence();
+      const body: GrowthConfirmResponse = { lit, ...(growth ? { growth } : {}) };
       return json(body);
     }
 
@@ -469,7 +556,27 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     if (audio === null || typeof audio === 'string') return fail('invalid_request', 400);
     // Spoken replies only when the agent has its own voice (brief §5 #8): otherwise no speech is made at all.
     const spoken = !!agent.voice;
-    const turn = await studio.callTurn(member, agent.id, await audio.arrayBuffer(), audio.type || 'audio/webm', 'work', request.signal, { surface: 'pet', speak: spoken, authorize, authorizeNow, beforeDelivery });
+    // Hands-free (§8A.2): a device-local mode; the page says so per turn and the prompt gets the hands-free frame.
+    const handsFree = form.get('handsFree');
+    const options = { surface: 'pet' as const, speak: spoken, authorize, authorizeNow, beforeDelivery, ...(handsFree === 'true' || handsFree === '1' ? { handsFree: true } : {}) };
+    const bytes = await audio.arrayBuffer(), mime = audio.type || 'audio/webm';
+    // ?stream=1 (§8A.3): NDJSON, one event per sentence as soon as it is spoken. Without it, one JSON body as before.
+    if (new URL(request.url).searchParams.get('stream') === '1') {
+      return await ndjsonTurn(async (emit) => {
+        const sink: CallTurnSink = {
+          transcript: (text) => emit({ type: 'transcript', text }),
+          reply: (text) => emit({ type: 'reply', text }),
+          sentence: ({ i, text, audio: speech, mimeType }) => emit({ type: 'sentence', i, text, ...(speech && mimeType ? { audio: speech.toString('base64'), mimeType } : {}) }),
+        };
+        const turn = await studio.callTurnStream(member, agent.id, bytes, mime, 'work', request.signal, options, sink);
+        if (!turn.transcript) { emit({ type: 'transcript', text: '' }); return { type: 'done' }; }
+        // `settled` is set by beforeDelivery; a turn that somehow skipped it still ends cleanly (no care in the event).
+        const done = settled;
+        return { type: 'done', ...(turn.turnId ? { turnId: turn.turnId } : {}), ...(done ? { care: done.care } : {}),
+          ...(isGoodbye(turn.transcript) ? { goodbye: true } : {}), ...(done?.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }) };
+      });
+    }
+    const turn = await studio.callTurn(member, agent.id, bytes, mime, 'work', request.signal, options);
     if (!turn.transcript) {
       const empty: TalkVoiceResponse = { transcript: '', reply: '' };
       return json(empty);
@@ -492,6 +599,49 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     if (StudioError.is(error)) return fail(error.status === 409 || error.status === 503 ? 'conversation_failed' : 'invalid_request', error.status);
     return fail('pet_unavailable', 503);
   }
+}
+
+/** The fixed code an NDJSON stream ends with when the turn fails after the 200 headers went out. */
+function streamErrorCode(error: unknown): Extract<TalkVoiceStreamEvent, { type: 'error' }>['code'] {
+  if (PetCareChangedError.is(error)) return 'pet_care_changed';
+  if (StudioError.is(error) && error.status === 409) return 'settings_changed';
+  if (StudioRateLimitError.is(error)) return 'rate_limited';
+  return 'conversation_failed';
+}
+
+/**
+ * POST talk-voice?stream=1 (design §8A.3): `application/x-ndjson`, one JSON event per line, in order (transcript,
+ * reply, sentence…, done). Nothing is sent until the first event exists, so a turn refused before it (not permitted,
+ * no transcript provider) still answers with its usual HTTP status and JSON error; after that, a failure is the last
+ * line, `{ "type": "error", "code" }`, and nothing further is spoken.
+ */
+async function ndjsonTurn(run: (emit: (event: TalkVoiceStreamEvent) => void) => Promise<TalkVoiceStreamEvent>): Promise<Response> {
+  const encoder = new TextEncoder();
+  const queue: string[] = [];
+  let started = false, finished = false;
+  let wake: (() => void) | null = null;
+  let firstEvent!: () => void;
+  const first = new Promise<void>((resolve) => { firstEvent = resolve; });
+  const push = (event: TalkVoiceStreamEvent) => { queue.push(`${JSON.stringify(event)}\n`); wake?.(); };
+  const task = run((event) => { started = true; push(event); firstEvent(); })
+    .then((done) => { started = true; push(done); }, (error: unknown) => {
+      if (!started) throw error;
+      push({ type: 'error', code: streamErrorCode(error) });
+    })
+    .finally(() => { finished = true; wake?.(); });
+  // A failure before any event is the route's ordinary error response.
+  await Promise.race([first, task]);
+  task.catch(() => undefined);
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (!queue.length && !finished) await new Promise<void>((resolve) => { wake = resolve; });
+      wake = null;
+      const line = queue.shift();
+      if (line !== undefined) controller.enqueue(encoder.encode(line));
+      else controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' } });
 }
 
 /**

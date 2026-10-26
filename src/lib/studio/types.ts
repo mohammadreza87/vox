@@ -8,6 +8,8 @@
  * fire & re-hire.
  */
 
+import type { AgentGrowth } from '../pet/growth';
+
 export type Role = 'owner' | 'superadmin' | 'admin' | 'member' | 'pending';
 
 export interface GroupBehavior {
@@ -150,6 +152,13 @@ export interface AgentVoice {
   source: 'design' | 'library' | 'default';
   /** What the person picked when voiceId is the account's own copy: the library voice id or the Voice Design preview id */
   sourceId?: string;
+  /**
+   * The agent's Gemini voice (design §8A.3, open decision 16: the provider is chosen per agent at hire). Used when the
+   * server speaks through Gemini (STUDIO_TTS_PROVIDER=gemini): a prebuilt voice name from Google's list and an optional
+   * natural-language style note. Absent: STUDIO_GEMINI_TTS_VOICE (default Achird) with the persona's voice brief as style.
+   * An ElevenLabs voice id is never reused by Gemini, and no person's voice is ever replicated (PRIV-025).
+   */
+  gemini?: { voiceName: string; style?: string };
 }
 
 export type AgentStatus = 'draft' | 'awaiting_bot' | 'active' | 'fired';
@@ -178,6 +187,12 @@ export interface Agent {
   persona: PersonaSpec;
   look: AgentLook;
   voice?: AgentVoice;
+  /**
+   * Growth moments (design §4.11): definitions only, drafted at spawn (persona.ts) or the role family's default set,
+   * editable by the creator while forming and fixed after lockAt. Absent on agents hired before growth existed (the pet
+   * shows the default set). Kept under about 6 KB (open decision 15). Lit records live in `studio_pet_growth/{agentId}`.
+   */
+  growth?: AgentGrowth;
   /** Draft voice previews from Voice Design, kept until one is chosen */
   voicePreviews?: Array<{ generatedVoiceId: string; file: string }>;
   createdBy: number;

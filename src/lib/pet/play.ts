@@ -17,6 +17,7 @@
 
 import { safeZone } from './care';
 import type { Stage } from './types';
+import type { PetGrowthView } from './growth';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -88,7 +89,7 @@ const BEST_PAGE: Readonly<Record<GameId, BookMomentId>> = { bop: 'bestBop', star
 /** Rooms whose first visit lights a personal `room` growth moment (§4.11). Home is where the pet starts, so it lights nothing. */
 export type PlayRoom = 'play' | 'garden' | 'closet' | 'bedroom' | 'book';
 export const PLAY_ROOMS: readonly PlayRoom[] = ['play', 'garden', 'closet', 'bedroom', 'book'];
-/** A growth moment id: a stable slug (agent-specific ids come from the persona drafter in a later wave). */
+/** A growth moment id: a stable slug (drafted ids come from the persona drafter, studio/growth.ts). */
 export const MOMENT_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 export const roomMoment = (room: PlayRoom) => `room-${room}`;
 
@@ -142,7 +143,8 @@ export interface PlayGame {
 }
 
 export interface PlayTip { shown: number; dismissed: boolean; lastShownAt?: number; lastDay?: string }
-export interface PlayAsk { lastAskedAt: number; declined: number; lastDeclinedAt?: number; lastDay?: string }
+/** `acceptedAt`: the person said yes in context (askAccepted); the ask is never offered again and may light an `access` moment. */
+export interface PlayAsk { lastAskedAt: number; declined: number; lastDeclinedAt?: number; lastDay?: string; acceptedAt?: number }
 
 /** One person's play state for one agent: `studio_pet_play/{agentId}_{userId}`. All times are epoch ms. */
 export interface PetPlay {
@@ -162,8 +164,11 @@ export interface PetPlay {
   asks: Partial<Record<AskId, PlayAsk>>;
   /** festival → the Persian year it was last celebrated with this agent */
   seasons: Partial<Record<SeasonId, number>>;
-  /** growth moments lit only for this person (§4.11) */
-  litMine: { id: string; litAt: number }[];
+  /**
+   * growth moments lit only for this person (§4.11). `ref`: a privately taught moment's opaque source-note hash
+   * (studio/growth.ts noteRef), so erasing that note takes the moment back; never shown in the view.
+   */
+  litMine: { id: string; litAt: number; ref?: string }[];
 }
 
 export function newPlay(agentId: string, userId: number, now: number): PetPlay {
@@ -256,7 +261,7 @@ export interface PetPlayView {
   book: { id: BookMomentId; at: number }[];
   games: Partial<Record<GameId, { rounds: RoundsBucket; best: boolean; zen: boolean }>>;
   tips: Partial<Record<TipId, { shown: number; dismissed: boolean }>>;
-  asks: Partial<Record<AskId, { lastAskedAt: number; declined: number }>>;
+  asks: Partial<Record<AskId, { lastAskedAt: number; declined: number; accepted?: true }>>;
   seasons: Partial<Record<SeasonId, number>>;
   litMine: { id: string; litAt: number }[];
   /** the festival on now in the person's zone, if any */
@@ -272,14 +277,14 @@ export function playView(play: PetPlay, now: number, tz: string): PetPlayView {
   const tips: PetPlayView['tips'] = {};
   for (const id of TIP_IDS) { const t = play.tips[id]; if (t) tips[id] = { shown: t.shown, dismissed: t.dismissed }; }
   const asks: PetPlayView['asks'] = {};
-  for (const id of ASK_IDS) { const a = play.asks[id]; if (a) asks[id] = { lastAskedAt: a.lastAskedAt, declined: a.declined }; }
+  for (const id of ASK_IDS) { const a = play.asks[id]; if (a) asks[id] = { lastAskedAt: a.lastAskedAt, declined: a.declined, ...(a.acceptedAt !== undefined ? { accepted: true as const } : {}) }; }
   const season = activeSeason(now, tz)?.season;
   const g = play.garden;
   const garden: PetPlayView['garden'] = g ? { seed: g.seed, plantedAt: g.plantedAt, waterings: g.waterings,
     ...(g.bloomedAt !== undefined ? { bloomedAt: g.bloomedAt } : {}), state: gardenState(g, now, tz) } : null;
   return {
     items: play.items.map((i) => ({ ...i })), wearing: { ...play.wearing }, garden, book: play.book.map((b) => ({ ...b })),
-    games, tips, asks, seasons: { ...play.seasons }, litMine: play.litMine.map((m) => ({ ...m })),
+    games, tips, asks, seasons: { ...play.seasons }, litMine: play.litMine.map((m) => ({ id: m.id, litAt: m.litAt })),
     ...(season ? { season } : {}), tipsToday: tipsShownOn(play, today),
   };
 }
@@ -290,7 +295,7 @@ const tipsShownOn = (play: PetPlay, day: string) => TIP_IDS.filter((id) => play.
 export function askEligible(play: PetPlay, id: AskId, now: number): boolean {
   const a = play.asks[id];
   if (!a) return true;
-  if (a.declined >= PLAY_LIMITS.maxDeclines) return false;
+  if (a.acceptedAt !== undefined || a.declined >= PLAY_LIMITS.maxDeclines) return false;
   return a.declined === 0 || now - a.lastAskedAt >= PLAY_LIMITS.reaskAfterMs;
 }
 
@@ -316,11 +321,13 @@ export type PlayMutation =
   | { op: 'tipDismissed'; tip: TipId }
   | { op: 'askSeen'; ask: AskId }
   | { op: 'askDeclined'; ask: AskId }
+  /** the person said yes to this permission moment in context: lights the agent's next personal `access` growth moment */
+  | { op: 'askAccepted'; ask: AskId }
   | { op: 'seasonCelebrated'; season: SeasonId }
   | { op: 'roomVisited'; room: PlayRoom };
 export type PlayOp = PlayMutation['op'];
 export const PLAY_OPS: readonly PlayOp[] = ['lightItem', 'wear', 'plantSeed', 'waterSeed', 'bookMoment', 'gameRound', 'tipSeen', 'tipDismissed',
-  'askSeen', 'askDeclined', 'seasonCelebrated', 'roomVisited'];
+  'askSeen', 'askDeclined', 'askAccepted', 'seasonCelebrated', 'roomVisited'];
 
 /**
  * Why a mutation did less than asked. Never an error: the page plays a cute reaction or nothing.
@@ -341,6 +348,8 @@ export interface PlayContext {
   bond: number;
   /** festivals this person already celebrated this Persian year with another agent (§4.10 "across all their agents") */
   celebratedElsewhere?: ReadonlySet<SeasonId>;
+  /** the agent's `access` growth moment ids in order (§4.11): askAccepted lights the first one not yet lit for this person */
+  accessMoments?: readonly string[];
 }
 
 export interface PlayResult { play: PetPlay; guard?: PlayGuard }
@@ -488,6 +497,15 @@ export function applyPlay(current: PetPlay, m: PlayMutation, ctx: PlayContext): 
       play.asks[m.ask] = { ...a, declined: Math.min(a.declined + 1, PLAY_LIMITS.maxDeclines), lastDeclinedAt: Math.max(now, a.lastAskedAt) };
       return done();
     }
+    case 'askAccepted': {
+      const a = play.asks[m.ask];
+      if (a?.acceptedAt !== undefined) return done('noop');
+      play.asks[m.ask] = { ...(a ?? { lastAskedAt: now, declined: 0 }), acceptedAt: now };
+      // A personal grant lights a personal moment (§4.11 "personal grants: that person"), never inferred from usage.
+      const next = (ctx.accessMoments ?? []).find((id) => MOMENT_ID.test(id) && !play.litMine.some((l) => l.id === id));
+      if (next && play.litMine.length < PLAY_LIMITS.litMine) play.litMine.push({ id: next, litAt: now });
+      return done();
+    }
     case 'seasonCelebrated': {
       const on = activeSeason(now, tz);
       if (!on || on.season !== m.season) return done('out_of_season');
@@ -516,6 +534,7 @@ const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => type
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 const dayKey = (v: unknown) => typeof v === 'string' && DAY_KEY.test(v) ? v : undefined;
 const HASH = /^[0-9a-f]{8}$/;
+const NOTE_REF = /^[0-9a-f]{16,64}$/;
 const obj = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
 /**
@@ -572,7 +591,8 @@ export function sanitizePlay(raw: unknown, agentId: string, userId: number): Pet
     if (!Object.keys(o).length) continue;
     const lastDay = dayKey(o.lastDay);
     play.asks[id] = { lastAskedAt: num(o.lastAskedAt, 0), declined: count(o.declined, PLAY_LIMITS.maxDeclines),
-      ...(typeof o.lastDeclinedAt === 'number' && Number.isFinite(o.lastDeclinedAt) ? { lastDeclinedAt: o.lastDeclinedAt } : {}), ...(lastDay ? { lastDay } : {}) };
+      ...(typeof o.lastDeclinedAt === 'number' && Number.isFinite(o.lastDeclinedAt) ? { lastDeclinedAt: o.lastDeclinedAt } : {}), ...(lastDay ? { lastDay } : {}),
+      ...(typeof o.acceptedAt === 'number' && Number.isFinite(o.acceptedAt) ? { acceptedAt: o.acceptedAt } : {}) };
   }
   const seasons = obj(r.seasons);
   for (const id of SEASON_IDS) {
@@ -582,7 +602,10 @@ export function sanitizePlay(raw: unknown, agentId: string, userId: number): Pet
   const lit = new Set<string>();
   for (const l of Array.isArray(r.litMine) ? r.litMine : []) {
     const o = obj(l);
-    if (typeof o.id === 'string' && MOMENT_ID.test(o.id) && !lit.has(o.id) && play.litMine.length < PLAY_LIMITS.litMine) { lit.add(o.id); play.litMine.push({ id: o.id, litAt: num(o.litAt, createdAt) }); }
+    if (typeof o.id === 'string' && MOMENT_ID.test(o.id) && !lit.has(o.id) && play.litMine.length < PLAY_LIMITS.litMine) {
+      lit.add(o.id);
+      play.litMine.push({ id: o.id, litAt: num(o.litAt, createdAt), ...(typeof o.ref === 'string' && NOTE_REF.test(o.ref) ? { ref: o.ref } : {}) });
+    }
   }
   return play;
 }
@@ -591,4 +614,5 @@ export function sanitizePlay(raw: unknown, agentId: string, userId: number): Pet
 
 /** POST …/play. `tz` rides in PET_TZ_HEADER and the care epoch in x-pet-care-epoch, as for care. */
 export type PlayRequest = PlayMutation;
-export interface PlayResponse { play: PetPlayView; now: number; guard?: PlayGuard }
+/** `growth`: the growth view after a roomVisited, seasonCelebrated or askAccepted op (it may have lit a moment). */
+export interface PlayResponse { play: PetPlayView; now: number; guard?: PlayGuard; growth?: PetGrowthView }

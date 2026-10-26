@@ -62,9 +62,10 @@ export const faDigits = (s: string | number): string => String(s).replace(/[0-9]
 
 /** Load the catalogue chunk(s) for a language (English always, as the fallback). Safe to call often. */
 export function loadStrings(lang: PetLang = petLang()): Promise<void> {
-  pending.en ??= import('./en').then((m) => { loaded.en = m.EN; });
+  // a failed chunk is tried again on the next call (Retry), never cached as failed
+  pending.en ??= import('./en').then((m) => { loaded.en = m.EN; }, (e) => { delete pending.en; throw e; });
   if (lang === 'en') return pending.en;
-  pending.fa ??= import('./fa').then((m) => { loaded.fa = m.FA; loaded.voiceOf = m.voiceOf; });
+  pending.fa ??= import('./fa').then((m) => { loaded.fa = m.FA; loaded.voiceOf = m.voiceOf; }, (e) => { delete pending.fa; throw e; });
   return Promise.all([pending.en, pending.fa]).then(() => {});
 }
 

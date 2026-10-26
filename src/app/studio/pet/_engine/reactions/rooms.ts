@@ -1,92 +1,287 @@
 /**
- * The engine's lazily loaded motion (design §10.3–§10.5, §3.1): the room transition, each room's idle beat and
- * reactions by their final names, lighting a growth moment, the settle float and the four moves lit moments
- * unlock. Its own chunk (§10.7): the engine preloads it a few seconds after start, off the first paint. Pure like
- * the reactions: `(ctx, …) → Beat[]`, randomness only through ctx.rng.
+ * The engine's lazily loaded motion (design §10.3–§10.5, §3.1, §8A): the room transition and each room's arrival,
+ * idle beats and reactions by their final names (Starfall's catch, near miss and round end, with Zen), lighting a
+ * growth moment, the settle float, the four moves lit moments unlock, one cycle of the Garden's guided breath, the
+ * hands-free listening hold and the breath between queued sentences. Its own chunk (§10.7): the engine preloads it a
+ * few seconds after start, off the first paint. Pure like the reactions: `(ctx, …) → Beat[]`, randomness only
+ * through ctx.rng (variants through ctx.variantHistory).
  */
 
-import type { Beat, ReactionCtx, Room, RoomReaction } from '../types';
-import { celebrate } from './celebrate';
-import { beat, burst, cue, end, jiggle, osc, side, squashX } from './util';
+import type { DetailName } from '../details';
+import type { Anchor, Beat, PoseTargets, ReactionCtx, ReactionKind, Room, RoomReaction, RoomReactOpts, SpringPreset } from '../types';
+import { beat, burst, cue, eared, end, hopMs, jiggle, osc, side, squashX } from './util';
 
-/** Room transition timing (§10.5): counter-lean, then lean with the slide (the backdrop swaps at the top), settle. */
-const RT = { counterMs: 60, swapMs: 150, settleMs: 200, totalMs: 300, counterDeg: 3, leanDeg: 6, lift: 2.5, reducedMs: 160 } as const;
+/** A variant in [0, n) never the same twice in a row for this key (the engine's variant memory). */
+const pick = (ctx: ReactionCtx, key: string, n = 3) => ctx.variantHistory.pick(key as ReactionKind, n);
 
-/** Each room's idle beat (§10.4): what the scheduler plays there between the mood's own beats. */
-export function roomIdle(ctx: ReactionCtx, room: Room): Beat[] {
+/**
+ * Room transition timing (§10.5, 300 ms): a 70 ms crouched counter-lean against the slide (anticipation), the lean
+ * with it on an arc (a lift and a little drift: never a straight line), a blink as the backdrop swaps at 150 ms,
+ * and a settle with one overshoot. Wave B doubles the counter-lean and the lean so the stills read.
+ */
+export const RT = { counterMs: 70, swapMs: 150, settleMs: 210, totalMs: 300, counterDeg: 5, leanDeg: 10, lift: 6, drift: 3, crouch: 0.95 } as const;
+
+/**
+ * Room change: `dir` 1 when the new room is to the right (the backdrop slides left). The eyes lead toward the new
+ * room, the body crouches and leans away, then swings with the slide (lifted, drifting a few px, stretched), the
+ * head trailing; the soft parts (ears, hair, bows) trail on their followers.
+ */
+export function roomLeave(_ctx: ReactionCtx, dir: -1 | 1): Beat[] {
+  const s = dir;
+  return end([
+    beat(0, { gazeX: s * 0.6, lean: -s * RT.counterDeg, sy: RT.crouch, headX: -s * 0.6 }, 'snap', { springs: { gazeX: 'eye' } }),
+    beat(RT.counterMs, { lean: s * RT.leanDeg, y: -RT.lift, x: s * RT.drift, sy: 1.05, headX: s * 1.6, headTilt: s * 3 }, 'snap', { springs: { y: 'pop', x: 'pop', headX: 'float' } }),
+    cue(RT.swapMs - 20, { blink: 'once' }),
+    beat(RT.settleMs, { lean: 0, y: 0, x: 0, sy: 1, headX: 0, headTilt: 0, gazeX: 0 }, 'pop'),
+  ], 'pop');
+}
+
+/** The room's hello right after the transition settles (≤ 1 s): what tells you where you are, even in a still. */
+export function roomArrive(ctx: ReactionCtx, room: Room): Beat[] {
   const s = side(ctx);
   switch (room) {
-    // ready bounce, eyes on the toy
+    // a ready bounce, eyes bright: two little hops on the spot
     case 'play': return end([
-      beat(0, { sy: 0.97 }, 'snap', { look: 'ball' }),
-      beat(110, { sy: 1.025 }, 'pop', { osc: osc('sy', 0.02, 3, 700) }),
-      beat(260, { sy: 1 }, 'pop'),
-      cue(900, { look: 'user' }),
+      beat(0, { sy: 0.93, pupil: 1.12 }, 'snap', { mouth: 'grin' }),
+      beat(90, { sy: 1.05 }, 'snap', { hop: { h: 5, land: 0.07 } }),
+      beat(330, { sy: 0.95 }, 'snap'),
+      beat(420, { sy: 1.03 }, 'snap', { hop: { h: 3, land: 0.05 } }),
+      beat(700, { sy: 1, pupil: 1 }, 'pop', { mouth: 'smile' }),
     ], 'pop');
-    // hovering over the pot, a slow bob; now and then it looks up at the sky (the rain to come)
+    // up into the air and a look at the sky
     case 'garden': return end([
-      beat(0, {}, 'float', { osc: osc('y', 1.6, 0.7, 1600) }),
-      beat(200, { gazeY: -0.7, gazeX: 0.2 * s }, 'eye', { blink: 'slow' }),
-      beat(260, { headY: -1.2 }, 'float'),
-      beat(1300, { gazeY: 0, gazeX: 0, headY: 0 }, 'float'),
+      beat(0, { gazeY: -0.8, gazeX: 0.2 * s }, 'eye', { mouth: 'o' }),
+      beat(60, { headY: -1.8, y: -4, sy: 1.03 }, 'float'),
+      cue(260, { blink: 'slow' }),
+      beat(750, { gazeY: 0, gazeX: 0, headY: 0, y: 0, sy: 1 }, 'float', { mouth: 'smile' }),
     ], 'float');
-    // a glance at the mirror, a little preen
+    // a quick turn to the mirror and a pleased sparkle
     case 'closet': return end([
-      beat(0, { gazeX: 0.7 * s, gazeY: -0.1 }, 'eye'),
-      beat(70, { headTilt: 4 * s }, 'float'),
-      beat(450, {}, 'pop', { osc: osc('rot', 2.5, 4, 450), mouth: 'smile' }),
-      beat(1100, { gazeX: 0, gazeY: 0, headTilt: 0 }, 'float', { mouth: 'X' }),
+      beat(0, { gazeX: 0.8, gazeY: -0.1 }, 'eye'),
+      beat(60, { headX: 2, headTilt: 5, lean: 3 }, 'float', { mouth: 'smile' }),
+      beat(360, { pupil: 1.12, sparkle: 0.6 }, 'snap', { springs: { sparkle: 'snap' } }),
+      beat(760, { gazeX: 0, gazeY: 0, headX: 0, headTilt: 0, lean: 0, pupil: 1, sparkle: 0 }, 'float'),
     ], 'float');
-    // a slow yawn with heavy lids
+    // a slow sink into the cosy room, lids heavy
     case 'bedroom': return end([
-      beat(0, { sy: 1.05, headY: -1, lidL: 0.85, lidR: 0.85 }, 'float', { mouth: 'yawn', expr: 'squeeze' }),
-      beat(700, { sy: 0.98, headY: 0.5 }, 'sleepy', { mouth: 'X', expr: 'idle' }),
-      cue(900, { blink: 'slow' }),
-      beat(1400, { sy: 1, headY: 0, lidL: 1, lidR: 1 }, 'sleepy'),
+      beat(0, { sy: 1.03, headY: -0.8 }, 'float', { mouth: 'o' }),
+      beat(380, { sy: 0.97, headY: 1.4, lidL: 0.6, lidR: 0.6 }, 'sleepy', { mouth: 'X' }),
+      beat(1000, { sy: 1, headY: 0, lidL: 1, lidR: 1 }, 'sleepy'),
     ], 'sleepy');
-    // reading: the eyes run along a line and back
+    // eyes straight down to the page
     case 'book': return end([
-      beat(0, { gazeX: -0.45, gazeY: 0.5 }, 'eye'),
-      beat(500, { gazeX: 0.45 }, 'float'),
-      beat(950, { gazeX: -0.45, gazeY: 0.6 }, 'eye', { blink: 'once' }),
-      beat(1400, { gazeX: 0, gazeY: 0 }, 'float'),
+      beat(0, { gazeY: 0.75, gazeX: -0.2 }, 'eye'),
+      beat(60, { headY: 2, headTilt: -2 }, 'float'),
+      cue(320, { blink: 'once' }),
+      beat(800, { gazeY: 0, gazeX: 0, headY: 0, headTilt: 0 }, 'float'),
     ], 'float');
-    default: return end([beat(0, { headTilt: 3 * s }, 'float'), beat(1100, { headTilt: 0 }, 'float')], 'float');
+    default: return end([beat(0, { sy: 1.03 }, 'pop', { mouth: 'smile', blink: 'slow' }), beat(500, { sy: 1 }, 'float')], 'float');
   }
 }
 
-/** The room reactions (§10.4): final names; Play, Garden, Closet, Bedroom and Life Book call these. */
-export function roomReaction(ctx: ReactionCtx, kind: RoomReaction, o: { won?: boolean } = {}): Beat[] {
+/**
+ * Each room's idle beat (§10.4, three variants each): what the scheduler plays there between the mood's own beats,
+ * over the room's held pose (extras.ts ROOMS). `target`: the page is steering the eyes (setGaze: Starfall's star),
+ * so Play's beats leave the eyes to it.
+ */
+export function roomIdle(ctx: ReactionCtx, room: Room, o: { target?: boolean } = {}): Beat[] {
+  const s = side(ctx);
+  switch (room) {
+    // Play: ready, springy, eyes on the toy (or the page's target)
+    case 'play': {
+      const look = o.target ? {} : { look: 'ball' as const };
+      switch (pick(ctx, 'roomIdle:play')) {
+        case 0: return end([
+          beat(0, { sy: 0.94 }, 'snap', { mouth: 'grin', ...look }),
+          beat(90, { sy: 1.05 }, 'snap', { hop: { h: 6, land: 0.07 } }),
+          beat(380, { sy: 0.94 }, 'snap'),
+          beat(470, { sy: 1.04 }, 'snap', { hop: { h: 4, land: 0.06 } }),
+          beat(820, { sy: 1 }, 'pop', { mouth: 'smile' }),
+        ], 'pop');
+        // a weight shift from foot to foot, on the balls of its feet
+        case 1: return end([
+          beat(0, { lean: -6 * s, x: -4 * s, sy: 0.96 }, 'pop', { mouth: 'grin', ...look }),
+          beat(340, { lean: 6 * s, x: 4 * s }, 'pop'),
+          beat(680, { lean: 0, x: 0, sy: 1 }, 'pop', { mouth: 'smile' }),
+        ], 'pop');
+        // an eager wiggle with bright eyes
+        default: return end([
+          beat(0, { pupil: 1.14, sparkle: 0.6, sy: 1.03 }, 'snap', { springs: { sparkle: 'snap' }, mouth: 'grin', ...look }),
+          beat(100, {}, 'pop', { osc: osc('rot', 3, 5, 520) }),
+          beat(760, { pupil: 1, sparkle: 0, sy: 1 }, 'float', { mouth: 'smile' }),
+        ], 'pop');
+      }
+    }
+    // Garden: hovering, chin up to the sky; a raindrop lands and it blinks it away with a smile
+    case 'garden': switch (pick(ctx, 'roomIdle:garden')) {
+      case 0: return end([
+        beat(0, { gazeY: -0.4, headY: -2 }, 'float'),
+        beat(520, { sy: 0.95, headY: 2.5, headTilt: 3 * s, lidL: 0.1, lidR: 0.1 }, 'snap', { haptic: 'soft' }),
+        beat(720, { sy: 1.03, headY: -1.5, headTilt: 0, lidL: 1, lidR: 1 }, 'pop', { mouth: 'smile' }),
+        beat(1350, { gazeY: 0, headY: 0, sy: 1 }, 'float'),
+      ], 'float');
+      case 1: return end([
+        beat(0, { gazeY: -0.8, gazeX: 0.3 * s }, 'eye', { blink: 'slow' }),
+        beat(80, { headY: -3.5, headTilt: 5 * s, y: -4 }, 'float', { mouth: 'o' }),
+        beat(1400, { gazeY: 0, gazeX: 0, headY: 0, headTilt: 0, y: 0 }, 'float', { mouth: 'smile' }),
+      ], 'float');
+      // a peek down at the pot, then back up
+      default: return end([
+        beat(0, { gazeY: 0.75, gazeX: 0.1 * s }, 'eye'),
+        beat(80, { headY: 5, y: 3 }, 'float', { mouth: 'smile' }),
+        beat(850, { gazeY: -0.4, headY: -1.5, y: -2 }, 'float'),
+        beat(1500, { gazeY: 0, gazeX: 0, headY: 0, y: 0 }, 'float'),
+      ], 'float');
+    }
+    // Closet: at the mirror (to the right), admiring, small pose shifts
+    case 'closet': switch (pick(ctx, 'roomIdle:closet')) {
+      case 0: return end([
+        beat(0, { gazeX: 0.4 }, 'eye'),
+        beat(60, { headTilt: 6, lean: 4, headX: 2 }, 'float', { mouth: 'smile' }),
+        beat(480, { sy: 0.96 }, 'snap'),
+        beat(580, { sy: 1.03 }, 'pop', { osc: osc('rot', 2.5, 4, 450) }),
+        beat(1300, { gazeX: 0, headTilt: 0, lean: 0, headX: 0, sy: 1 }, 'float'),
+      ], 'float');
+      // the other cheek to the mirror
+      case 1: return end([
+        beat(0, { gazeX: -0.25 }, 'eye'),
+        beat(60, { headX: -10, headTilt: -13, lean: -10 }, 'float', { mouth: 'grin' }),
+        beat(420, { pupil: 1.1, sparkle: 0.45 }, 'snap', { springs: { sparkle: 'snap' } }),
+        beat(1150, { gazeX: 0, headX: 0, headTilt: 0, lean: 0, pupil: 1, sparkle: 0 }, 'float', { mouth: 'smile' }),
+      ], 'float');
+      // chin up, proud, a little blush
+      default: return end([
+        beat(0, { headY: -3.5, sy: 1.05, pupil: 1.1, sparkle: 0.5 }, 'float', { springs: { sparkle: 'snap' }, mouth: 'smile' }),
+        beat(350, { blush: 0.55 }, 'float'),
+        beat(1300, { headY: 0, sy: 1, pupil: 1, sparkle: 0, blush: 0 }, 'float'),
+      ], 'float');
+    }
+    // Bedroom: heavy lids, a yawn, nodding off and catching itself, the lean drifting over (the held lean swaps side)
+    case 'bedroom': switch (pick(ctx, 'roomIdle:bedroom')) {
+      case 0: return end([
+        beat(0, { sy: 1.08, headY: -3.5, lidL: 0.85, lidR: 0.85 }, 'float', { mouth: 'yawn', expr: 'squeeze' }),
+        beat(750, { sy: 0.96, headY: 1.5 }, 'sleepy', { mouth: 'X', expr: 'idle' }),
+        cue(950, { blink: 'slow' }),
+        beat(1500, { sy: 1, headY: 0, lidL: 1, lidR: 1 }, 'sleepy'),
+      ], 'sleepy');
+      case 1: return end([
+        beat(0, { headY: 5, headTilt: 3, lidL: 0.3, lidR: 0.3, sy: 0.97 }, 'sleepy'),
+        beat(1300, { headY: -2.5, headTilt: 0, lidL: 1.5, lidR: 1.5, sy: 1.03 }, 'snap', { blink: 'double', mouth: 'o' }),
+        beat(1750, { headY: 0, lidL: 1, lidR: 1, sy: 1 }, 'float', { mouth: 'X' }),
+      ], 'float');
+      default: return end([
+        beat(0, { sy: 0.98, headY: 1.5 }, 'sleepy', { blink: 'slow' }),
+        beat(1500, { sy: 1, headY: 0 }, 'sleepy'),
+      ], 'sleepy');
+    }
+    // Life Book: reading lines, the page-flip nod, a curious "hm"
+    case 'book': switch (pick(ctx, 'roomIdle:book')) {
+      case 0: return end([
+        beat(0, { gazeX: -0.6 }, 'eye'),
+        beat(80, { headX: -2.2, headTilt: 2 }, 'float'),
+        beat(560, { gazeX: 0.6, headX: 2.2, headTilt: -2 }, 'float'),
+        beat(820, { gazeX: -0.6, gazeY: 0.2, headX: -2.2, headY: 1, headTilt: 2 }, 'eye', { springs: { headX: 'float', headY: 'float', headTilt: 'float' } }),
+        beat(1320, { gazeX: 0.6, headX: 2.2, headTilt: -2 }, 'float'),
+        beat(1650, { gazeX: 0, gazeY: 0, headX: 0, headY: 0, headTilt: 0 }, 'float'),
+      ], 'float');
+      case 1: return pageFlip(ctx);
+      default: return end([
+        beat(0, { headTilt: -9 * s, headY: -2.5, pupil: 1.1 }, 'float', { mouth: 'o' }),
+        beat(300, { browL: 0.8, browR: 0.8 }, 'snap'),
+        beat(950, { headTilt: 0, headY: 0, pupil: 1, browL: 0, browR: 0 }, 'float', { mouth: 'smile' }),
+      ], 'float');
+    }
+    // Home: the content float, a slow rise with a contented slow blink (the content mood's own beat at Home)
+    default: switch (pick(ctx, 'roomIdle:home')) {
+      case 0: return end([beat(0, { y: -5, sy: 1.025, headY: -1 }, 'float', { mouth: 'smile', blink: 'slow' }), beat(1200, { y: 0, sy: 1, headY: 0 }, 'float')], 'float');
+      case 1: return end([beat(0, { headTilt: 6 * s, y: -3, lean: 2 * s }, 'float', { mouth: 'smile' }), beat(1000, { headTilt: 0, y: 0, lean: 0 }, 'float')], 'float');
+      default: return end([beat(0, { sy: 1.03, lidL: 0.78, lidR: 0.78 }, 'float', { mouth: 'smile' }), beat(1000, { sy: 1, lidL: 1, lidR: 1 }, 'float')], 'float');
+    }
+  }
+}
+
+/** Life Book: the page turns, the eyes follow it over and a little nod lands on the new page. */
+function pageFlip(ctx: ReactionCtx): Beat[] {
+  const s = side(ctx);
+  return end([
+    beat(0, { gazeX: 0.6 * s, gazeY: -0.1 }, 'eye', { blink: 'once' }),
+    beat(60, { headX: 3 * s, headTilt: 3 * s, headY: -1.5 }, 'float'),
+    beat(380, { gazeX: -0.5 * s, gazeY: 0.3 }, 'eye'),
+    beat(430, { headY: 3.5, headX: -1.2 * s, headTilt: -2 * s }, 'snap'),
+    beat(660, { headY: 0 }, 'pop'),
+    beat(1050, { gazeX: 0, gazeY: 0, headX: 0, headTilt: 0 }, 'float'),
+  ], 'float');
+}
+
+/** One preset softer (Zen, §10.6): every game spring relaxes a step. */
+const SOFTER: Record<SpringPreset, SpringPreset> = { eye: 'snap', snap: 'pop', pop: 'float', jelly: 'float', float: 'sleepy', sleepy: 'sleepy' };
+/** Zen: one preset softer, no particles or haptics (nothing flashes), hops halved. */
+export function zen(beats: Beat[]): Beat[] {
+  return beats.map((b) => {
+    const z: Beat = { ...b, spring: SOFTER[b.spring] };
+    delete z.particles; delete z.haptic;
+    if (b.springs) z.springs = Object.fromEntries(Object.entries(b.springs).map(([c, p]) => [c, SOFTER[p as SpringPreset]]));
+    if (b.release) z.release = SOFTER[b.release];
+    if (b.hop) z.hop = { ...b.hop, h: b.hop.h * 0.5 };
+    return z;
+  });
+}
+
+/** The room reactions (§10.4): final names; Play (Starfall), Garden, Closet, Bedroom and Life Book call these. */
+export function roomReaction(ctx: ReactionCtx, kind: RoomReaction, o: RoomReactOpts = {}): Beat[] {
+  const beats = reaction(ctx, kind, o);
+  // (Zen's round end is its own quiet nod, already soft)
+  return o.zen && (kind === 'catch' || kind === 'nearMiss') ? zen(beats) : beats;
+}
+
+function reaction(ctx: ReactionCtx, kind: RoomReaction, o: RoomReactOpts): Beat[] {
   const s = side(ctx);
   switch (kind) {
-    // Starfall: a catch is a chomp squash with a sparkle
-    case 'catch': return end([
-      beat(0, { sy: 0.86, puff: 0.6 }, 'eye', { mouth: 'chew', expr: 'happy', haptic: 'light', particles: burst('sparkle', 2, 'mouth'), blink: 'suppress' }),
-      beat(90, { sy: 1.08 }, 'snap'),
-      beat(180, { sy: 1, puff: 0 }, 'pop', { osc: jiggle(ctx, 0.04, 5, 400) }),
-      cue(420, { expr: 'idle', mouth: 'smile', blink: 'allow' }),
-    ], 'pop');
-    // a miss is a glance after the star, never a frown
-    case 'nearMiss': return end([
-      beat(0, { gazeX: 0.65 * s, gazeY: 0.55, sy: 1.04 }, 'eye', { springs: { sy: 'snap' }, mouth: 'o', expr: 'surprised' }),
-      beat(80, { headTilt: 5 * s }, 'float'),
-      beat(500, { gazeX: 0, gazeY: 0, headTilt: 0, sy: 1 }, 'float', { expr: 'idle', mouth: 'smile', look: 'user' }),
-    ], 'float');
-    // round end: a win celebrates; otherwise a shrug-smile (wide, a tilt, a smile: never sad)
-    case 'roundEnd':
-      if (o.won) return celebrate({ type: 'celebrate', why: 'win' }, ctx);
+    // Starfall catch (≤ 450 ms, it comes often): a chomp, a small satisfied bounce, a glint in the eye
+    case 'catch': {
+      const v = pick(ctx, 'catch');
       return end([
-        beat(0, { ...squashX(ctx, 1.06), headTilt: 6 * s }, 'pop', { mouth: 'smile', expr: 'happy', look: 'user' }),
-        beat(160, {}, 'pop', { osc: osc('headTilt', 3, 3, 500) }),
-        beat(750, { sx: 1, sy: 1, headTilt: 0 }, 'float', { expr: 'idle' }),
+        beat(0, { sy: 0.91, puff: 0.45, pupil: 1.1, sparkle: 0.85 }, 'eye', { springs: { puff: 'snap', sparkle: 'eye' }, mouth: 'chew', haptic: 'light', blink: 'suppress', particles: burst('sparkle', 1, v === 1 ? 'eyeL' : 'eyeR') }),
+        beat(80, { sy: 1.05, y: -3, puff: 0, ...(v === 2 ? { headTilt: 4 * s } : {}) }, 'snap', { springs: { y: 'pop' } }),
+        beat(210, { sy: 1, y: 0, headTilt: 0 }, 'pop', { mouth: 'smile' }),
+        beat(270, { sparkle: 0, pupil: 1 }, 'pop', { blink: 'allow' }),
+      ], 'pop');
+    }
+    // a near miss: a startled little "o", a cute wobble after the star, then a smile (never a frown or droop)
+    case 'nearMiss': return end([
+      beat(0, { gazeX: 0.6 * s, gazeY: 0.5, sy: 1.03, pupil: 1.06 }, 'eye', { springs: { sy: 'snap' }, mouth: 'o', expr: 'surprised' }),
+      beat(90, { headTilt: 8 * s, x: 2 * s }, 'float'),
+      beat(150, {}, 'pop', { osc: [osc('rot', 7 * s, 3.5, 600), osc('headTilt', -5 * s, 3.5, 600)] }),
+      beat(600, { gazeX: 0, gazeY: 0, headTilt: 0, x: 0, sy: 1, pupil: 1 }, 'float', { expr: 'idle', mouth: 'smile' }),
+    ], 'float');
+    // round end: won, a happy hop with a few sparkles; not won, a gentle shrug and a wink (never droopy); Zen, no
+    // flourish at all: a content nod and a slow blink
+    case 'roundEnd': {
+      if (o.zen) return end([beat(0, { headY: 1 }, 'float', { mouth: 'smile', blink: 'slow' }), beat(500, { headY: 0 }, 'float')], 'float');
+      if (o.won) {
+        const h = 14, apex = 110 + hopMs(h) / 2;
+        return end([
+          beat(0, { sy: 0.9, pupil: 1.12 }, 'snap', { expr: 'happy', mouth: 'grin', haptic: 'success', blink: 'suppress' }),
+          ...(eared(ctx) ? [beat(100, { earL: 12, earR: -12 }, 'snap'), beat(apex + 200, { earL: 0, earR: 0 }, 'jelly')] : []),
+          beat(110, { sy: 1.08 }, 'snap', { hop: { h, land: 0.12 } }),
+          beat(apex, {}, 'pop', { particles: burst('sparkle', 4, 'head') }),
+          beat(780, { sy: 1, pupil: 1 }, 'pop', { expr: 'idle', mouth: 'smile', blink: 'allow' }),
+        ], 'pop');
+      }
+      const eye = s > 0 ? { lidR: 0.08 } : { lidL: 0.08 }, open = s > 0 ? { lidR: 1 } : { lidL: 1 };
+      return end([
+        beat(0, { ...squashX(ctx, 1.07), y: -3.5, headTilt: 6 * s }, 'pop', { mouth: 'smile', look: 'user' }),
+        beat(150, { y: 0, ...(eared(ctx) ? { earL: 8, earR: -8 } : {}) }, 'pop'),
+        beat(280, { ...eye, headTilt: 10 * s, blush: 0.4 }, 'snap', { springs: { blush: 'float' } }),
+        beat(640, { ...open }, 'pop'),
+        beat(900, { sx: 1, sy: 1, headTilt: 0, blush: 0, earL: 0, earR: 0 }, 'float'),
       ], 'float');
-    // Garden rain: rise and darken a little, drops fall, a relief shake, then lighter and fluffed
+    }
+    // Garden rain: rise and darken a little, drops fall from under the body onto the seed, a relief shake, lighter
     case 'rain': return end([
       beat(0, { sy: 0.95 }, 'snap'),
       beat(90, { y: -10, sy: 1.04, dim: 0.12, lidL: 0.85, lidR: 0.85 }, 'float', { springs: { dim: 'sleepy' }, mouth: 'o' }),
-      cue(420, { particles: burst('tear', 3, 'body') }),
-      cue(700, { particles: burst('tear', 3, 'body') }),
-      cue(980, { particles: burst('tear', 3, 'body') }),
+      ...[420, 640, 860, 1080].map((at) => cue(at, { particles: burst('drop', 3, 'ground') })),
       beat(1250, { dim: 0, lidL: 1, lidR: 1 }, 'float', { expr: 'squeeze', mouth: 'grin', osc: [osc('rot', 4, 6, 420), ...jiggle(ctx, 0.05, 9, 420)] }),
       beat(1700, { sy: 1.06 }, 'pop', { expr: 'happy', mouth: 'smile', particles: burst('wisp', 2, 'body') }),
       beat(1900, { sy: 1, y: 0 }, 'float'),
@@ -102,17 +297,12 @@ export function roomReaction(ctx: ReactionCtx, kind: RoomReaction, o: { won?: bo
     ], 'float');
     // Bedroom: a slow sleepy nod at every story line
     case 'storyNod': return end([
-      beat(0, { headY: 1.4, lidL: 0.85, lidR: 0.85 }, 'float', { mouth: 'smile' }),
+      beat(0, { headY: 1.6, lidL: 0.8, lidR: 0.8 }, 'float', { mouth: 'smile' }),
       beat(420, { headY: 0 }, 'sleepy'),
       beat(800, { lidL: 1, lidR: 1 }, 'sleepy'),
     ], 'sleepy');
     // Life Book: the page turns, the eyes follow it over
-    case 'pageFlip': return end([
-      beat(0, { gazeX: 0.6 * s, gazeY: 0.3 }, 'eye', { blink: 'once' }),
-      beat(60, { headX: 0.8 * s }, 'float'),
-      beat(380, { gazeX: -0.3 * s, gazeY: 0.5 }, 'eye'),
-      beat(800, { gazeX: 0, gazeY: 0, headX: 0 }, 'float'),
-    ], 'float');
+    case 'pageFlip': return pageFlip(ctx);
     // its own drawing: a little hop and a blush
     case 'ownDrawing': return end([
       beat(0, { pupil: 1.1, blush: 0.6 }, 'snap', { expr: 'happy', mouth: 'grin', springs: { blush: 'float' } }),
@@ -122,37 +312,32 @@ export function roomReaction(ctx: ReactionCtx, kind: RoomReaction, o: { won?: bo
   }
 }
 
-/**
- * Room change (§10.5, 300 ms): the eyes lead toward where the room goes, a 60 ms counter-lean against the slide
- * (anticipation), then the lean with it on an arc (a little lift: never a straight line), a blink as the backdrop
- * swaps, and a settle with one overshoot. `dir` 1: the new room is to the right (the backdrop slides left).
- */
-export function roomLeave(_ctx: ReactionCtx, dir: -1 | 1): Beat[] {
-  const s = dir;
-  return end([
-    beat(0, { gazeX: s * 0.45, lean: -s * RT.counterDeg, sy: 0.97 }, 'snap', { springs: { gazeX: 'eye' } }),
-    beat(RT.counterMs, { lean: s * RT.leanDeg, y: -RT.lift, sy: 1.03, headX: s * 0.8 }, 'snap', { springs: { y: 'pop', headX: 'float' } }),
-    cue(RT.swapMs - 20, { blink: 'once' }),
-    beat(RT.settleMs, { lean: 0, y: 0, sy: 1, headX: 0, gazeX: 0 }, 'pop'),
-  ], 'pop');
-}
+/** Where the pet looks when its new detail arrives (it admires it), and where the one twinkle comes from. */
+const LOOK_AT: Record<DetailName, { gaze: Partial<PoseTargets>; at: Anchor }> = {
+  glint: { gaze: {}, at: 'eyeR' },
+  pin: { gaze: { gazeX: -0.45, gazeY: 0.75 }, at: 'belly' },
+  charm: { gaze: { gazeX: 0.55, gazeY: 0.6 }, at: 'cheekR' },
+  keepsake: { gaze: { gazeX: -0.7, gazeY: 0.85 }, at: 'ground' },
+  seasonal: { gaze: { gazeX: 0.7, gazeY: 0.85 }, at: 'ground' },
+};
 
 /**
- * Lighting a growth moment (§10.3, ~1.2 s): the pet looks up as if remembering (the eyes lead, the head follows,
- * a slow blink), a soft glow swells, the new detail arrives with one overshoot (the UI fades it in on the
- * `litPeak` cue at 600 ms), then a small nod. Never confetti.
+ * Lighting a growth moment (§10.3, ~1.2 s): the pet looks up as if remembering (the eyes lead, the head follows, a
+ * slow blink), a soft glow swells, the new detail arrives with one overshoot (the `litPeak` cue at 600 ms) and the
+ * pet glances at it with one twinkle where it lands, then a small nod. Never confetti.
  */
-export function growthLit(ctx: ReactionCtx): Beat[] {
-  const s = side(ctx);
+export function growthLit(ctx: ReactionCtx, detail?: DetailName): Beat[] {
+  const s = side(ctx), d = detail ? LOOK_AT[detail] : null;
   return end([
     beat(0, { gazeY: -0.65, gazeX: 0.3 * s }, 'eye'),
     beat(70, { headY: -1.4, headTilt: 3 * s }, 'float'),
     beat(150, { glow: 0.8 }, 'float'),
     cue(240, { blink: 'slow' }),
-    beat(600, { sy: 1.04, pupil: 1.1, sparkle: 0.6 }, 'pop', { expr: 'happy', mouth: 'smile', springs: { sparkle: 'snap' } }),
-    beat(860, { gazeX: 0, gazeY: 0, headTilt: 0, headY: 1.4, sy: 1 }, 'snap'),
-    beat(1000, { headY: 0 }, 'pop'),
-    beat(1050, { glow: 0, pupil: 1, sparkle: 0 }, 'sleepy', { expr: 'idle' }),
+    beat(600, { sy: 1.04, pupil: 1.1, sparkle: 0.6 }, 'pop', { expr: 'happy', mouth: 'smile', springs: { sparkle: 'snap' }, ...(d ? { particles: burst('sparkle', 1, d.at) } : {}) }),
+    ...(d && detail !== 'glint' ? [beat(680, { ...d.gaze, headTilt: 0, headY: 0.6 }, 'eye', { expr: 'idle', springs: { headY: 'float', headTilt: 'float' } })] : []),
+    beat(880, { gazeX: 0, gazeY: 0, headTilt: 0, headY: 1.4, sy: 1 }, 'snap'),
+    beat(1020, { headY: 0 }, 'pop'),
+    beat(1070, { glow: 0, pupil: 1, sparkle: 0 }, 'sleepy', { expr: 'idle' }),
   ], 'pop');
 }
 
@@ -165,6 +350,38 @@ export function settleFloat(ctx: ReactionCtx): Beat[] {
     ...(v === 1 ? [beat(700, { headTilt: 3 * side(ctx) }, 'sleepy')] : []),
     beat(1500, { sy: 1, lidL: 1, lidR: 1, headTilt: 0 }, 'sleepy', { expr: 'idle' }),
   ], 'sleepy');
+}
+
+/**
+ * One cycle of the Garden's "breathe with me" (§4.5, design 6 s): in through the nose for 40 % (the body rises and
+ * fills, ears lift, eyes open), out through a small "o" for 60 % (it sinks, the eyes half close). Exempt from
+ * jitter, so the cycle keeps the period you follow; a last mark holds the pose into the next cycle (no dip).
+ * Reduced motion: the face only (the CSS breath carries the body).
+ */
+export function breatheCycle(periodMs: number, inhale = 0.4, reduced = false): Beat[] {
+  const out = periodMs * inhale;
+  const body = (t: Partial<PoseTargets>) => (reduced ? {} : t);
+  return end([
+    beat(0, { ...body({ sy: 1.055, y: -2.5, headY: -1, earL: 5, earR: -5 }), lidL: 1, lidR: 1 }, 'sleepy', { mouth: 'X', fixed: true }),
+    beat(out, { ...body({ sy: 0.975, y: 0.5, headY: 0.6, earL: 0, earR: 0 }), lidL: 0.55, lidR: 0.55 }, 'sleepy', { mouth: 'o', fixed: true }),
+    cue(periodMs * 0.96, { fixed: true }),
+  ], 'sleepy');
+}
+
+/**
+ * The hands-free listening hold coming on (§8A.2): the ears and tuft lift slowly (float, never the focus perk's
+ * snap), the body leans in a touch, a slow attentive blink, the eyes on you.
+ */
+export function attend(ctx: ReactionCtx): Beat[] {
+  return end([
+    beat(0, { sy: 1.02, pupil: 1.06, ...(eared(ctx) ? { earL: 9, earR: -9 } : {}) }, 'float', { look: 'user', blink: 'slow' }),
+    beat(600, { sy: 1, pupil: 1, earL: 0, earR: 0 }, 'float'),
+  ], 'float');
+}
+
+/** The small breath between queued sentences: the chest lifts a touch and the chin with it, then down. */
+export function sentenceBreath(pauseMs: number): Beat[] {
+  return end([beat(0, { sy: 1.012, headY: -0.4 }, 'float'), beat(Math.max(80, pauseMs), { sy: 1, headY: 0 }, 'float')], 'float');
 }
 
 /** The moves a lit growth moment unlocks (signature indices 6–9, §4.11). */

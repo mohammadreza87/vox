@@ -7,8 +7,6 @@ import { ROOM_IDS, ROOM_NAME, stepRoom, stepToward, type RoomId } from '.';
 /** The panel the rail controls (the dock zone's room). */
 export const ROOM_PANEL_ID = 'pet-room';
 export const roomTabId = (id: RoomId) => `pet-room-tab-${id}`;
-/** No key in the copy keys file for the rail's own name yet: English only. */
-const RAIL_LABEL = 'Rooms';
 /** a swipe along the rail: this far sideways, more sideways than up or down */
 const RAIL_SWIPE_PX = 36;
 
@@ -72,7 +70,7 @@ export const RoomRail = memo(function RoomRail({ room, onRoom, rtl, vertical }: 
   };
 
   return (
-    <div className="pet-rail" role="tablist" aria-label={RAIL_LABEL} aria-orientation={vertical ? 'vertical' : 'horizontal'}
+    <div className="pet-rail" role="tablist" aria-label={t('ui.rooms')} aria-orientation={vertical ? 'vertical' : 'horizontal'}
       onKeyDown={onKey} onPointerDown={down} onPointerUp={up} onPointerCancel={() => { swipe.current = null; }}>
       {ROOM_IDS.map((id) => {
         const on = id === room;

@@ -36,8 +36,15 @@ export const TARGET = { js: 130 * 1024, css: 12_000, engine: 25 * 1024 };
  * rooms.css and the motion extras already load lazily and are not counted; the stage vocabulary, micro-saccades,
  * soft-part overlap and room/settle/growth stubs (~1.75 KB together) were kept for motion quality.
  * Each ceiling is the measured weight plus 1 KB.
+ * Route JS raised again 2026-10-26, product call "Wave B: Play, Bedroom, Life Book, tips, hands-free, streamed voice":
+ * the launch page measured 198,112 B br at Wave A's commit in this build environment (the 195,851 above came from
+ * another one, ~1 KB apart) and 199,680 B with Wave B as landed. Wave B QA trimmed it to 199,142 B (hold-to-talk's
+ * MediaRecorder path is its own chunk, mic.ts; the away rooms' verbs and two unused ui keys left CORE). Every Wave B
+ * room, sheet, tip, hands-free and streaming module loads lazily and is not counted; what remains is the page's host
+ * glue for them (~1 KB br). Ceiling: 199,142 B plus 1,536 B of environment slack. Engine (45,282 B) and CSS
+ * (11,692 B) stay under their ceilings unchanged.
  */
-export const CEILING = { js: 195_851 + 1024, css: TARGET.css, engine: 45_268 + 1024 };
+export const CEILING = { js: 199_142 + 1536, css: TARGET.css, engine: 45_268 + 1024 };
 /** a string only the engine's chunk carries (a reaction kind) */
 const ENGINE_MARK = '"sleepPoke"';
 

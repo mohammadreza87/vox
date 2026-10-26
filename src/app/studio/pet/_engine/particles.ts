@@ -2,7 +2,7 @@
  * Particles (brief §3.2 layer 3, decision 10): a fixed pool of ≤ 16 divs the UI renders once; the loop writes
  * `data-kind`, transform and opacity straight into them (no React state, no Burst.tsx). Each kind has its own
  * small motion: crumbs fall, hearts and notes rise, Z marks drift up swaying, sparkles burst, wisps float off,
- * a tear drops. Lite: half the count (≤ 6 live) at 30 Hz. Reduced motion: none at all (§10.8; the model's own
+ * a tear drops, raindrops fall straight from a wide spread under the body. Lite: half the count (≤ 6 live) at 30 Hz. Reduced motion: none at all (§10.8; the model's own
  * Z marks and faces still say what a burst would). The pool is fixed: no allocation per burst or per frame.
  */
 
@@ -17,8 +17,8 @@ interface Particle {
   live: boolean;
 }
 
-/** Life (ms) and launch per kind, px/s at a 200 px character. */
-const KIND: Record<ParticleKind, { ttl: number; g: number; launch: (rng: Rng) => [number, number]; s: [number, number] }> = {
+/** Life (ms) and launch per kind, px/s at a 200 px character; `w`: a wide spawn (± px) that falls straight (rain). */
+const KIND: Record<ParticleKind, { ttl: number; g: number; launch: (rng: Rng) => [number, number]; s: [number, number]; w?: number }> = {
   crumb: { ttl: 400, g: 1600, launch: (r) => [range(r, -90, 90), range(r, -260, -120)], s: [0.5, 0.8] },
   heart: { ttl: 900, g: -60, launch: (r) => [range(r, -50, 50), range(r, -150, -90)], s: [0.8, 1.1] },
   z: { ttl: 2300, g: 0, launch: () => [12, -38], s: [0.85, 1.15] },
@@ -26,6 +26,7 @@ const KIND: Record<ParticleKind, { ttl: number; g: number; launch: (rng: Rng) =>
   note: { ttl: 1200, g: -20, launch: (r) => [range(r, 20, 50), range(r, -90, -60)], s: [0.8, 1] },
   wisp: { ttl: 1400, g: -10, launch: (r) => [range(r, -40, 40), range(r, -50, -25)], s: [0.7, 1.2] },
   tear: { ttl: 520, g: 900, launch: (r) => [range(r, -10, 10), 10], s: [0.7, 0.9] },
+  drop: { ttl: 560, g: 1500, launch: (r) => [range(r, -8, 8), range(r, 50, 130)], s: [0.75, 1.05], w: 24 },
 };
 
 /** A live element: its composited transform and opacity (visible again if it was parked). */
@@ -71,9 +72,9 @@ export class Particles {
       if (slot >= this.pool.length) break;
       const p = this.pool[slot];
       const [vx, vy] = d.launch(this.rng);
-      p.kind = kind; p.x = at.x + range(this.rng, -6, 6) * k; p.y = at.y; p.vx = vx * k; p.vy = vy * k; p.age = 0;
+      p.kind = kind; p.x = at.x + range(this.rng, -(d.w ?? 6), d.w ?? 6) * k; p.y = at.y; p.vx = vx * k; p.vy = vy * k; p.age = 0;
       p.ttl = d.ttl * range(this.rng, 0.9, 1.1); p.s = range(this.rng, d.s[0], d.s[1]);
-      p.rot = range(this.rng, -20, 20); p.spin = range(this.rng, -180, 180); p.phase = range(this.rng, 0, Math.PI * 2); p.live = true;
+      p.rot = d.w ? 0 : range(this.rng, -20, 20); p.spin = d.w ? 0 : range(this.rng, -180, 180); p.phase = range(this.rng, 0, Math.PI * 2); p.live = true;
       live++;
     }
   }
