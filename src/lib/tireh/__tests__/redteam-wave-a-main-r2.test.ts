@@ -3,7 +3,7 @@
  * own words and main's consent model, after fixer r1.
  *
  * Passing guards pin behaviour that holds on agent-intelligence-wave-a-main. The gaps found in
- * this round are pinned as it.fails (they turn red when a fix lands; flip them to `it` then).
+ * this round were pinned as it.fails and closed by fixer r2, so every case here is a plain `it`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway } from '../gateway';

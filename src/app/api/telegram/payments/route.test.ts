@@ -1,5 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { NextResponse } from 'next/server';
 import { createAuthenticatedRequest, createMockRequest, parseResponse } from '@/test/utils';
+
+// The handler is typed NextResponse | Response (the auth wrapper may answer with a plain Response).
+// parseResponse() takes a NextResponse, so narrow structurally (NextResponse defines a `cookies`
+// accessor) and fail loudly if the handler ever hands back something else on these paths.
+function isNextResponse(response: Response): response is NextResponse {
+  return 'cookies' in response;
+}
+
+function nextResponse(response: Response): NextResponse {
+  if (!isNextResponse(response)) throw new Error('expected the handler to answer with a NextResponse');
+  return response;
+}
 
 // Mock dependencies
 vi.mock('@/lib/firebase-admin', () => ({
@@ -38,7 +51,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await freshPOST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(500);
         expect(data).toHaveProperty('error', 'Telegram payments not configured');
@@ -55,7 +68,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await POST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(400);
         expect(data).toHaveProperty('error', 'Invalid price ID');
@@ -108,7 +121,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await POST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(400);
         expect(data).toHaveProperty('error', 'Missing user ID or Telegram ID');
@@ -127,7 +140,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await POST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(200);
         expect(data).toHaveProperty('invoiceLink', 'https://t.me/invoice/123');
@@ -144,7 +157,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await POST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(200);
         expect(data).toHaveProperty('invoiceLink');
@@ -189,7 +202,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await POST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(500);
         expect(data).toHaveProperty('error', 'API error');
@@ -203,7 +216,7 @@ describe('/api/telegram/payments', () => {
         });
 
         const response = await POST(request, ctx);
-        const { status, data } = await parseResponse(response);
+        const { status, data } = await parseResponse(nextResponse(response));
 
         expect(status).toBe(500);
         expect(data).toHaveProperty('error', 'Failed to create payment');

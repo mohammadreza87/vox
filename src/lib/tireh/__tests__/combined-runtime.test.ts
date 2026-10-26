@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PersonaGateway, type RuntimePrivacyState } from '../gateway';
 import type { LLMRequest } from '../llm';
 import type { RelationshipLoop } from '../../relationships';
+import type { TelegramBotClient } from '../telegram/client';
 import { InMemoryUpdateDeduper, StaleMemoryWriteError } from '../memory/store';
 import { GAMEEND_CHAT, TG, groupText, makeGateway, memory, privateText } from './fixtures';
 
@@ -15,7 +16,7 @@ function setup() {
   // enforce the adaptive boundary even if runtime wiring is misconfigured.
   const relationships = { mode: 'live', context, observeTurn, invalidatePersona: vi.fn(async () => undefined) } as unknown as RelationshipLoop;
   const gateway = new PersonaGateway({
-    ...ctx, voice: null, botFor: () => ctx.bot, deduper: new InMemoryUpdateDeduper(),
+    ...ctx, voice: null, botFor: () => ctx.bot as unknown as TelegramBotClient, deduper: new InMemoryUpdateDeduper(),
     relationships, relationshipEnabled: () => true,
     runtimePrivacy: { read: async () => state, validateAudience: async () => valid },
   });
@@ -34,7 +35,7 @@ describe('composed live, relationship and adaptive runtime boundaries', () => {
       return false;
     });
     const gateway = new PersonaGateway({
-      ...ctx, voice: null, botFor: () => ctx.bot,
+      ...ctx, voice: null, botFor: () => ctx.bot as unknown as TelegramBotClient, deduper: new InMemoryUpdateDeduper(),
       relationships: { mode: 'live', context, observeTurn } as unknown as RelationshipLoop,
       relationshipEnabled,
     });

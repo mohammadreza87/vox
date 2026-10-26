@@ -118,7 +118,7 @@ describe('guests (people outside the organization)', () => {
   });
 
   it('an org memory is hidden from any conversation a guest can read', () => {
-    const orgFact = memory({ scope: { kind: 'org' } });
+    const orgFact = memory({ content: 'Org fact', scope: { kind: 'org' } });
     expect(isVisibleToAudience(withGuest, orgFact, ['reza'])).toBe(true);
     expect(isVisibleToAudience(withGuest, orgFact, ['reza', 'sam'])).toBe(false);
   });
