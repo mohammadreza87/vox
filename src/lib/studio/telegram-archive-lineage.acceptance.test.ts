@@ -6,6 +6,8 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hire, ID, makeStudio, seedOrg } from './__tests__/helpers';
 import { StudioTelegramArchive } from './telegram-archive';
+import { pollLoop } from './bots';
+import { handleAgentUpdate } from './updates';
 import { AdaptiveRepository, accountIdFor, digest } from '../adaptive/persistence/repository';
 import { AdaptiveService } from '../adaptive/persistence/service';
 import { FileAdaptiveStorage } from '../adaptive/persistence/storage';
@@ -14,11 +16,11 @@ import { AdaptiveRelationshipService } from '../adaptive/relationships/service';
 import { telegramArchiveEntrySchema } from '../adaptive/telegram-archive-state';
 import { MAX_ARCHIVE_STATE_BYTES } from '../tireh/memory/telegram-archive/service';
 import type { ArchiveTransport } from '../tireh/memory/telegram-archive/contracts';
-import type { TelegramMessage } from '../tireh/telegram/client';
+import type { TelegramBotClient, TelegramMessage, TelegramUpdate } from '../tireh/telegram/client';
 import { ADAPTIVE_RELEASE_CAPABILITIES, assertReleaseAdaptiveCompatibility } from '../../../scripts/studio-adaptive-compatibility.mjs';
 
 const dirs: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 async function fixture() {
   const h = makeStudio(); dirs.push(h.dir);
@@ -61,6 +63,34 @@ async function fixture() {
 }
 
 describe('AM-05 / AM-12 independent source-lineage acceptance', () => {
+  it('keeps a failed edit write unacknowledged, restarts, then retries suppression before processing the next reply', async () => {
+    const f = await fixture(); await f.capture(10, 'QA_TRANSIENT_EDIT_SECRET'); await f.capture(11, 'QA_TRANSIENT_EDIT_KEEP');
+    let failedWrite!: () => void, acknowledged!: (offset: number | undefined) => void;
+    const failed = new Promise<void>(resolve => { failedWrite = resolve; });
+    const settled = new Promise<number | undefined>(resolve => { acknowledged = resolve; });
+    vi.spyOn(f.adaptive, 'withAccountDocument').mockImplementationOnce(async () => { failedWrite(); throw new Error('QA_TRANSIENT_CANONICAL_WRITE'); });
+    const batch: TelegramUpdate[] = [{ update_id: 50, edited_message: f.message(10) }, { update_id: 51, message: f.message(12, 'Continue my prior project') }];
+    const later = vi.fn();
+    const getUpdates = vi.fn().mockResolvedValueOnce(batch).mockImplementationOnce(async (offset: number | undefined) => {
+      expect(offset).toBeUndefined(); return batch;
+    }).mockImplementation(async (offset: number | undefined) => { acknowledged(offset); return new Promise<TelegramUpdate[]>(() => {}); });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const loop = pollLoop({ getUpdates, deleteWebhook: async () => true } as unknown as TelegramBotClient, ['message', 'edited_message'], async update => {
+      await handleAgentUpdate(f.h.studio, f.agent.id, update); if (update.update_id === 51) later();
+    }, { info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    try {
+      await failed; await vi.advanceTimersByTimeAsync(0);
+      expect(getUpdates).toHaveBeenCalledTimes(1); expect(later).not.toHaveBeenCalled();
+      const before = await f.row(); expect(before.state!.receipts.find(r => r.logicalId === 'telegram:10')?.suppressed).toBeUndefined();
+      f.restart(); await vi.advanceTimersByTimeAsync(3000);
+      expect(await settled).toBe(52); expect(later).toHaveBeenCalledOnce();
+      const after = await f.row(); expect(after.state!.receipts.find(r => r.logicalId === 'telegram:10')?.suppressed).toBe(true);
+      expect(after.state!.pending.map(e => e.text)).not.toContain('QA_TRANSIENT_EDIT_SECRET'); expect(after.state!.pending.map(e => e.text)).toContain('QA_TRANSIENT_EDIT_KEEP');
+      const prompt = JSON.stringify(f.h.chatLLM.replyRequests.at(-1)); expect(prompt).not.toContain('QA_TRANSIENT_EDIT_SECRET'); expect(prompt).toContain('QA_TRANSIENT_EDIT_KEEP');
+      expect(f.transport.upload).not.toHaveBeenCalled();
+    } finally { loop.stop(); vi.useRealTimers(); }
+  });
+
   it.each(['QA_EN_PRIVATE_CANARY', 'QA_FA_PRIVATE_CANARY پروژه جمعه'])('suppresses %s across verified head, pending, restart, recovery and prompt use', async secret => {
     const f = await fixture(); await f.capture(10, secret); await f.capture(11, 'QA_KEEP_VERIFIED');
     await f.archive.archive(f.scope).checkpoint(f.scope, { force: true }); await f.capture(12, 'QA_KEEP_PENDING');

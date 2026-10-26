@@ -30,4 +30,8 @@ After this prerequisite, specify snapshot compaction with an authority-preservin
 
 ## Evidence status
 
-Implementation and independent acceptance in progress. PR, current-candidate CI, merge and installation pending. Foundation release history is recorded in the production program; its tests do not qualify this changed candidate.
+PR [115](https://github.com/mohammadreza87/vox/pull/115) merged as `6b410cd` after independent local acceptance (24 new cases, 48 affected regression cases, 81 installer/compatibility cases), hosted CI 321 (7,357 tests passed, 15 existing skips, build/browser checks passed) and indexed qualification. Initial timeout/cleanup and fixture failures remain in the external reports; isolated replays used unchanged deadlines. The merged tree matched accepted `fddbc82`.
+
+Its build passed, but installation was held: production had advanced to `6df838f5` on `release/screens-and-trust`, with authentication and UI fixes absent from main. PR [116](https://github.com/mohammadreza87/vox/pull/116) combines those exact live fixes with the memory change. No unrelated live work is removed.
+
+Integration review found a durability gap in the existing edited-message path: a canonical suppression write failure could escape as an ordinary error and allow polling to acknowledge the edit. The combined candidate must classify such failures as pending and independently prove failed-write/retry/offset behavior. Earlier acceptance establishes its tested cases and does not override this new blocker. Combined acceptance, hosted CI and guarded installation remain pending at this source checkpoint. External LINEAGE_INTEGRATION_ACCEPTANCE.md and LINEAGE_RELEASE.md under the production task-artifact directory carry later results.
