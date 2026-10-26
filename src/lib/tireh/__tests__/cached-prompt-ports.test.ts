@@ -74,7 +74,8 @@ describe('port of gateway.test.ts (systemText in the local fakes)', () => {
     finish('REVOKED_OUTPUT_CANARY');
     await running;
     expect(bot.sent.some((m) => m.text?.includes('REVOKED_OUTPUT_CANARY'))).toBe(false);
-    expect(await history.recent('aria', 'private-reza', 10)).toEqual([]);
+    // Read the chat the turn would retain under: the group turn retains under the group key, not Reza's private key.
+    expect(await history.recent('aria', kind === 'group' ? 'group-gameend-team' : 'private-reza', 10)).toEqual([]);
   });
 
   it.each(['private', 'group'])('does not retain %s extraction that finishes after authorized forgetting', async (kind) => {
@@ -106,7 +107,7 @@ function setupPrivacy(initial: Partial<RuntimePrivacyState> = {}) {
     validateAudience: async () => true,
   };
   const gateway = new PersonaGateway({
-    ...ctx, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot,
+    ...ctx, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot as unknown as TelegramBotClient,
     runtimePrivacy: privacy, now: () => new Date('2026-10-19T10:00:00Z'),
   });
   return { ...ctx, gateway, privacy, readers, change: (next: Partial<RuntimePrivacyState>) => { state = { ...state, ...next }; } };
@@ -249,7 +250,7 @@ describe('port of voice-delivery.test.ts (the exact newest-message comparison in
 describe('port of adaptive/retrieval/runtime-retrieval.test.ts (contextFrom reads the per-turn block)', () => {
   function setup(privacy: RuntimePrivacy) {
     const h = makeGateway();
-    const gateway = new PersonaGateway({ ...h, voice: null, botFor: () => h.bot, deduper: new InMemoryUpdateDeduper(), runtimePrivacy: privacy });
+    const gateway = new PersonaGateway({ ...h, voice: null, botFor: () => h.bot as unknown as TelegramBotClient, deduper: new InMemoryUpdateDeduper(), runtimePrivacy: privacy });
     return { ...h, gateway };
   }
   const state = (context: string[], revision = 'v1', priorityContext: string[] = []): RuntimePrivacyState => ({

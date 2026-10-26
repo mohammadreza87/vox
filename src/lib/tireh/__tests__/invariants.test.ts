@@ -47,10 +47,12 @@ class TombstoneStore extends InMemoryMemoryStore {
   }
 }
 
-/** A store without S06's optional tombstone methods: inheritance must fail closed. */
+/**
+ * A store without S06's optional tombstone methods: inheritance must fail closed. The class keeps the base
+ * signatures (so it stays assignable to InMemoryMemoryStore, delete(): Promise<string[]> included); the
+ * methods are hidden at runtime only, by own properties set to undefined.
+ */
 class NoTombstoneStore extends InMemoryMemoryStore {
-  declare tombstonesOf: undefined;
-  declare addTombstones: undefined;
   constructor() {
     super();
     Object.defineProperty(this, 'tombstonesOf', { value: undefined });

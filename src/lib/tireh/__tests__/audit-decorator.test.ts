@@ -222,7 +222,8 @@ describe('failure isolation', () => {
     const expected = await scenario(new InMemoryMemoryStore(), new InMemoryShareOfferStore());
     const broken: AuditStore = { append: async () => { throw new Error('audit down'); }, list: async () => [], sweep: async () => 0 };
     const brokenNotices = { record: async () => { throw new Error('notices down'); }, listFor: async () => [],
-      deleteByMemoryIds: async () => { throw new Error('notices down'); }, deleteForPerson: async () => { throw new Error('notices down'); } };
+      deleteByMemoryIds: async () => { throw new Error('notices down'); }, deleteForPerson: async () => { throw new Error('notices down'); },
+      hasAny: async () => { throw new Error('notices down'); } };
     expect(await scenario(auditMemoryStore(new InMemoryMemoryStore(), broken, brokenNotices), auditShareOfferStore(new InMemoryShareOfferStore(), broken))).toEqual(expected);
 
     // Ids with whitespace make every row invalid; the strict schema rejects them inside append.

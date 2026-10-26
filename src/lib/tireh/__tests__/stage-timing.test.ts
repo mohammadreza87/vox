@@ -1,5 +1,5 @@
 import { inspect } from 'node:util';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { PersonaGateway } from '../gateway';
 import { logStageTiming, logTelegramDiagnostic, TIMING_STAGES } from '../telegram/diagnostics';
 import type { TelegramBotClient } from '../telegram/client';
@@ -10,7 +10,8 @@ import { expectContentFreeStageTimings } from '@/test/telegram-diagnostics';
 
 const TEXT_CANARY = 'STAGE_TIMING_PRIVATE_TEXT_CANARY_031';
 const NAME_CANARY = 'STAGE_TIMING_PERSONA_NAME_CANARY_031';
-type Logger = { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+type LogFn = Mock<(...data: unknown[]) => void>;
+type Logger = { info: LogFn; warn: LogFn; error: LogFn };
 
 function timed(options: { stageTimings?: boolean } = {}) {
   const ctx = makeGateway({ voice: fakeVoice(TEXT_CANARY) });

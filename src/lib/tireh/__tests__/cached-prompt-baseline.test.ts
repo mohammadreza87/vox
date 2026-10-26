@@ -11,6 +11,7 @@ import { AnthropicLLM, GeminiLLM, type LLMRequest } from '../llm';
 import { buildSystemPrompt, type PromptInput } from '../conversation/prompt';
 import { PersonaGateway, type RuntimePrivacy, type RuntimePrivacyState } from '../gateway';
 import { InMemoryUpdateDeduper, type NewMemory } from '../memory/store';
+import type { TelegramBotClient } from '../telegram/client';
 import type { ChatContext, MemoryRecord, MemoryScope, Persona } from '../types';
 import { GAMEEND_CHAT, LEADS_CHAT, TG, groupText, makeGateway, memory, privateText, testOrg } from './fixtures';
 
@@ -172,7 +173,7 @@ function setupPrivacy(initial: Partial<RuntimePrivacyState> = {}) {
   const state: RuntimePrivacyState = { revision: '1', memoryEnabled: false, historyEnabled: false, ...initial };
   const privacy: RuntimePrivacy = { read: async () => state, validateAudience: async () => true };
   const gateway = new PersonaGateway({
-    ...ctx, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot,
+    ...ctx, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot as unknown as TelegramBotClient,
     runtimePrivacy: privacy, now: () => NOW,
   });
   return { ...ctx, gateway };
@@ -224,7 +225,7 @@ async function gatewayRequests(): Promise<Record<string, unknown>> {
     ctx.llm.nextExtraction = fact('WORK_FACT');
     await ctx.gateway.converse('aria', 'reza', 'A work turn');
     const state = { revision: '2', memoryEnabled: true, historyEnabled: true, context: ['PERSONAL_EXPLICIT_CONTEXT', 'Likes green tea'] };
-    const personal = new PersonaGateway({ ...ctx, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot,
+    const personal = new PersonaGateway({ ...ctx, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot as unknown as TelegramBotClient,
       runtimePrivacy: { read: async () => state, validateAudience: async () => true }, now: () => NOW });
     await personal.converse('aria', 'reza', 'hello', { space: 'personal' });
     await personal.converse('aria', 'reza', 'tea please', { space: 'personal' });
