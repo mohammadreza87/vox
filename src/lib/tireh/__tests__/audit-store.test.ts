@@ -42,6 +42,10 @@ function fakeFirestore() {
       case '<': return time(doc[field]) < time(value);
       case '>=': return time(doc[field]) >= time(value);
       case 'array-contains': return Array.isArray(doc[field]) && (doc[field] as unknown[]).includes(value);
+      case 'in':
+        // Firestore rejects an `in` filter with more than 30 values.
+        if (!Array.isArray(value) || value.length === 0 || value.length > 30) throw new Error(`invalid in filter (${Array.isArray(value) ? value.length : typeof value})`);
+        return (value as unknown[]).includes(doc[field]);
       default: throw new Error(`unsupported op ${op}`);
     }
   };
@@ -270,6 +274,28 @@ describe('SupersededNoticeStore erasure', () => {
   it('firestore', async () => {
     const { db, data } = fakeFirestore();
     await exerciseNoticeErasure(new FirestoreSupersededNoticeStore(db), async () => data.size);
+  });
+});
+
+describe('FirestoreSupersededNoticeStore.deleteByMemoryIds on a large forget closure (hardening round 1)', () => {
+  it('erases with `in` queries of at most 30 ids, one per field and chunk, and counts a notice naming two closure ids once', async () => {
+    const { db, data, queries } = fakeFirestore();
+    const store = new FirestoreSupersededNoticeStore(db);
+    const at = T('2026-10-19T00:00:00Z');
+    // 70 notices whose old ids are in the closure; one whose old and new ids both are; one that stays.
+    for (let i = 0; i < 70; i++) await store.record({ personaId: 'aria', oldMemoryId: `m${i}`, newMemoryId: `r${i}`, ownerPersonId: 'reza', recipientPersonIds: ['milad'], at });
+    await store.record({ personaId: 'aria', oldMemoryId: 'm0', newMemoryId: 'm1', ownerPersonId: 'reza', recipientPersonIds: ['milad'], at });
+    await store.record({ personaId: 'aria', oldMemoryId: 'keep-old', newMemoryId: 'keep-new', ownerPersonId: 'reza', recipientPersonIds: ['milad'], at });
+    queries.length = 0;
+    const closure = Array.from({ length: 70 }, (_, i) => `m${i}`);
+    expect(await store.deleteByMemoryIds([...closure, 'm0'])).toBe(71);
+    expect([...data.values()].map((doc) => doc.oldMemoryId)).toEqual(['keep-old']);
+    const erasureQueries = queries.filter((q) => q.filters.some(([, op]) => op === 'in'));
+    // 70 ids = 3 chunks (30, 30, 10), two fields each; no per-id equality queries.
+    expect(queries.some((q) => q.filters.some(([, op]) => op === '=='))).toBe(false);
+    expect(new Set(erasureQueries.map((q) => `${q.filters[0][0]}:${(q.filters[0][2] as string[]).length}`)))
+      .toEqual(new Set(['oldMemoryId:30', 'oldMemoryId:10', 'newMemoryId:30', 'newMemoryId:10']));
+    expect(erasureQueries.every((q) => (q.filters[0][2] as string[]).length <= 30)).toBe(true);
   });
 });
 

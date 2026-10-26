@@ -93,9 +93,11 @@ sections above, it wins.
   `personaId ==`, optional `memoryIds array-contains`, optional `at >=`, then `orderBy('at', 'desc').limit(n)`, so it
   returns what the in-memory and file stores return. New composite index `vox_audit` (`personaId` ASC, `memoryIds`
   CONTAINS, `at` DESC) beside the original (`personaId` ASC, `at` DESC) (H1).
-- **Signal codes.** Audit and notice writes are best effort, raced against `AUDIT_WRITE_TIMEOUT_MS` (2 s), and never
-  change the memory result. A failure logs one fixed line: `[vox] audit_append_failed`, `audit_append_timeout`,
-  `notice_record_failed` or `notice_erasure_failed`. A rejected retention sweep reports `sweep_failed` through
+- **Signal codes.** Audit appends and notice records are best effort, raced against `AUDIT_WRITE_TIMEOUT_MS` (2 s),
+  and never change the memory result. Notice erasure on delete is not time-bounded: `delete()` waits for it to finish
+  and only a rejection is reported (hardening round 1); the Firestore erasure runs `in` queries of at most 30 ids per
+  field in parallel, and a large closure's delete rows are appended in parallel. A failure logs one fixed line:
+  `[vox] audit_append_failed`, `audit_append_timeout`, `notice_record_failed` or `notice_erasure_failed`. A rejected retention sweep reports `sweep_failed` through
   `onError`, which the runtime logs as `[vox] audit sweep_failed`. No row field, id or content is logged (H1).
 - **`historyPolicy`.** Effect: `resnapshotGroupMemory` reads the group's value. `since_membership` refuses with 409 and
   a content-free Studio audit row (`memory.resnapshot`, detail `<telegramId>:refused`) before any memory read or write

@@ -13,7 +13,8 @@
  * Notices are fanned out to one document per (notice, recipient). listFor
  * needs a composite index (personaId ASC, recipientPersonId ASC, at DESC),
  * kept in firestore.indexes.json, so the read is bounded by MAX_NOTICE_LIST.
- * The erasure deletes use single-field filters only.
+ * The erasure deletes use single-field filters only (==, array-contains, and
+ * `in` with at most 30 values), which need no composite index.
  */
 
 import { createHash, randomUUID } from 'crypto';
@@ -24,6 +25,8 @@ import { MAX_NOTICE_LIST, validateNotice, type SupersededNotice, type Superseded
 export const AUDIT_COLLECTION = 'vox_audit';
 export const NOTICE_COLLECTION = 'tireh_supersede_notices';
 const SWEEP_BATCH = 400;
+/** Firestore's limit on the values of one `in` filter. */
+const MAX_IN_VALUES = 30;
 
 /** Firestore Timestamp or Date to Date. */
 function toDate(value: unknown): Date {
@@ -107,13 +110,21 @@ export class FirestoreSupersededNoticeStore implements SupersededNoticeStore {
       .slice(0, MAX_NOTICE_LIST);
   }
 
+  /**
+   * One `in` query per field and per chunk of MAX_IN_VALUES ids, all in parallel, so the number of sequential round
+   * trips does not grow with the size of a forget closure. A notice naming two closure ids can be fetched by two
+   * queries; deleting it twice is harmless and it is counted once.
+   */
   async deleteByMemoryIds(memoryIds: readonly string[]): Promise<number> {
-    let removed = 0;
-    for (const id of new Set(memoryIds)) {
-      removed += await this.deleteWhere('oldMemoryId', '==', id);
-      removed += await this.deleteWhere('newMemoryId', '==', id);
+    const ids = [...new Set(memoryIds)];
+    const deleted = new Set<string>();
+    const work: Array<Promise<void>> = [];
+    for (let i = 0; i < ids.length; i += MAX_IN_VALUES) {
+      const chunk = ids.slice(i, i + MAX_IN_VALUES);
+      for (const field of ['oldMemoryId', 'newMemoryId']) work.push(this.deleteMatching(field, 'in', chunk, deleted));
     }
-    return removed;
+    await Promise.all(work);
+    return deleted.size;
   }
 
   async hasAny(): Promise<boolean> {
@@ -126,15 +137,20 @@ export class FirestoreSupersededNoticeStore implements SupersededNoticeStore {
   }
 
   private async deleteWhere(field: string, op: '==' | 'array-contains', value: string): Promise<number> {
-    let removed = 0;
+    const deleted = new Set<string>();
+    await this.deleteMatching(field, op, value, deleted);
+    return deleted.size;
+  }
+
+  /** Deletes every notice document matching the single-field filter, a page of SWEEP_BATCH at a time; adds each path to `deleted`. */
+  private async deleteMatching(field: string, op: '==' | 'array-contains' | 'in', value: string | string[], deleted: Set<string>): Promise<void> {
     for (;;) {
       const snapshot = await this.db.collection(NOTICE_COLLECTION).where(field, op, value).limit(SWEEP_BATCH).get();
-      if (snapshot.docs.length === 0) return removed;
+      if (snapshot.docs.length === 0) return;
       const batch = this.db.batch();
-      for (const doc of snapshot.docs) batch.delete(doc.ref);
+      for (const doc of snapshot.docs) { batch.delete(doc.ref); deleted.add(doc.ref.path); }
       await batch.commit();
-      removed += snapshot.docs.length;
-      if (snapshot.docs.length < SWEEP_BATCH) return removed;
+      if (snapshot.docs.length < SWEEP_BATCH) return;
     }
   }
 }

@@ -15,17 +15,21 @@
  * arguments, same result or error, no extra store reads).
  *
  * Rows and notices are written best effort after the store call and awaited
- * (deterministic in tests), but each wait is bounded by AUDIT_WRITE_TIMEOUT_MS:
- * a hung audit or notice write never stalls a memory write (the write itself
- * may still complete later, which is acceptable for append-only rows). A
- * rejected, invalid or timed-out write never changes a memory result; it is
- * signalled by one fixed, content-free log line (`[vox] <code>`, see
- * AuditSignalCode), never with row fields, ids or content. Rows carry ids,
+ * (deterministic in tests). Each wait for an audit append or a notice record is
+ * bounded by AUDIT_WRITE_TIMEOUT_MS: a hung append never stalls a memory write
+ * (the append itself may still complete later, which is acceptable for
+ * append-only rows). Notice erasure on delete is not bounded: it is a privacy
+ * erasure, not an append, so delete() waits for it to finish (the memory delete
+ * has already happened, so nothing else waits on it) and only a rejection is
+ * reported. A rejected, invalid or timed-out write never changes a memory
+ * result; it is signalled by one fixed, content-free log line (`[vox] <code>`,
+ * see AuditSignalCode), never with row fields, ids or content. Rows carry ids,
  * person ids, a hashed policy key and an outcome, never content, topics or
  * message text.
  *
  * A delete row lists every id the store reports removed with the requested one
- * (its forget closure), in rows of at most MAX_AUDIT_IDS ids.
+ * (its forget closure), in rows of at most MAX_AUDIT_IDS ids, appended in
+ * parallel so a large closure waits for at most one AUDIT_WRITE_TIMEOUT_MS.
  *
  * TODO(worker / Step 1): chatKeyHash is omitted at store level; supply it when
  * the worker or the Step 1 turn snapshot passes chat context.
@@ -65,9 +69,9 @@ function signal(log: AuditLogger, code: AuditSignalCode): void {
 /**
  * Awaited for at most AUDIT_WRITE_TIMEOUT_MS, never throws: an audit or notice failure never changes a memory
  * result. A rejection logs `code`; the timeout logs 'audit_append_timeout' for an audit append and `code` for a
- * notice write. A write that settles after the timeout is not reported again.
+ * notice record. A write that settles after the timeout is not reported again.
  */
-async function bestEffort(operation: () => Promise<unknown>, code: Exclude<AuditSignalCode, 'audit_append_timeout'>, log: AuditLogger): Promise<void> {
+async function bestEffort(operation: () => Promise<unknown>, code: Exclude<AuditSignalCode, 'audit_append_timeout' | 'notice_erasure_failed'>, log: AuditLogger): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   // The write's own promise never rejects (a late rejection after the timeout is not an unhandled rejection).
   const write = Promise.resolve().then(operation).then(() => 'done' as const, () => 'failed' as const);
@@ -82,6 +86,15 @@ async function bestEffort(operation: () => Promise<unknown>, code: Exclude<Audit
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Notice erasure on delete: awaited to the end, never time-bounded and never throws. Unlike an append it is a
+ * privacy erasure, so a slow erasure is not cut off, left running detached or reported as a failure; only a
+ * rejection logs 'notice_erasure_failed'. The memory delete has already happened when this runs.
+ */
+async function eraseFully(operation: () => Promise<unknown>, log: AuditLogger): Promise<void> {
+  try { await operation(); } catch { signal(log, 'notice_erasure_failed'); }
 }
 
 /** Splits ids into chunks of at most MAX_AUDIT_IDS (normalizeAuditRow caps a row at that many). */
@@ -212,7 +225,7 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
       // whatever the flags are now (notices recorded while TIREH_SHARING_V2 was on must still go). Never a read
       // of the memory store.
       const eraseNotices = (removed: string[]) => notices
-        ? bestEffort(() => notices.deleteByMemoryIds(forgottenIds(id, removed)), 'notice_erasure_failed', log) : undefined;
+        ? eraseFully(() => notices.deleteByMemoryIds(forgottenIds(id, removed)), log) : undefined;
       if (!tirehFlags().auditLog) { const removed = await target.delete(...args); await eraseNotices(removed); return removed; }
       const before = await safeGet(target, id);
       let failure: { error: unknown } | null = null;
@@ -226,10 +239,10 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
       if (before) {
         const outcome: AuditOutcome = failure ? errorOutcome(failure.error) : 'applied';
         const at = new Date();
-        for (const memoryIds of chunkIds(failure ? [id] : forgottenIds(id, removed))) {
-          await append({ kind: 'delete', personaId: before.personaId, audiencePersonIds: before.authorizedPersonIds ?? [], memoryIds,
-            policyKey: memoryPolicyKey(before), outcome, at });
-        }
+        // In parallel (appended in chunk order): a large closure waits for one AUDIT_WRITE_TIMEOUT_MS, not one per chunk.
+        await Promise.all(chunkIds(failure ? [id] : forgottenIds(id, removed)).map((memoryIds) =>
+          append({ kind: 'delete', personaId: before.personaId, audiencePersonIds: before.authorizedPersonIds ?? [], memoryIds,
+            policyKey: memoryPolicyKey(before), outcome, at })));
       }
       if (failure) throw failure.error;
       await eraseNotices(removed);
@@ -244,7 +257,7 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
  * Erasure after a flag rollback: with both S08 flags off the audit decorator is not installed, yet notices
  * recorded while TIREH_SHARING_V2 was on must still go with their memories. This proxy intercepts only delete:
  * the store call first (its result or error unchanged), then every notice naming the id or any id of its forget
- * closure (the ids the store reports removed) is erased, best effort.
+ * closure (the ids the store reports removed) is erased, awaited to the end (a rejection is logged, never thrown).
  * Every other method is the inner store's own.
  */
 export function noticeErasingMemoryStore(inner: MemoryStore, notices: SupersededNoticeEraser, options: AuditDecoratorOptions = {}): MemoryStore {
@@ -252,7 +265,7 @@ export function noticeErasingMemoryStore(inner: MemoryStore, notices: Superseded
   const wrapped: Pick<MemoryStore, 'delete'> = {
     async delete(...args: Parameters<MemoryStore['delete']>) {
       const removed = await inner.delete(...args);
-      await bestEffort(() => notices.deleteByMemoryIds(forgottenIds(args[0], removed)), 'notice_erasure_failed', log);
+      await eraseFully(() => notices.deleteByMemoryIds(forgottenIds(args[0], removed)), log);
       return removed;
     },
   };

@@ -93,6 +93,60 @@ describe('audit write signals (H1)', () => {
     expect(lines(log)).toEqual(['[vox] notice_erasure_failed']);
   });
 
+  // Hardening round 1 fixer: notice erasure is a privacy erasure, not an append. Bounding it by
+  // AUDIT_WRITE_TIMEOUT_MS returned from delete() with 'notice_erasure_failed' logged while the erasure was still
+  // running, detached. It is now awaited to the end and nothing is logged unless it rejects.
+  it('a slow notices.deleteByMemoryIds is awaited to the end, past AUDIT_WRITE_TIMEOUT_MS, and logs nothing', async () => {
+    vi.useFakeTimers();
+    const slow = AUDIT_WRITE_TIMEOUT_MS + 1000;
+    const variants: Array<[string, (inner: InMemoryMemoryStore, notices: InMemorySupersededNoticeStore, log: ReturnType<typeof logger>) => { delete(id: string): Promise<string[]> }]> = [
+      ['audit decorator, TIREH_AUDIT_LOG on', (inner, notices, log) => { vi.stubEnv('TIREH_AUDIT_LOG', '1'); return auditMemoryStore(inner, new InMemoryAuditStore(), notices, { log }); }],
+      ['audit decorator, TIREH_AUDIT_LOG off', (inner, notices, log) => { vi.stubEnv('TIREH_AUDIT_LOG', ''); return auditMemoryStore(inner, new InMemoryAuditStore(), notices, { log }); }],
+      ['noticeErasingMemoryStore', (inner, notices, log) => noticeErasingMemoryStore(inner, notices, { log })],
+    ];
+    for (const [name, make] of variants) {
+      const notices = new InMemorySupersededNoticeStore();
+      let erased = false;
+      vi.spyOn(notices, 'deleteByMemoryIds').mockImplementation(() => new Promise((resolve) => setTimeout(() => { erased = true; resolve(1); }, slow)));
+      const log = logger();
+      const inner = new InMemoryMemoryStore();
+      const store = make(inner, notices, log);
+      const record = await inner.add(newMemory());
+      let resolved = false;
+      const done = store.delete(record.id).then((removed) => { resolved = true; return removed; });
+      await vi.advanceTimersByTimeAsync(AUDIT_WRITE_TIMEOUT_MS);
+      expect(resolved, name).toBe(false);
+      expect(lines(log), name).toEqual([]);
+      await vi.advanceTimersByTimeAsync(slow - AUDIT_WRITE_TIMEOUT_MS);
+      expect(await done, name).toEqual([record.id]);
+      expect(erased, name).toBe(true);
+      expect(lines(log), name).toEqual([]);
+    }
+  });
+
+  it('the delete rows of a large forget closure are appended in parallel: one AUDIT_WRITE_TIMEOUT_MS, not one per row', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('TIREH_AUDIT_LOG', '1');
+    const audit = new InMemoryAuditStore();
+    const append = vi.spyOn(audit, 'append').mockReturnValue(new Promise(() => undefined));
+    const log = logger();
+    const inner = new InMemoryMemoryStore();
+    const record = await inner.add(newMemory());
+    const closure = [record.id, ...Array.from({ length: 400 }, (_, i) => `closure-${i}`)];
+    vi.spyOn(inner, 'delete').mockResolvedValue(closure);
+    const store = auditMemoryStore(inner, audit, undefined, { log });
+    let resolved = false;
+    const done = store.delete(record.id).then((removed) => { resolved = true; return removed; });
+    await vi.advanceTimersByTimeAsync(AUDIT_WRITE_TIMEOUT_MS);
+    expect(resolved).toBe(true);
+    expect(await done).toEqual(closure);
+    // 401 ids = three rows of at most 200, each started before any timed out, in chunk order.
+    expect(append).toHaveBeenCalledTimes(3);
+    expect(append.mock.calls.map(([row]) => row.memoryIds.length)).toEqual([200, 200, 1]);
+    expect(append.mock.calls.flatMap(([row]) => row.memoryIds)).toEqual(closure);
+    expect(lines(log)).toEqual(['[vox] audit_append_timeout', '[vox] audit_append_timeout', '[vox] audit_append_timeout']);
+  });
+
   it('a rejecting notices.record on a supersede logs notice_record_failed and the add still resolves', async () => {
     vi.stubEnv('TIREH_SHARING_V2', '1');
     const notices = new InMemorySupersededNoticeStore();
