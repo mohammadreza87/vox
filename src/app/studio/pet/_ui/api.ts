@@ -115,7 +115,16 @@ export function mockOptions(search: string): MockOptions | null {
     // Wave C demos (mock.ts): ?garden=seeded|ready|bloom, ?ci=C5, ?checkins=on|paused, ?items=1; ?room= is the page's (Extras)
     ...['garden', 'ci', 'checkins'].reduce((o, k) => (q.get(k) ? { ...o, [k]: q.get(k) } : o), {}),
     ...(q.has('items') ? { items: true } : {}),
+    // ?at=14: the demo clock reads today at 14:00 local (so a review at night is not a quiet-hours sleep)
+    ...(/^([01]?\d|2[0-3])$/.test(q.get('at') ?? '') ? { now: mockClock(Number(q.get('at'))) } : {}),
   };
+}
+
+/** A clock that starts at `hour`:00 today and runs at real speed from there. */
+export function mockClock(hour: number, start = Date.now()): () => number {
+  const d = new Date(start); d.setHours(hour, 0, 0, 0);
+  const off = d.getTime() - start;
+  return () => Date.now() + off;
 }
 
 export function createPetApi(search = typeof location === 'undefined' ? '' : location.search): PetApi {
