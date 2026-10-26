@@ -83,8 +83,10 @@ export function readImageTriage(answers: Record<string, DecisionAnswer>): ImageT
   if (task?.type !== 'choice' || typeof task.choice !== 'string' || !finite(task.confidence)) return null;
   if (people?.type !== 'predicate' || !finite(people.probability)) return null;
   if (sensitive?.type !== 'predicate' || !finite(sensitive.probability)) return null;
-  const kindValue = kind?.type === 'choice' && (IMAGE_KINDS as readonly string[]).includes(kind.choice)
-    ? kind.choice as ImageTriage['kind'] : 'other';
+  // Main's fail-closed rule: a missing, non-choice or unknown kind is unknown triage (suppressed, people
+  // rule on), never 'other', which would switch off the photo_of_people branch of the people rule.
+  if (kind?.type !== 'choice' || typeof kind.choice !== 'string' || !(IMAGE_KINDS as readonly string[]).includes(kind.choice)) return null;
+  const kindValue = kind.choice as ImageTriage['kind'];
   const minConfidence = task.choice === 'remember' ? IMAGE_REMEMBER_CONFIDENCE : IMAGE_TASK_MIN_CONFIDENCE;
   const taskValue = (IMAGE_TASKS as readonly string[]).includes(task.choice) && task.confidence >= minConfidence
     ? task.choice as ImageTriage['task'] : 'unclear';
