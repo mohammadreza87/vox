@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './pet-storage-admission.test.mjs';
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';

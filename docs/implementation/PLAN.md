@@ -151,3 +151,5 @@ Provisional efficacy target: at least a 20% improvement in p95 useful-response l
 **Starting slice.** Execute VOX-001 through VOX-008 for release contracts, then dependency-ready tasks in VOX-009 through VOX-023 plus VOX-056 for permissions, consent, user rights and reliable observation. Prove one Studio voice turn with synthetic participants and one explicit preference before enabling predictive adaptation. The lead may parallelize non-conflicting tasks whose dependencies are satisfied; each task retains an independent reviewer and evidence packet. Public-facing capability activation follows its completed gate, not the existence of a role file or a passing mock test.
 
 Runtime snapshot publication follows the reviewed [bounded contract](../agents/AGENT_MEMORY_SNAPSHOT_PUBLICATION.md); activation and full recall remain separate gates.
+
+Release prerequisite for AM-05/AM-12: [Pet FILE admission contract](../agents/PET_STORAGE_ADMISSION_CONTRACT.md). Strictly recognize the existing deployed pet namespaces without changing data, rights or runtime behavior.
