@@ -134,13 +134,28 @@ function keepToken(token: string): boolean {
   return token.length >= 3;
 }
 
-/** Arabic-script stems for a token written without ZWNJ, e.g. کتابها → کتاب, میرود → رود. */
+/**
+ * Nouns that start with می but are not the verbal prefix: stripping it gives a false stem
+ * (میدان to دان). Kept small; matched against the whole folded token.
+ */
+const FA_MI_NOUNS: ReadonlySet<string> = new Set([
+  'میز', 'میدان', 'میوه', 'میهمان', 'میل', 'میراث', 'میلیون', 'میلیارد', 'میان', 'میانه', 'میانگین', 'میهن', 'میمون', 'میخ',
+]);
+
+/**
+ * Arabic-script stems for a token written without ZWNJ, e.g. کتابها → کتاب, میرود → رود.
+ * The plural suffix and the verbal prefix are never stacked: a token ending in ها/های gets only
+ * its plural stem (میزها → میز, never زها), and می/نمی is stripped only when at least 3 letters
+ * remain and the token is not one of FA_MI_NOUNS.
+ */
 function arabicStems(token: string): string[] {
   const stems: string[] = [];
+  const plural = token.endsWith('های') || token.endsWith('ها');
   if (token.length >= 5) {
     if (token.endsWith('های')) stems.push(token.slice(0, -3));
     else if (token.endsWith('ها')) stems.push(token.slice(0, -2));
   }
+  if (plural || FA_MI_NOUNS.has(token)) return stems;
   if (token.startsWith('نمی') && token.length - 3 >= 3) stems.push(token.slice(3));
   else if (token.startsWith('می') && token.length - 2 >= 3) stems.push(token.slice(2));
   return stems;

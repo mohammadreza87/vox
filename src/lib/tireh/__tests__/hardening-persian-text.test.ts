@@ -3,7 +3,8 @@
  * style extractor's hostile-input guard.
  *
  * foldPersian(text, { lowercase: true }) must stay byte-identical to S06's
- * retrieval normaliser as it was at 718752e. NORMALIZED_BEFORE was generated
+ * retrieval normaliser as it was at 718752e, except the heh-variant entries
+ * listed in CHANGED. NORMALIZED_BEFORE was generated
  * from that code before the change and is committed here; never regenerate it
  * from the code under test. Invisible code points are written as escapes.
  */
@@ -21,20 +22,20 @@ const CORPUS: readonly string[] = [
   'ﬁle and ﬀ',
   'Ｆｕｌｌｗｉｄｔｈ １２３',
   'café naïve résumé',
-  'café dejà',
-  'emoji 👍🏽 and 👨‍👩‍👧',
-  '‎text‏ with LRM and RLM',
-  '﻿BOM at the start',
+  'cafe\u0301 deja\u0300',
+  'emoji 👍🏽 and 👨\u200D👩\u200D👧',
+  '\u200Etext\u200F with LRM and RLM',
+  '\uFEFFBOM at the start',
   'numbers 2026-10-25 and 3.14',
   'x² and ½',
   'don’t save this',
   // Persian and Arabic script
   'سلام خوبی',
   'كيان',
-  'ذخیــره نکن',
+  'ذخی\u0640\u0640ره نکن',
   'ذخىره نکن',
-  'کِتاب',
-  'كتـــاب',
+  'ک\u0650تاب',
+  'كت\u0640\u0640\u0640اب',
   'مسئول',
   'أحمد إبراهيم',
   'ٱلله',
@@ -42,12 +43,12 @@ const CORPUS: readonly string[] = [
   'مؤسسه',
   'مدرسة',
   'خانۀ ما',
-  'خانهٔ ما',
+  'خانه\u0654 ما',
   'کردستانە',
   '۱۲ بهمن ۱۴۰۵',
   '٣ أيام',
-  'می‌روم به خانه',
-  'کتاب‌ها و دفترهای من',
+  'می\u200Cروم به خانه',
+  'کتاب\u200Cها و دفترهای من',
   'میروم',
   'نمیدانم',
   'کتابها',
@@ -58,23 +59,23 @@ const CORPUS: readonly string[] = [
   'میوه و میهمان',
   'میانگین میهن میمون میخ',
   'میل میلیارد میان میانه',
-  'ﻛﺘﺎﺏ',
-  'ﷲ',
-  'ﻻ',
-  'ی‍ک',
-  'به‌خاطر نسپار',
-  'ذخیره‌اش کن',
+  '\uFEDB\uFE98\uFE8E\uFE8F',
+  '\uFDF2',
+  '\uFEFB',
+  'ی\u200Dک',
+  'به\u200Cخاطر نسپار',
+  'ذخیره\u200Cاش کن',
   // Mixed
   'سلام hello friend',
   'Meeting با Kian در Tehran ساعت ۱۰',
   'hello، world؟',
   'ok؟؟؟',
-  'Kian‌ها',
+  'Kian\u200Cها',
   'گزارش Q4 را بفرست 🙏',
-  'RTL ‫embedding‬ test',
+  'RTL \u202Bembedding\u202C test',
   '',
   '   spaces\tand\nnewlines  ',
-  'دفترهای JIRA و Docs‌ها',
+  'دفترهای JIRA و Docs\u200Cها',
 ];
 
 const NORMALIZED_BEFORE: readonly string[] = [
@@ -140,8 +141,14 @@ const NORMALIZED_BEFORE: readonly string[] = [
   'دفترهای jira و docs\u200Cها',
 ];
 
-/** Entries whose fold changes on purpose (none: the heh variants ۀ and ە are not folded, see S06). */
-const CHANGED: Readonly<Record<number, string>> = {};
+/**
+ * The only entries whose fold changes on purpose (F139): heh with yeh above U+06C0 and ae U+06D5 now fold to
+ * heh U+0647. Every other entry is byte-identical to 718752e.
+ */
+const CHANGED: Readonly<Record<number, string>> = {
+  27: 'خانه ما',
+  29: 'کردستانه',
+};
 
 describe('foldPersian', () => {
   it('has the committed 60-string corpus', () => {
@@ -155,6 +162,15 @@ describe('foldPersian', () => {
     });
   });
 
+  it('changes the heh variants only: CHANGED differs from the old output by U+06C0 and U+06D5 alone', () => {
+    for (const [i, after] of Object.entries(CHANGED)) {
+      const before = NORMALIZED_BEFORE[Number(i)];
+      expect(before.replace(/[ۀە]/g, 'ه')).toBe(after);
+      expect(before).not.toBe(after);
+    }
+    expect(foldPersian('خانۀ')).toBe(foldPersian('خانهٔ'));
+  });
+
   it('without lowercase differs only by case', () => {
     CORPUS.forEach((text, i) => {
       // Lowercasing 'İ' adds a combining dot, which the fold strips only when it lowercases first (the order of 718752e).
@@ -165,21 +181,21 @@ describe('foldPersian', () => {
   });
 
   it('folds Arabic letter variants, tatweel, marks and digits, and keeps ZWNJ', () => {
-    expect(foldPersian('ذخیــره نکن')).toBe('ذخیره نکن');
+    expect(foldPersian('ذخی\u0640\u0640ره نکن')).toBe('ذخیره نکن');
     expect(foldPersian('ذخىره نكن')).toBe('ذخیره نکن');
-    expect(foldPersian('ﻛﺘﺎﺏ')).toBe('کتاب');
-    expect(foldPersian('کِتاب')).toBe('کتاب');
-    expect(foldPersian('ذخیره‌اش')).toBe('ذخیره‌اش');
-    expect(foldPersian('﻿‎‏ی‍ک')).toBe('یک');
+    expect(foldPersian('\uFEDB\uFE98\uFE8E\uFE8F')).toBe('کتاب');
+    expect(foldPersian('ک\u0650تاب')).toBe('کتاب');
+    expect(foldPersian('ذخیره\u200Cاش')).toBe('ذخیره\u200Cاش');
+    expect(foldPersian('\uFEFF\u200E\u200Fی\u200Dک')).toBe('یک');
     expect(foldPersian('۱۲ ٣٤')).toBe('12 34');
   });
 });
 
 describe('script letters', () => {
   it.each([
-    ['ک', true, false], ['ی', true, false], ['ي', true, false], ['ﻛ', true, false], ['ݐ', true, false],
-    ['،', false, false], ['؟', false, false], ['؛', false, false], ['ـ', false, false],
-    ['﻿', false, false], ['ِ', false, false], ['۱', false, false], ['٣', false, false],
+    ['ک', true, false], ['ی', true, false], ['ي', true, false], ['\uFEDB', true, false], ['ݐ', true, false],
+    ['،', false, false], ['؟', false, false], ['؛', false, false], ['\u0640', false, false],
+    ['\uFEFF', false, false], ['\u0650', false, false], ['۱', false, false], ['٣', false, false],
     ['a', false, true], ['Z', false, true], ['é', false, true], ['1', false, false], ['?', false, false], ['ß', false, true],
   ])('%s: arabic %s, latin %s', (ch, arabic, latin) => {
     expect(isArabicScriptLetter(ch)).toBe(arabic);
@@ -191,10 +207,10 @@ describe('clipGraphemes', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
 
   it('never splits a letter from its marks or a ZWJ emoji sequence', () => {
-    const marked = 'خانهٔ';
+    const marked = 'خانه\u0654';
     expect(clipGraphemes(`${marked} ما`, 4)).toBe(marked);
-    expect(clipGraphemes('اَّب', 1)).toBe('اَّ');
-    const family = '👨‍👩‍👧';
+    expect(clipGraphemes('ا\u064E\u0651ب', 1)).toBe('ا\u064E\u0651');
+    const family = '👨\u200D👩\u200D👧';
     expect(clipGraphemes(`${family}x`, 1)).toBe(family);
     expect(clipGraphemes('abc', 10)).toBe('abc');
     expect(clipGraphemes('abc', 0)).toBe('');

@@ -9,29 +9,32 @@
  *
  * - NFKC (presentation forms, ligatures and full-width forms unfold);
  * - optionally lowercase (retrieval tokens), before the letter map;
- * - Arabic letter variants to the Persian ones: ي ى ئ to ی, ك to ک, ة to ه,
+ * - Arabic letter variants to the Persian ones: ي ى ئ to ی, ك to ک, ة and the
+ *   heh variants U+06C0, U+06D5 to ه,
  *   أ إ ٱ آ to ا, ؤ to و;
  * - strip combining marks (\p{M}: harakat, hamza above), tatweel U+0640,
  *   ZWJ U+200D, LRM U+200E, RLM U+200F and BOM U+FEFF; ZWNJ U+200C is kept
  *   (it carries affix boundaries; callers decide what to do with it);
  * - Persian and Arabic-Indic digits to ASCII.
  *
- * Heh variants (ۀ U+06C0, ە U+06D5) are deliberately not folded: the S06
- * memory eval gate decides that change (see S06-memory-v2-retrieval.md).
+ * One addition over 718752e (H4, F139): heh with yeh above (U+06C0) and ae
+ * (U+06D5) fold to heh U+0647, so 'خانۀ' matches 'خانهٔ' (heh plus hamza
+ * above, whose mark is stripped). The S06 memory eval stays at Recall@3 0.980
+ * with it (S06-memory-v2-retrieval.md).
  */
 
 const ARABIC_LETTER_MAP: Readonly<Record<string, string>> = {
   'ي': 'ی', 'ى': 'ی', 'ئ': 'ی',
   'ك': 'ک',
-  'ة': 'ه',
+  'ة': 'ه', '\u06C0': 'ه', '\u06D5': 'ه',
   'أ': 'ا', 'إ': 'ا', 'ٱ': 'ا', 'آ': 'ا',
   'ؤ': 'و',
 };
-const ARABIC_LETTERS = /[يىئكةأإٱآؤ]/g;
+const ARABIC_LETTERS = /[يىئكةأإٱآؤ\u06C0\u06D5]/g;
 // Combining marks (harakat, hamza above U+0654), tatweel, ZWJ, LRM, RLM, BOM. ZWNJ is kept.
-const REMOVED = /[\p{M}ـ‍‎‏﻿]/gu;
-const PERSIAN_DIGITS = /[۰-۹]/g;
-const ARABIC_INDIC_DIGITS = /[٠-٩]/g;
+const REMOVED = /[\p{M}\u0640\u200D\u200E\u200F\uFEFF]/gu;
+const PERSIAN_DIGITS = /[\u06F0-\u06F9]/g;
+const ARABIC_INDIC_DIGITS = /[\u0660-\u0669]/g;
 
 export interface FoldOptions {
   /** Lowercase after NFKC (retrieval tokens). Default false. */
