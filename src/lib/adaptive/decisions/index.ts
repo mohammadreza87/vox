@@ -64,8 +64,11 @@ export type DecisionUnknownReason = 'disabled' | 'invalid_input' | 'unauthorized
 export type DecisionResult =
   | { status: 'unknown'; reason: DecisionUnknownReason; elapsedMs: number; inputTokens?: number }
   | { status: 'answered'; model: string; answers: DecisionAnswer[]; elapsedMs: number; inputTokens?: number };
-/** Per-request provider options; `timeoutMs` is the service's effective deadline. */
-export interface DecisionProviderOptions { readonly timeoutMs?: number; readonly authorize?: () => Promise<boolean> }
+/** Per-request provider options; `timeoutMs` is the service's effective deadline. `safetyIdentifier`
+ * is an opaque, already-hashed end-user id (never a raw person id); without it the body is unchanged. */
+export interface DecisionProviderOptions { readonly timeoutMs?: number; readonly authorize?: () => Promise<boolean>; readonly safetyIdentifier?: string }
+/** Opaque identifiers only: the runtime sends `vox_` plus 32 hex characters. */
+const SAFETY_IDENTIFIER = /^[A-Za-z0-9_-]{1,64}$/;
 export interface DecisionProvider {
   readonly committedExportFence?: true;
   evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown>;
@@ -98,7 +101,9 @@ export class OpenAIDecisionProvider implements DecisionProvider {
   evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown> {
     // Parse again at provider boundary: unknown fields cannot be serialized to OpenAI.
     const parsed = requestSchema.parse(input);
-    const body = { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions, prompt_cache_options: { mode: 'explicit' as const } };
+    const safety = options?.safetyIdentifier;
+    const body = { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions, prompt_cache_options: { mode: 'explicit' as const },
+      ...(typeof safety === 'string' && SAFETY_IDENTIFIER.test(safety) ? { safety_identifier: safety } : {}) };
     const request = { signal, timeout: OpenAIDecisionProvider.timeout(options?.timeoutMs), maxRetries: 0 };
     // Both transports run inside the store: the guarded fetch reads it at transport time.
     return decisionAuthority.run({ signal, authorizeNow, authorize: options?.authorize }, () => {
@@ -128,6 +133,8 @@ export interface DecisionContext {
   /** End-to-end deadline in ms (authorization, loading and provider work).
    * Defaults to 500; values are clamped to 1..5000. Non-finite or < 1 is invalid_input. */
   readonly deadlineMs?: number;
+  /** Optional opaque, hashed end-user id handed to the provider (section 4.8). Never a raw id. */
+  readonly safetyIdentifier?: string;
 }
 
 /** The deadline the service enforces and hands to the provider as options.timeoutMs. */
@@ -209,6 +216,7 @@ export class DecisionService {
         if (controller.signal.aborted) return unknown(stopReason);
         if (context.authorizeNow && !context.authorizeNow()) return unknown('unauthorized');
         const raw = await this.provider.evaluate(parsed.data, controller.signal, context.authorizeNow, { timeoutMs: deadline,
+          ...(context.safetyIdentifier ? { safetyIdentifier: context.safetyIdentifier } : {}),
           ...(context.authorizeAtTransport ? { authorize: async () => !controller.signal.aborted && context.currentRevision() === context.revision && await context.authorizeAtTransport!() === before && context.currentRevision() === context.revision } : {}) });
         if (controller.signal.aborted) return unknown(stopReason);
         const result = validateAnswers(raw, parsed.data);
@@ -235,6 +243,37 @@ export class DecisionService {
     }
     finally { if (timer) clearTimeout(timer); if (cancel) context.signal?.removeEventListener('abort', cancel); }
   }
+}
+
+/** True for the timeout shapes providers and fetch implementations throw. Structural only: route
+ * bundles carry their own SDK class copies, so instanceof is never used. */
+function isTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  try {
+    const e = error as { constructor?: { name?: unknown }; name?: unknown; code?: unknown; message?: unknown };
+    if (e.constructor?.name === 'APIConnectionTimeoutError' || e.name === 'TimeoutError') return true;
+    if (typeof e.code === 'string' && (e.code === 'ETIMEDOUT' || (e.code.startsWith('UND_ERR_') && e.code.endsWith('TIMEOUT')))) return true;
+    return typeof e.message === 'string' && /\btimed? ?out\b/i.test(e.message);
+  } catch { return false; }
+}
+
+/**
+ * Wraps a provider so a provider-side timeout rejects with an Error named 'APIConnectionTimeoutError',
+ * which DecisionService reports as reason 'timeout' (F030). Other errors pass through unchanged, and
+ * committedExportFence is forwarded from the inner provider. The rethrown error carries no message
+ * from the provider. Used by the S09 triage wiring only; DecisionService itself is main's, unchanged.
+ */
+export function structuralTimeouts(provider: DecisionProvider): DecisionProvider {
+  return {
+    get committedExportFence() { return provider.committedExportFence; },
+    async evaluate(input, signal, authorizeNow, options) {
+      try { return await provider.evaluate(input, signal, authorizeNow, options); }
+      catch (error) {
+        if (!isTimeoutError(error)) throw error;
+        throw Object.assign(new Error('decision_provider_timeout'), { name: 'APIConnectionTimeoutError' });
+      }
+    },
+  };
 }
 
 /** One controller per live session. Never a shared cross-user cache. */
