@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLLM, type LLMRequest } from '../llm';
 import { PersonaGateway, type RuntimePrivacyState } from '../gateway';
 import { InMemoryUpdateDeduper, type NewMemory } from '../memory/store';
-import type { TelegramUpdate } from '../telegram/client';
+import type { TelegramBotClient, TelegramUpdate } from '../telegram/client';
 import type { MemoryRecord } from '../types';
 import { GAMEEND_CHAT, LEADS_CHAT, TG, fakeVoice, makeGateway, memory } from './fixtures';
 
@@ -104,7 +104,7 @@ async function gatewayScenarios(): Promise<Record<string, Recorded>> {
     const h = makeGateway();
     const state = (space: string): RuntimePrivacyState => ({ revision: `${space}-v1`, memoryEnabled: true, historyEnabled: true,
       context: space === 'personal' ? ['SAVED_CONTEXT_CANARY likes green tea', 'Walks every morning'] : ['WORK_CONTEXT_CANARY'], priorityContext: ['Reply briefly.'] });
-    const gateway = new PersonaGateway({ ...h, voice: null, botFor: () => h.bot, deduper: new InMemoryUpdateDeduper(),
+    const gateway = new PersonaGateway({ ...h, voice: null, botFor: () => h.bot as unknown as TelegramBotClient, deduper: new InMemoryUpdateDeduper(),
       runtimePrivacy: { read: async (_agent, _person, space) => state(space ?? 'work'), validateAudience: async () => true } });
     h.llm.nextReply = 'Hello again.';
     await gateway.converse('aria', 'reza', 'hello', { space: 'personal' });
@@ -188,7 +188,7 @@ async function golden(): Promise<string> {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-describe('S03 flag-off golden (generated at base 6d00b80)', () => {
+describe('S03 flag-off golden (generated at base 7224f40)', () => {
   it('reproduces FakeLLM prompts, reply requests and Anthropic bodies with every flag unset', async () => {
     vi.stubEnv('TIREH_CACHED_PROMPT', '');
     vi.stubEnv('TIREH_PROMPT_SYSTEM_TAIL', '');
