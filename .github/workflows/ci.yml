@@ -62,6 +62,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # tsconfig.json excludes test files; tsconfig.test.json type-checks the test files changed since main 7224f40
+      # and every src/**/hardening-*.test.ts(x) (see its header for scope and the pre-existing errors left out).
+      - name: Typecheck changed tests
+        run: npx tsc --noEmit -p tsconfig.test.json
+
       - name: Run tests with coverage
         run: npm run test:coverage
         env:
