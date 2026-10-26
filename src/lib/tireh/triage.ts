@@ -20,7 +20,10 @@
  *            personal_life, confidential, explicit_correction. Their answers
  *            are parsed into Triage.v2 and logged in shadow; routing is v1's.
  *   v2-live  as v2, and readTriage applies two adjustments only: route
- *            smalltalk makes effort quick; a correction makes it memorable.
+ *            smalltalk makes effort quick; a correction makes it memorable,
+ *            but only in a private chat (never when askAddressed or `group`)
+ *            and only when confidential and personal_life are absent or
+ *            below V2_LIVE_SENSITIVE_PROBABILITY (F233).
  * The pre-pass input is always triageInput(): the persona header plus the
  * last six lines, never memories, cards or saved context.
  */
@@ -29,7 +32,10 @@ import type { Persona } from './types';
 import { readSkillPick, skillMiss, skillQuestion, SKILL_QUESTION, type SkillChoice, type SkillPick } from './skill-routing';
 import type { LLMImage } from './llm';
 import type { TriageQuestionSet } from './flags';
-import { TRIAGE_V2_QUESTIONS, CATALOGUE_CHOICE_VALUES } from './decisions/catalog';
+import {
+  TRIAGE_V2_QUESTIONS, CATALOGUE_CHOICE_VALUES,
+  type TRIAGE_V2_ROUTES, type TRIAGE_V2_CONTEXT_NEEDS, type TRIAGE_V2_THREAD_STATUSES, type TRIAGE_V2_STYLE_REQUESTS,
+} from './decisions/catalog';
 
 export type DecisionQuestion =
   | { type: 'predicate'; name: string; instructions: string }
@@ -71,10 +77,10 @@ export interface Decider {
 
 /** Parsed v2 answers (question sets v2 / v2-live). Shadow unless v2-live. */
 export interface TriageV2 {
-  route?: 'answer' | 'smalltalk' | 'clarify' | 'retrieve_deep' | 'task' | 'correction';
-  contextNeed?: 'none' | 'person_profile' | 'open_threads' | 'group_decisions' | 'project_history';
-  threadStatus?: 'continues' | 'resolves' | 'new' | 'unclear';
-  explicitStyleRequest?: 'brief' | 'detailed' | 'step_by_step' | 'listening' | 'unspecified';
+  route?: (typeof TRIAGE_V2_ROUTES)[number];
+  contextNeed?: (typeof TRIAGE_V2_CONTEXT_NEEDS)[number];
+  threadStatus?: (typeof TRIAGE_V2_THREAD_STATUSES)[number];
+  explicitStyleRequest?: (typeof TRIAGE_V2_STYLE_REQUESTS)[number];
   /** Raw predicate probabilities. */
   personalLife?: number;
   confidential?: number;
@@ -110,6 +116,8 @@ export const MAX_TRIAGE_QUESTIONS = 7;
 export const V2_LIVE_SMALLTALK_CONFIDENCE = 0.6;
 /** v2-live only: explicit_correction at or above this probability makes the message memorable. */
 export const V2_LIVE_CORRECTION_PROBABILITY = 0.5;
+/** v2-live only: confidential or personal_life at or above this blocks the correction adjustment. */
+export const V2_LIVE_SENSITIVE_PROBABILITY = 0.5;
 
 /** Triage must never noticeably delay a reply. */
 export const TRIAGE_TIMEOUT_MS = 2000;
@@ -219,8 +227,11 @@ export function askedSkill(questions: readonly DecisionQuestion[]): boolean {
  * the triage: only `skills` becomes null. Under sets v2/v2-live the parsed
  * v2 answers are attached as `v2` (possibly empty); a missing or malformed v2
  * answer only omits that field, and v2 never rescues an invalid v1 result.
+ * `group` (optional, default false) marks a group chat: an addressed group
+ * message has askAddressed false, so a caller that knows the chat kind should
+ * pass it to keep the v2-live correction adjustment out of every group.
  */
-export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active' = 'mentions', routable?: readonly SkillChoice[], set: TriageQuestionSet = 'v1'): Triage | null {
+export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active' = 'mentions', routable?: readonly SkillChoice[], set: TriageQuestionSet = 'v1', group = false): Triage | null {
   const triage = readTriageV1(answers, askAddressed, participation, routable);
   if (!triage) return null;
   if (set === 'v1') return triage;
@@ -230,8 +241,11 @@ export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed
   const route = answers.route;
   const confident = route?.type === 'choice' && route.confidence >= V2_LIVE_SMALLTALK_CONFIDENCE;
   const smalltalk = confident && v2.route === 'smalltalk';
-  const corrected = (confident && v2.route === 'correction')
-    || (v2.explicitCorrection !== undefined && v2.explicitCorrection >= V2_LIVE_CORRECTION_PROBABILITY);
+  // F233: a correction may widen memory formation only in a private chat, and never for a message the
+  // model reads as confidential or about private life (absent counts as below the threshold).
+  const sensitive = (v2.confidential ?? 0) >= V2_LIVE_SENSITIVE_PROBABILITY || (v2.personalLife ?? 0) >= V2_LIVE_SENSITIVE_PROBABILITY;
+  const corrected = !askAddressed && !group && !sensitive && ((confident && v2.route === 'correction')
+    || (v2.explicitCorrection !== undefined && v2.explicitCorrection >= V2_LIVE_CORRECTION_PROBABILITY));
   return { ...triage, ...(smalltalk ? { effort: 'quick' as const } : {}), ...(corrected ? { memorable: true } : {}), v2 };
 }
 
