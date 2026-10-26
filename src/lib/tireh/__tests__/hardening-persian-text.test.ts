@@ -14,6 +14,7 @@ import { extractStyleFeatures, styleFeaturesSchema, zeroStyleFeatures, type Styl
 import { extractCandidates, IMAGE_PEOPLE_DESCRIPTION } from '../memory/extraction';
 import type { ChatContext, ChatMessage } from '../types';
 import { FakeLLM, testOrg } from './fixtures';
+import { classifyFollowUp } from '../../adaptive/personalization/procedural';
 
 const CORPUS: readonly string[] = [
   // English
@@ -282,5 +283,18 @@ describe('extraction image people filter reads the fold (F176)', () => {
     llm.nextExtraction = { memories: candidates };
     const kept = await extractCandidates(llm, org, persona, chat, 'reza', transcript, []);
     expect(kept).toHaveLength(candidates.length);
+  });
+});
+
+describe('S14 classifyFollowUp reads the shared fold', () => {
+  it.each([
+    ['ممن\u0640\u0640\u0640ون', 'thanks'],
+    ['\uFEE3\uFEE4\uFEE8\uFEEE\uFEE6', 'thanks'],
+    ['منظورم اين نبود', 'corrective'],
+    ['دوبار\u0640\u0640ه بگو', 'corrective'],
+    ['نه، ممنون', 'corrective'],
+    ['سلام', 'neutral'],
+  ])('%s is %s', (text, label) => {
+    expect(classifyFollowUp(text)).toBe(label);
   });
 });
