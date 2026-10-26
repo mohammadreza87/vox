@@ -50,7 +50,7 @@ function configure(overrides: NodeJS.ProcessEnv = {}): string {
 }
 
 const questions: DecisionQuestion[] = [{ type: 'predicate', name: 'memorable', instructions: 'Is it worth remembering?' }];
-const warnings = (warn: ReturnType<typeof vi.spyOn>) => warn.mock.calls.map(([line]) => String(line));
+const warnings = (warn: { mock: { calls: unknown[][] } }): string[] => warn.mock.calls.map((call) => String(call[0]));
 
 describe('Step 9 runtime decider (H3)', () => {
   it('caps a 5000 ms request at TRIAGE_TIMEOUT_MS (main\'s studioDecider deadline)', async () => {

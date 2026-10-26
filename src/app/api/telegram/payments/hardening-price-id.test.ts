@@ -5,6 +5,7 @@
  * (a) and is unchanged here. No network: fetch is a mock.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NextResponse } from 'next/server';
 import { createAuthenticatedRequest, parseResponse } from '@/test/utils';
 
 vi.mock('@/lib/firebase-admin', () => ({
@@ -20,9 +21,9 @@ vi.stubEnv('TELEGRAM_PAYMENT_TOKEN', 'test-payment-token');
 const { POST } = await import('./route');
 const ctx = { params: Promise.resolve({}) };
 
-const post = (priceId: unknown) => POST(createAuthenticatedRequest('POST', '/api/telegram/payments', {
+const post = async (priceId: unknown): Promise<NextResponse> => await POST(createAuthenticatedRequest('POST', '/api/telegram/payments', {
   body: { priceId, userId: 'user-123', telegramId: 123456 },
-}), ctx);
+}), ctx) as NextResponse;
 
 describe('POST /api/telegram/payments priceId', () => {
   beforeEach(() => { mockFetch.mockReset(); });
