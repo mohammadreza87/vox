@@ -149,6 +149,7 @@
     "src/lib/tireh/__tests__/redteam-wave-a-main-r1.test.ts",
     "src/lib/tireh/__tests__/redteam-wave-a-main-r2.test.ts",
     "src/lib/tireh/__tests__/redteam-wave-a-main-r3.test.ts",
+    "src/lib/tireh/__tests__/redteam-wave-a-harden-r1.test.ts",
     "src/lib/tireh/__tests__/redteam-wave-a-r2.test.ts",
     "src/lib/tireh/__tests__/redteam-wave-a-r3.test.ts",
     "src/lib/tireh/__tests__/redteam-wave-a.test.ts",
