@@ -172,9 +172,16 @@ where it differs from the sections above, it wins. Every path is behind `STUDIO_
   `(دربارهٔ یک عکس پاسخ داده شد؛ جزئیات نگه داشته نشد)`. The placeholder and the acknowledgement follow the caption's
   script, else the sender's Telegram `language_code` (no history is read before the boundary); the withheld text follows
   the delivered reply's script, and in the Mini App the message's script. The English constants are unchanged (H2).
+  Hardening round 1: a code-switched caption (`scriptLanguage` 'mixed', for example "این PDF رو بخون") or one with no
+  letters follows `language_code`, then the script with more letters (ties Persian); a code-switched reply is Persian
+  when the turn was (`textLanguage(delivered, imageTurnLanguage(...))`) or when Arabic-script letters are at least as
+  many as Latin ones. A clearly English caption or reply stays English whatever the `language_code`.
 - **Memory requests.** `suppressImageMemory` and the gateway call `memory/requests.ts` directly, so the shared rule's
   normalisation (the Persian fold) reaches both; with every flag unset the gateway's `NO_MEMORY` reads the same rule
-  (base-behaviour exception, decision (i)).
+  (base-behaviour exception, decision (i)). Hardening round 1: a secrecy signal (`secrecyRequest`: "between us",
+  "keep it private", "to yourself", "confidential", "پیش خودت", "بین خودمون", "محرمانه", ...) suppresses image memory
+  like a refusal, ahead of the decider's `remember` task, and `explicitMemoryRequest` is false for it and for a style,
+  format or secrecy qualifier after the verb ("keep it brief", "save it as text"). Only S12 reads these.
 
 ## Out of scope
 

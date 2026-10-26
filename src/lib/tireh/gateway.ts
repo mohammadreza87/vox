@@ -643,7 +643,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       currentStageTimer()?.markOnce('total');
       assistantMessage = {
         privacy: this.stamp(boundary, userMessage.privacy!.sourceEventIds),
-        role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? withheldImageReplyText(textLanguage(delivered)) : delivered, at: this.now(), telegramMessageId: message.message_id,
+        role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? withheldImageReplyText(textLanguage(delivered, imageTurnLanguage(caption, message.from?.language_code))) : delivered, at: this.now(), telegramMessageId: message.message_id,
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
         // S12: a reply that could repeat what an earlier image showed carries that
         // turn's mark forward (suppressed and/or people), see inheritedImageMark. On an

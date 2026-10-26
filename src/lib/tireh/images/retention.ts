@@ -4,7 +4,7 @@
  * sensitive document. Unknown triage fails closed.
  */
 
-import { scriptLanguage } from '../decisions/language';
+import { scriptLanguage, scriptLetterCounts } from '../decisions/language';
 import { explicitMemoryRequest, negatedMemoryRequest, secrecyRequest } from '../memory/requests';
 import type { ChatMessage } from '../types';
 import type { ImageTriage } from './questions';
@@ -14,19 +14,38 @@ export const SENSITIVE_DOCUMENT_THRESHOLD = 0.5;
 /** The language of an image turn's fixed, content-free texts. */
 export type ImageTextLanguage = 'fa' | 'en';
 
-/**
- * The language of the texts written before the boundary (placeholder, acknowledgement). No history is
- * read: a caption decides by its script (decisions/language.ts scriptLanguage), and without one the
- * sender's Telegram language_code does ('fa…' is Persian). Anything else is English.
- */
-export function imageTurnLanguage(caption: string, languageCode?: unknown): ImageTextLanguage {
-  if (caption.trim()) return scriptLanguage(caption) === 'fa' ? 'fa' : 'en';
-  return typeof languageCode === 'string' && languageCode.trim().toLowerCase().startsWith('fa') ? 'fa' : 'en';
+const persianLanguageCode = (code: unknown): boolean => typeof code === 'string' && code.trim().toLowerCase().startsWith('fa');
+
+/** A code-switched text ('mixed') leans Persian when it has at least as many Arabic-script letters as Latin ones. */
+function leansPersian(text: string): boolean {
+  const { arabic, latin } = scriptLetterCounts(text);
+  return arabic > 0 && arabic >= latin;
 }
 
-/** The language of a delivered reply (or a Mini App message): 'fa' only when scriptLanguage says so. */
-export function textLanguage(text: string): ImageTextLanguage {
-  return scriptLanguage(text) === 'fa' ? 'fa' : 'en';
+/**
+ * The language of the texts written before the boundary (placeholder, acknowledgement). No history is
+ * read. A caption that is clearly one script decides (decisions/language.ts scriptLanguage). A code-switched
+ * caption ("این PDF رو بخون", "فاکتور Amazon"), a caption with no letters, or no caption at all falls back to
+ * the sender's Telegram language_code ('fa…' is Persian), and a code-switched caption then to whichever
+ * script has more letters (ties Persian). Anything else is English.
+ */
+export function imageTurnLanguage(caption: string, languageCode?: unknown): ImageTextLanguage {
+  const script = caption.trim() ? scriptLanguage(caption) : 'unknown';
+  if (script === 'fa' || script === 'en') return script;
+  if (persianLanguageCode(languageCode)) return 'fa';
+  return script === 'mixed' && leansPersian(caption) ? 'fa' : 'en';
+}
+
+/**
+ * The language of a delivered reply (or a Mini App message). A text that is clearly one script decides; a
+ * code-switched one (a Persian reply naming English products) or one with no letters is Persian when the turn's
+ * own imageTurnLanguage was, and otherwise when it has at least as many Arabic-script letters as Latin ones.
+ */
+export function textLanguage(text: string, turnLanguage?: ImageTextLanguage): ImageTextLanguage {
+  const script = scriptLanguage(text);
+  if (script === 'fa' || script === 'en') return script;
+  if (turnLanguage === 'fa') return 'fa';
+  return script === 'mixed' && leansPersian(text) ? 'fa' : 'en';
 }
 
 /**

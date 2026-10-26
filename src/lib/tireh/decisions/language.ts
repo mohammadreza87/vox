@@ -15,12 +15,18 @@ export type ScriptLanguage = 'fa' | 'en' | 'mixed' | 'unknown';
 
 const SHARE = 0.8;
 
-export function scriptLanguage(text: string): ScriptLanguage {
+/** The letter counts scriptLanguage reads: Arabic-script and Latin letters only. Pure; only the counts leave. */
+export function scriptLetterCounts(text: string): { arabic: number; latin: number } {
   let arabic = 0, latin = 0;
   for (const ch of text) {
     if (isLatinLetter(ch)) latin++;
     else if (isArabicScriptLetter(ch)) arabic++;
   }
+  return { arabic, latin };
+}
+
+export function scriptLanguage(text: string): ScriptLanguage {
+  const { arabic, latin } = scriptLetterCounts(text);
   const total = arabic + latin;
   if (total === 0) return 'unknown';
   if (arabic / total >= SHARE) return 'fa';

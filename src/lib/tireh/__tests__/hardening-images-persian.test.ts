@@ -11,6 +11,7 @@ import {
   imagePlaceholderText, imageTurnLanguage, ingestTelegramImage, isImagePlaceholderText, isWithheldImageReplyText,
   withheldImageReplyText, type ImageIngestDeps,
 } from '../images';
+import { textLanguage } from '../images/retention';
 import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from '../memory/store';
 import type { LLMImage } from '../llm';
 import type { TelegramBotClient, TelegramMessage, TelegramUpdate } from '../telegram/client';
@@ -79,6 +80,56 @@ describe('F219: the fixed texts and their helpers', () => {
   });
 });
 
+// Hardening round 1 fixer: H2/H4 made a caption Persian only when at least 80% of its letters are Arabic-script, so a
+// code-switched Persian caption ("این PDF رو بخون", 75%) got the English acknowledgement and the sender's fa
+// language_code was ignored. A code-switched or letterless caption now falls back to language_code, then to the
+// majority script; a clearly English caption stays English whatever the language_code.
+describe('code-switched Persian captions and replies', () => {
+  it.each([
+    ['این PDF رو بخون', 'fa'],
+    ['این screenshot رو ببین لطفا', 'fa'],
+    ['فاکتور Amazon', 'fa'],
+    ['فاکتور Amazon', undefined],
+    ['این PDF رو بخون', 'en'],
+    ['🙂', 'fa'],
+  ])('%j with language_code %j is Persian', (caption, code) => {
+    expect(imageTurnLanguage(caption, code)).toBe('fa');
+    expect(imageAckText(caption, code)).toBe(FA_ACK);
+  });
+
+  it.each([
+    ['what is this?', 'fa'],
+    ['check this Amazon invoice please, سارا', 'fa'],
+    ['check this Amazon invoice please, سارا', undefined],
+    ['🙂', 'en'],
+    ['🙂', undefined],
+  ])('%j with language_code %j stays English', (caption, code) => {
+    expect(imageTurnLanguage(caption, code)).toBe('en');
+    expect(imageAckText(caption, code)).toBe(EN_ACK);
+  });
+
+  it('a Persian reply that names a few English products is Persian; a clear English reply stays English', () => {
+    const reply = 'این فاکتور Amazon برای Kindle است'; // 16 Arabic-script, 12 Latin letters: 'mixed'
+    expect(textLanguage(reply)).toBe('fa');
+    expect(textLanguage(reply, 'en')).toBe('fa');
+    // 'mixed' with more Latin letters: Persian when the turn was, else English.
+    expect(textLanguage('Amazon invoice برای Kindle، شماره سفارش 1234', 'fa')).toBe('fa');
+    expect(textLanguage('Amazon invoice برای Kindle، شماره سفارش 1234')).toBe('en');
+    // Clearly English ('en', 87% Latin) stays English whatever the turn.
+    expect(textLanguage('Kindle Paperwhite and Echo Dot, سارا', 'fa')).toBe('en');
+    expect(textLanguage('This is an ID card; the number was read.', 'fa')).toBe('en');
+    expect(textLanguage('این یک کارت است', 'en')).toBe('fa');
+  });
+
+  it('end to end: a code-switched Persian caption on a sensitive document keeps the Persian withheld text (the turn language reaches textLanguage)', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const h = gatewayHarness(imageAnswers({ kind: 'document', task: 'explain', sensitive: 0.9 }));
+    h.setReply('Amazon invoice برای Kindle، شماره سفارش 1234');
+    expect(await h.gateway.handleUpdate('aria', withLanguage(privatePhoto(TG.reza, h.ladder.sizes, 'فاکتور Amazon'), 'fa'))).toBe('replied');
+    expect(h.stored().filter((m) => m.role === 'assistant').map((m) => m.text)).toEqual([IMAGE_WITHHELD_REPLY_TEXT_FA]);
+  });
+});
+
 describe('F219: acknowledgement before triage settles', () => {
   async function slowAck(caption: string, languageCode?: string) {
     vi.stubEnv('STUDIO_IMAGES', '1');
@@ -107,6 +158,10 @@ describe('F219: acknowledgement before triage settles', () => {
     const { acks, turn } = await slowAck('', 'fa');
     expect(acks).toEqual([FA_ACK]);
     expect(turn?.text).toBe(IMAGE_PLACEHOLDER_TEXT_FA);
+  });
+
+  it('a code-switched Persian caption from a fa language_code gets the Persian acknowledgement', async () => {
+    expect((await slowAck('این PDF رو بخون', 'fa')).acks).toEqual([FA_ACK]);
   });
 
   it('English stays as it was', async () => {
