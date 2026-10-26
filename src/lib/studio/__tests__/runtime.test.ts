@@ -100,8 +100,10 @@ describe('Studio production initialization', () => {
   });
 
   it('keeps relationship providers and workers disabled under adaptive scope even when legacy allowlists are configured', async () => {
+    // STUDIO_DECIDER is pinned unset: with an OPENAI_API_KEY an ambient STUDIO_DECIDER=service would build the
+    // Decisions provider (the OpenAI SDK refuses jsdom), which this relationships case is not about (F051).
     configure({ STUDIO_RELATIONSHIPS: 'live', STUDIO_RELATIONSHIP_AGENTS: 'synthetic-agent',
-      STUDIO_RELATIONSHIP_PEOPLE: '300', OPENAI_API_KEY: 'synthetic-test-key' });
+      STUDIO_RELATIONSHIP_PEOPLE: '300', OPENAI_API_KEY: 'synthetic-test-key', STUDIO_DECIDER: '' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
     const studio = await getStudio();
     expect(studio.deps.adaptive).toBeDefined();

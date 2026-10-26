@@ -16,7 +16,7 @@ import { VoiceprintCipher } from '../identity/crypto';
 import { VoiceprintProviderError, type SpeechActivity, type VoiceprintProvider } from '../identity/provider';
 import type { SelfEchoSource } from '../identity/self-echo';
 import { FileVoiceprintStore, InMemoryVoiceprintStore, type VoiceprintStore } from '../identity/store';
-import { VoiceprintService, type VoiceprintServiceOptions } from '../identity/voice';
+import { chainVoiceInvalidators, VoiceprintService, type VoiceprintServiceOptions } from '../identity/voice';
 
 export const VP_NOW = Date.UTC(2026, 9, 20, 12);
 export const TELEGRAM_ID = 123;
@@ -156,9 +156,7 @@ export async function setupVoiceprints(o: SetupOptions = {}) {
   const voiceIdentity = { invalidate: vi.fn<(telegramId: number, space?: 'work' | 'personal') => Promise<void>>(async () => undefined) };
   if (o.chain ?? true) {
     // Exactly as runtime.ts: the single invalidator slot chains VoiceIdentityService and voiceprints.
-    adaptive.setVoiceIdentityInvalidator(async (input) => {
-      await Promise.all([voiceIdentity.invalidate(input.telegramId, input.space), service.invalidate(input.telegramId, input.space)]);
-    });
+    adaptive.setVoiceIdentityInvalidator(chainVoiceInvalidators(voiceIdentity, service));
   }
   const confirm = () => adaptive.confirm(telegramId, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
   const purpose = 'optional.biometric_recognition' as const;

@@ -67,7 +67,8 @@ function groupVoice(chatId: number, from: number): TelegramUpdate {
 }
 
 describe('gateway.transcribe runs shadow verification beside STT', () => {
-  beforeEach(() => { vi.stubEnv('STUDIO_VOICE_SHADOW', '1'); });
+  // voiceShadow is voiceRecognition && STUDIO_VOICE_SHADOW (H3, F207/F260), so both are stubbed.
+  beforeEach(() => { vi.stubEnv('STUDIO_VOICE_RECOGNITION', '1'); vi.stubEnv('STUDIO_VOICE_SHADOW', '1'); });
   afterEach(() => { vi.unstubAllEnvs(); });
 
   it('a private member voice note calls the verifier once with content-free inputs; the reply uses the STT text', async () => {
@@ -161,6 +162,7 @@ describe('shadow verification never sits on the reply path (QA round 2)', () => 
   });
 
   it('with STUDIO_VOICE_SHADOW=1 the reply is sent while verification is still pending, and the verifier gets a bounded signal', async () => {
+    vi.stubEnv('STUDIO_VOICE_RECOGNITION', '1');
     vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
     const verification = deferred<VoiceVerification>();
     const verifier = { verifyVoiceNote: vi.fn<VoiceNoteVerifier['verifyVoiceNote']>(() => verification.promise) };
@@ -190,6 +192,7 @@ describe('shadow verification never sits on the reply path (QA round 2)', () => 
   });
 
   it('with STUDIO_VOICE_SHADOW=1 a verifier that throws synchronously still leaves the reply unchanged', async () => {
+    vi.stubEnv('STUDIO_VOICE_RECOGNITION', '1');
     vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
     const baseline = harness({ verifier: null });
     const throwing = harness({ verifier: { verifyVoiceNote: vi.fn((): Promise<VoiceVerification> => { throw new Error('sync failure'); }) } });

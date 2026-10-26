@@ -348,7 +348,9 @@ describe('readTriage under v2-live', () => {
     const { effort: v1Effort, memorable: v1Memorable, ...restV1 } = v1;
     expect(rest).toEqual(restV1);
     expect([v1Effort, v1Memorable]).toEqual(['thoughtful', false]);
-    expect([effort, memorable, v2?.route]).toEqual(['quick', true, 'smalltalk']);
+    // askAddressed is true (a group), so the v2-live correction adjustment does not apply (H3, F233): memorable
+    // stays v1's false. The private-chat positive case is 'route correction at 0.6 or explicit_correction at 0.5 ...'.
+    expect([effort, memorable, v2?.route]).toEqual(['quick', false, 'smalltalk']);
   });
 });
 
