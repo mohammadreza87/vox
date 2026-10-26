@@ -101,14 +101,14 @@ export default function BookRoom({ host }: RoomProps) {
             {visits ? <small>{t('visits.later', { name }, host.lang)}</small> : <><b>{leaf.title}</b>{leaf.why && <small>{leaf.why}</small>}</>}
           </div>
         </div>
-        {/* one row under the spread, the same height on every tab: ‹, the dots (or About me's Visits link), › */}
-        <div className="pet-nav">
+        {/* one row under the spread: ‹, the dots (or About me's Visits link), ›; a single page has no row at all (N-4) */}
+        {(list.length > 1 || (tab === 'about' && !visits)) && <div className="pet-nav">
           <button type="button" aria-label={t('book.prev')} disabled={i === 0} onClick={() => go(-1)}>‹</button>
           {list.length > 1 && <div className="pet-dots" aria-hidden="true">{list.map((l, k) => <i key={l.key} data-on={k === i ? '' : undefined} />)}</div>}
           {/* About me is one leaf (no dots): Visits opens from under it (§4: "Visits open from the Life Book") */}
           {tab === 'about' && !visits && <button type="button" className="pet-link" onClick={openVisits}>{t('toy.book.visits')}</button>}
           <button type="button" aria-label={t('ui.more')} disabled={i >= list.length - 1} onClick={() => go(1)}>›</button>
-        </div>
+        </div>}
       </div>
       <div className="pet-verbs" role="tablist" aria-label={t('room.book')} data-room="book">
         {TABS.map(([id, k]) => <button key={id} type="button" role="tab" className="pet-verb" aria-selected={tab === id} onClick={() => pick(id)}><i><TabIcon tab={id} /></i><span>{t(k)}</span></button>)}

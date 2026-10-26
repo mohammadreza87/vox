@@ -115,9 +115,11 @@ export function createMockApi(o: MockOptions = {}): PetApi {
   // the demo person already said yes to the mic (UX-02), so hold-to-talk records at once (the sheet: ?mock=1&ask=mic)
   if (!o.askMic) play.asks.P3 = { lastAskedAt: t0 - DAY, declined: 0, acceptedAt: t0 - DAY };
   const HOUR = DAY / 24;
-  if (o.garden === 'seeded') play.garden = { seed: 'flower', plantedAt: t0 - HOUR, waterings: 0 };
-  if (o.garden === 'ready') play.garden = { seed: 'flower', plantedAt: t0 - 2 * DAY, waterings: 2 };
-  if (o.garden === 'bloom') { play.garden = { seed: 'flower', plantedAt: t0 - 3 * DAY, waterings: 3, bloomedAt: t0 - HOUR }; play.items.push({ id: 'bloomPin', earnedAt: t0 - HOUR }); play.book.push({ id: 'bloom', at: t0 - HOUR }); }
+  // C5 ("it bloomed") replays a bloom: without its own garden knob, the demo seeds the bloomed pot it is about (N-9)
+  const gardenKnob = o.garden ?? (o.ci === 'C5' ? 'bloom' : undefined);
+  if (gardenKnob === 'seeded') play.garden = { seed: 'flower', plantedAt: t0 - HOUR, waterings: 0 };
+  if (gardenKnob === 'ready') play.garden = { seed: 'flower', plantedAt: t0 - 2 * DAY, waterings: 2 };
+  if (gardenKnob === 'bloom') { play.garden = { seed: 'flower', plantedAt: t0 - 3 * DAY, waterings: 3, bloomedAt: t0 - HOUR }; play.items.push({ id: 'bloomPin', earnedAt: t0 - HOUR }); play.book.push({ id: 'bloom', at: t0 - HOUR }); }
   if (o.items && !play.items.length) play.items.push({ id: 'bloomPin', earnedAt: t0 - DAY }, { id: 'starPin', earnedAt: t0 - DAY });
   let checkin = o.ci ? { ref: 'mock-ci-reference-x', momentId: o.ci } : undefined;
   let prefs: CheckinPrefs = { enabled: o.checkins === 'on' || o.checkins === 'paused', types: { growingUp: true, seasons: true, garden: true, hellos: false, careNudges: false },

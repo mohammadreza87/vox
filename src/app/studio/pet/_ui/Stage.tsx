@@ -32,10 +32,10 @@ const SINE = 'cubic-bezier(.37, 0, .63, 1)';
 
 /**
  * The room's light cross-fades (§10.5): the new backdrop paints at once under a copy of the old one, which fades out
- * (one opacity animation on one layer, compositor only; no filters). A resize that only moves the floor line repaints
- * in place.
+ * with its floor pool (one opacity animation on one layer over the new pool, compositor only; no filters), so the new
+ * pool never lights the old room. A resize that only moves the floor line repaints in place.
  */
-function useRoomFade(bd: Backdrop, reduced: boolean) {
+function useRoomFade(bd: Backdrop, reduced: boolean, pool: CSSProperties) {
   const [out, setOut] = useState<{ key: number; bd: Backdrop } | null>(null);
   const [was, setWas] = useState(bd);
   const el = useRef<HTMLDivElement>(null);
@@ -55,7 +55,9 @@ function useRoomFade(bd: Backdrop, reduced: boolean) {
     return () => { clearTimeout(t); a?.cancel(); };
   }, [out, reduced]);
   return out && <div ref={el} key={out.key} className="pet-bd-out" aria-hidden="true"
-    style={{ position: 'absolute', inset: 0, pointerEvents: 'none', backgroundImage: out.bd.image, backgroundColor: out.bd.edge, backgroundRepeat: 'no-repeat' }} />;
+    style={{ position: 'absolute', inset: 0, pointerEvents: 'none', backgroundImage: out.bd.image, backgroundColor: out.bd.edge, backgroundRepeat: 'no-repeat' }}>
+    <div className="pet-floor" style={{ ...pool, backgroundImage: out.bd.floor }} />
+  </div>;
 }
 
 /** A flick, not a gaze drag: ≥ 60 px sideways, twice as far as up or down, within 320 ms. */
@@ -68,7 +70,6 @@ export const SWIPE = { px: 60, ms: 320 } as const;
  * frame; off it, the eyes follow the finger), and the pointer is captured when the engine takes it.
  */
 export function Stage({ engine, backdrop, box, children, over, embed, style, onTouch, onSwipe, onBody, reduced = false }: StageProps) {
-  const fading = useRoomFade(backdrop, reduced);
   const origin = useRef<{ left: number; top: number }>({ left: 0, top: 0 });
   const flick = useRef<{ id: number; x: number; y: number; t: number } | null>(null);
 
@@ -93,15 +94,17 @@ export function Stage({ engine, backdrop, box, children, over, embed, style, onT
   };
 
   const groundY = box.y + box.size * 0.83;
+  const pool: CSSProperties = { left: box.x - box.size * 0.35, top: groundY - box.size * 0.22, width: box.size * 1.7, height: box.size * 0.44 };
+  const fading = useRoomFade(backdrop, reduced, pool);
   return (
     <div className="pet-stage" data-embed={embed ? '' : undefined} style={{ backgroundImage: backdrop.image, backgroundColor: backdrop.edge, ...style }}
       onPointerDown={(e) => { onTouch?.(); send(e, 'down'); }}
       onPointerMove={(e) => send(e, 'move')}
       onPointerUp={(e) => send(e, 'up')}
       onPointerCancel={(e) => send(e, 'cancel')}>
+      <div className="pet-floor" aria-hidden="true" style={{ ...pool, backgroundImage: backdrop.floor }} />
+      {/* the old room (and its pool) fades out over the new one */}
       {fading}
-      <div className="pet-floor" aria-hidden="true"
-        style={{ left: box.x - box.size * 0.35, top: groundY - box.size * 0.22, width: box.size * 1.7, height: box.size * 0.44, backgroundImage: backdrop.floor }} />
       <m.div className="pet-glow" aria-hidden="true"
         style={{ left: box.x - box.size * 0.3, top: box.y - box.size * 0.25, width: box.size * 1.6, height: box.size * 1.4, backgroundImage: backdrop.glow, opacity: engine.glow }} />
       <div className="pet-char" style={{ left: box.x, top: box.y, width: box.size, height: box.size }}>{children}</div>

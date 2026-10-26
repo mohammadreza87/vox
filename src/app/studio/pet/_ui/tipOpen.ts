@@ -9,3 +9,11 @@ export const TIP_OPEN_MS = 20_000;
 export function openOver(o: { hello: boolean; touched: boolean; sinceHelloMs: number }): boolean {
   return o.hello && (o.touched || o.sinceHelloMs >= TIP_OPEN_MS);
 }
+
+/**
+ * What else holds tips and asks back (§7.1 "a calm moment"; N-1): the page's busy keys besides a room's own (`game`,
+ * `closet`, a sheet). `round`: a Bop round on Home is in play; `bedtime`: the moon was tapped and the pet is going to
+ * sleep; `replay`: a check-in's moment or a stage-up is the open event and is still being read.
+ */
+export const BUSY = { open: 'open', round: 'round', bedtime: 'bedtime', replay: 'replay' } as const;
+export const BEDTIME_MS = 4000;

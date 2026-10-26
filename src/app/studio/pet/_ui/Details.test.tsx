@@ -82,6 +82,6 @@ describe('growth details on the character (lazy Details overlay)', () => {
     expect(Number(potScale())).toBeGreaterThan(side * 1.3);
     // a closet head item takes the head: the bow goes back into the room
     cue({ type: 'wearing', wearing: { head: 'pomegranateCrown', neck: null, hand: null } });
-    expect(container.querySelector('svg.pet-details [data-detail="keepsake:closet"]')!.closest('svg')!.getAttribute('data-part')).toBe('back');
+    expect(container.querySelector('svg.pet-details:not([data-part]) [data-detail="keepsake:closet"]')).toBeNull();
   });
 });

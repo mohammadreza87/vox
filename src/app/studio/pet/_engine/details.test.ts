@@ -34,7 +34,7 @@ describe('growth details on the rig (§4.11)', () => {
     expect(poseToSvg(geom, f, {})).toBe(plain);
     expect(poseToSvg(geom, f, { details: { shown: NO_DETAILS } })).toBe(plain);
     const svg = poseToSvg(geom, f, { details: { shown: fitDetails(ALL, 4) } });
-    for (const k of ['glint', 'pin', 'charm', 'keepsake:book', 'seasonal']) expect(svg).toContain(`data-detail="${k}"`);
+    for (const k of ['glint', 'pin', 'charm', 'keepsake:bedroom', 'seasonal']) expect(svg).toContain(`data-detail="${k}"`);
     // the glint rides inside the lids (a blink closes it); the room keepsakes stand behind the body, outside its transform (they never hop)
     const lids = svg.indexOf('data-part="lids"'), glint = svg.indexOf('data-detail="glint"'), body = svg.indexOf('<g transform="translate(');
     expect(glint).toBeGreaterThan(lids);
@@ -43,7 +43,7 @@ describe('growth details on the rig (§4.11)', () => {
     const l1 = detailLayers(wisp, fitDetails(ALL, 1));
     expect(l1.lids).toHaveLength(0);
     expect(l1.body).toHaveLength(0);
-    expect(l1.back).toHaveLength(4);
+    expect(l1.back).toHaveLength(2);
     expect(l1.floor).toHaveLength(0);
   });
 
@@ -63,26 +63,32 @@ describe('growth details on the rig (§4.11)', () => {
     }
   });
 
-  it('places room keepsakes in the room behind the pet, never at its foot; the Closet bow sits on the head (P-24)', () => {
+  it('room props stand on the backdrop\'s horizon, spaced clear of the pet, one per room (two at Home); the Closet bow sits on the head (P-24)', () => {
     for (const look of PRESET_LOOKS.slice(0, 12)) {
       const m = characterModel(look, { uid: 'pet', mode: 'live', stage: 3, expr: 'idle', size: 200 });
-      const l = detailLayers(m, fitDetails({ keepsakes: ['play', 'closet', 'book'], seasonal: 'yalda' }, 3));
-      // behind the ground line (further back on the floor), never in the front floor layer
+      const l = detailLayers(m, fitDetails({ keepsakes: ['play', 'closet', 'book', 'bedroom'], seasonal: 'yalda' }, 3), { horizon: 20 });
+      // on the horizon (behind the pet), never in the front floor layer; at most two at Home
       expect(l.floor).toHaveLength(0);
+      expect(l.back.length).toBeLessThanOrEqual(2);
       for (const g of l.back) {
         const [x, y] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(JSON.stringify(g))!.slice(1).map(Number);
-        expect(y).toBeLessThan(GROUND);
+        expect(y).toBe(GROUND - 20);
         // clear of the body's side at its height (it stands in the room, it is not lying against the pet)
         const [lo, hi] = edgesAt(m, GROUND + (y - 6 - GROUND) / m.growth).map((v) => 100 + (v - 100) * m.growth);
         expect(x < lo - 6 || x > hi + 6, `${look.hue} ${x} ${lo} ${hi}`).toBe(true);
       }
       const free = !m.layers['acc-rigid'].length && !m.layers['acc-soft'].length;
       expect(l.head.map((g) => g.attrs['data-detail'])).toEqual(free ? ['keepsake:closet'] : []);
-      expect(l.back.some((g) => g.attrs['data-detail'] === 'keepsake:closet')).toBe(!free);
       if (free) {
         const y = Number(/translate\([-\d.]+ ([-\d.]+)\)/.exec(JSON.stringify(l.head[0]))![1]);
         expect(y).toBeLessThan(m.face.eyes[0].cy - 10);
       }
+      // an away room shows only its own keepsake (the Bedroom never collects the others at the pet's feet)
+      const keys = (room: string) => detailLayers(m, fitDetails({ keepsakes: ['play', 'garden', 'bedroom', 'book'], seasonal: 'yalda' }, 3), { room }).back.map((g) => g.attrs['data-detail']);
+      expect(keys('bedroom')).toEqual(['keepsake:bedroom']);
+      expect(keys('play')).toEqual([]);
+      expect(keys('book')).toEqual(['keepsake:book']);
+      expect(keys('home')).toEqual(['keepsake:book', 'seasonal']);
     }
     // a closet head item takes the head: the bow goes back into the room
     const m = characterModel(PRESET_LOOKS[0], { uid: 'pet', mode: 'live', stage: 3, expr: 'idle', size: 200 });

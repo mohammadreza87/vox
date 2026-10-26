@@ -30,7 +30,7 @@ import { ROOM_IDS, ROOM_VIEW, stepToward, type RoomId } from './rooms';
 import { ROOM_PANEL_ID, RoomRail, roomTabId } from './rooms/RoomRail';
 import { backdrop, characterBox, daysTogether, groundPoint, PET_GROUND, sceneAnchors, type AwayBackdrop, type CharacterBox } from './scene';
 import { cleanFirst, dir, petLang, t, useStrings, type PetStringKey } from './strings';
-import { openOver, TIP_OPEN_MS } from './tipOpen';
+import { BEDTIME_MS, BUSY, openOver, TIP_OPEN_MS } from './tipOpen';
 import {
   bootTelegram, circleCode, closeApp, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, openTelegram, paintChrome, clearLegacyPetSnapshots,
   readyAfterPaint, settingsButton, startAccelerometer, startIntent, syncSafeAreas, tg, viewport,
@@ -258,11 +258,11 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const emit = (sig: HostSignal) => { for (const f of bus.current) f(sig); };
   const active = useRef(0);
   /** `open`: the opening seconds are the hello's (tips.ts openOver): no tip or ask until it lets go */
-  const busyKeys = useRef(new Set<string>(['open']));
+  const busyKeys = useRef(new Set<string>([BUSY.open]));
   const opening = useRef({ hello: false, touched: false, at: 0 });
   const openCheck = () => {
     const o = opening.current;
-    if (openOver({ hello: o.hello, touched: o.touched, sinceHelloMs: performance.now() - o.at })) busyKeys.current.delete('open');
+    if (openOver({ hello: o.hello, touched: o.touched, sinceHelloMs: performance.now() - o.at })) busyKeys.current.delete(BUSY.open);
   };
   /** the hello has been said (or no hello is due: asleep, a check-in's replay, a conversation already started) */
   const helloSaid = () => {
@@ -302,7 +302,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   // the away rooms' light is its own chunk, fetched once the page has said hello (Home never waits on it)
   const [away, setAway] = useState<AwayBackdrop | undefined>(undefined);
   const bd = useMemo(() => (view ? backdrop(view.look, room, groundY, away) : null), [view?.look, room, groundY, away]); // eslint-disable-line react-hooks/exhaustive-deps
-  const wantAway = extras || (room !== 'home' && room !== 'play');
+  const wantAway = extras || room !== 'home';
   useEffect(() => {
     if (!wantAway || away) return;
     void import('./roomLight').then((m) => { if (alive.current) setAway(() => m.awayBackdrop); }, () => { /* offline: the rooms keep Home's light */ });
@@ -427,6 +427,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
       if (!valid()) return;
       adoptView(v);
       setFatal(null);
+      // a check-in's replay shows the floor (the C5 bloom's pot) from its first beat: fetch the overlay now (P-07)
+      if (v.checkin) void import('./Details');
       afterHello(900, () => playOpenEvents(v));
     } catch (e) {
       if (!valid()) return;
@@ -489,19 +491,28 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
       const care = careRef.current;
       // opened from a check-in (§5.1): its moment plays instead of the hello (Extras' Asks replays it)
       const v = viewRef.current;
-      if (!care?.asleep && !conversationStarted.current && !v?.checkin) {
+      // a check-in's replay or a stage-up is the open event: it is the hello (no "Hi!" first, N-2), and tips and asks
+      // wait while it is read (N-1)
+      const event = !!(v?.checkin || v?.stageUp) && !care?.asleep;
+      const hello = !care?.asleep && !conversationStarted.current && !event;
+      if (hello) {
         engine.fire({ type: 'hello', firstName: firstName() });
         // hello first, always (S2): if the engine's line has not landed on its beat (a starved frame loop), say it here
         later(1200, () => { if (!opening.current.hello && !conversationStarted.current) sayOnce(helloText(firstName())); helloSaid(); });
       } else {
-        if (v?.checkin) replayUntil.current = performance.now() + REPLAY_HOLD_MS;
+        if (event) {
+          replayUntil.current = performance.now() + REPLAY_HOLD_MS;
+          busyKeys.current.add(BUSY.replay);
+          later(REPLAY_HOLD_MS, () => busyKeys.current.delete(BUSY.replay));
+        }
         helloSaid();
       }
       // the days chip is the owner's and members' relationship count: a guest never sees it (P-22)
       if (care && v && v.role !== 'guest' && !v.talkInDm) {
         setDays(daysTogether(care.firstMetAt, sync.now()));
       }
-      for (const fn of queued.current.splice(0)) afterHello(900, fn);
+      // after the hello has read; an open event that is the hello plays at once
+      for (const fn of queued.current.splice(0)) afterHello(hello ? 900 : 150, fn);
       setExtras(true);
       const intent = startIntent();
       // talk: focus the pill (Peek opens it from its round button first)
@@ -584,13 +595,10 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     engine.setRoom?.(room, rtl ? { dir: forward ? -1 : 1 } : {});
     emit({ type: 'room', room });
     // a first visit lights the person's own room moment (§4.11): the server answers noop after that. A check-in's
-    // replay (the C5 bloom) keeps the bubble for its own line first: the room moment never overrides it (P-08)
-    if (room !== 'home' && viewRef.current?.play) {
-      const wait = Math.max(0, replayUntil.current - performance.now());
-      replayUntil.current = 0;
-      if (wait) later(wait, () => { if (roomRef.current === room) void host.play({ op: 'roomVisited', room }); });
-      else void host.play({ op: 'roomVisited', room });
-    }
+    // replay (the C5 bloom) is this open's one moment: the room it opens does not light a visit line after it (P-08)
+    const replaying = performance.now() < replayUntil.current;
+    replayUntil.current = 0;
+    if (room !== 'home' && viewRef.current?.play && !replaying) void host.play({ op: 'roomVisited', room });
   }, [engine, room, rtl]); // eslint-disable-line react-hooks/exhaustive-deps
   // the motion layer's cues (settle, lit peak) reach the chunks that wait on them
   useEffect(() => engine?.onMotion?.((cue) => emit({ type: 'motion', cue })), [engine]);  
@@ -680,9 +688,10 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
         break;
       case 'thought': { const need = c.need; setThought(need); later(2400, () => setThought((n) => (n === need ? null : n))); break; }
       case 'care': sync.act(c.action, c.n); emit({ type: 'care', action: c.action }); break;
-      case 'score': scoreCut.current = false; setScore({ bops: c.bops, misses: c.misses }); break;
+      // a Bop round in play: no tip or ask over it (N-1)
+      case 'score': scoreCut.current = false; busyKeys.current.add(BUSY.round); setScore({ bops: c.bops, misses: c.misses }); break;
       // a round cut by bedtime is already fading: it goes with the fade, not after the round-end beat
-      case 'playOver': later(scoreCut.current ? 220 : 1200, () => setScore(null)); break;
+      case 'playOver': later(scoreCut.current ? 220 : 1200, () => { busyKeys.current.delete(BUSY.round); setScore(null); }); break;
       case 'spoken': finishSpeaking(speakToken.current); break;
     }
   };
@@ -695,7 +704,13 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     emit({ type: 'toy', e: t });
     touchedOnce();
     // tucking in ends a Bop round (§4.4): the engine takes the ball away, its pips fade with it (P-02)
-    if (t.type === 'moonTap' && !care?.asleep) { scoreCut.current = true; setScore((s) => (s ? { ...s, out: true } : s)); }
+    if (t.type === 'moonTap' && !care?.asleep) {
+      scoreCut.current = true;
+      setScore((s) => (s ? { ...s, out: true } : s));
+      // going to sleep: no tip in the same beat (N-1); the key goes when the pet is asleep, or after the bedtime beat
+      busyKeys.current.add(BUSY.bedtime);
+      later(BEDTIME_MS, () => busyKeys.current.delete(BUSY.bedtime));
+    }
     const full = !!care && care.tummy >= FULL_AT;
     if (full && t.type === 'cookieTap') { e.fire({ type: 'tooFull' }); return; }
     if (full && t.type === 'cookieDrop') {
@@ -944,7 +959,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const look = view?.look;
   // the body's details, the room keepsakes behind the pet, the garden's pot in front (the Garden room's hero)
   const detailsOn = useMemo(() => (extras && engine && look ? (['body', 'back', 'floor'] as const).map((part) =>
-    <Suspense key={part} fallback={null}><Details engine={engine} look={look} stage={stage} size={box.size} part={part} room={part === 'floor' ? room : undefined} /></Suspense>) : []), [extras, engine, look, stage, box.size, room]);
+    <Suspense key={part} fallback={null}><Details engine={engine} look={look} stage={stage} size={box.size} part={part} room={part === 'body' ? undefined : room} /></Suspense>) : []), [extras, engine, look, stage, box.size, room]);
 
   /* ---------- render ---------- */
 
@@ -957,7 +972,9 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   }
   if (!mounted || !view || !bd || !engine || !stringsOk) return <main className="pet-root" data-pet-root="" style={{ backgroundColor: bd?.edge ?? PET_GROUND }} />;
 
-  const headTop = box.y + box.size * 0.2;
+  // the bubble's tail clears what the head wears (a closet head item, the Closet's keepsake bow): N-7
+  const g = view.growth, headDressed = !!view.play?.wearing?.head || !!g?.moments.some((m) => m.id === 'room-closet' && (m.lit || g.mine?.includes(m.id)));
+  const headTop = box.y + box.size * (headDressed ? 0.13 : 0.2);
   const peek = layout.h === 'peek';
   const guest = view.role === 'guest' || !!view.talkInDm;
   const RoomView = dockRoom === 'home' ? null : ROOM_VIEW[dockRoom];

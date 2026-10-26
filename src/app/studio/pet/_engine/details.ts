@@ -204,8 +204,8 @@ function seasonalArt(id: string): SvgNode[] {
  *   `data-pivot="x y"` and swings by the `acc-soft` layer's `rotate` about it;
  * - `head`: the Closet's keepsake bow, worn on the head (an accessory sits on the body, never at its feet): inside a
  *   group bound to `rig.layer['acc-rigid']` (origin `model.pivots['acc-rigid']`), like the closet's head pieces;
- * - `back`: room and seasonal keepsakes placed in the room a step behind the pet (higher on the floor, a touch
- *   smaller, drawn before the body so it can overlap them): never at its feet, where they read as dropped;
+ * - `back`: room and seasonal keepsakes standing on the backdrop's horizon behind the pet, clear of its sides (drawn
+ *   before the body): never at its feet, where they read as dropped. A room shows its own; Home two;
  * - `floor`: the Garden's pot, in front of the body, outside the body wrapper (it never hops). In the Garden room
  *   (`hero`) it is the room's hero: bigger, a step in front of the pet, overlapping its foot.
  * Every group has `data-detail` (its key); the lit one fades in on the `litPeak` cue (class the page adds).
@@ -223,10 +223,14 @@ export interface DetailDraw extends GardenDraw {
   hero?: boolean;
   /** the person dressed the head (a closet head item): the keepsake bow stays in the room instead */
   headWorn?: boolean;
+  /** the room on screen: an away room shows only its own keepsake; Home (or none) the newest two */
+  room?: string;
+  /** where the backdrop's horizon is, in view units above the ground line: the room props stand on it */
+  horizon?: number;
 }
 
-/** Back keepsakes: how far behind the ground line they stand, their scale (the far ones smaller) and the air to the body (view units). */
-const BACK = { near: 6, far: 12, k: 1.15, farK: 1.02, gap: 13 } as const;
+/** Room props: the horizon above the ground line by default (view units), their scale, the air to the body's sides, how many show. */
+const BACK = { horizon: 19, k: 1.1, gap: 14, cap: 2 } as const;
 
 export function detailLayers(m: CharacterModel, d: ShownDetails, o: DetailDraw = {}): DetailLayers {
   const out: DetailLayers = { lids: [], body: [], head: [], back: [], floor: [] };
@@ -254,25 +258,28 @@ export function detailLayers(m: CharacterModel, d: ShownDetails, o: DetailDraw =
     ks = ks.filter((k) => k !== 'closet');
     out.head.push(g(fade(detailKey('keepsake', 'closet'), bow.x, bow.y), [g({ transform: `translate(${bow.x} ${bow.y}) rotate(-16) scale(${BOW_K})` }, keepsakeArt('closet'))]));
   }
-  // back: placed in the room a step behind the pet, clear of its sides (never at its foot): left near, left far, right
-  // near, right far. The seasonal keepsake takes the right; with the garden's pot standing there it steps further out.
+  // back: room props stand in the room, on the backdrop's horizon behind the pet (never at its feet), spaced clear of
+  // its sides. A room shows only its own keepsake; Home shows two (the newest, then the seasonal one or the next).
   const grow = m.growth, cx = m.pivots.body[0];
   const sides = (y: number): [number, number] => {
     const xs = [0, 6, 12].map((dy) => edgesAt(m, GROUND + (y - dy - GROUND) / grow).map((x) => cx + (x - cx) * grow));
     return [Math.min(...xs.map((e) => e[0])), Math.max(...xs.map((e) => e[1]))];
   };
   const shade = (x: number, y: number, k = 1, a = 0.14): SvgNode => ({ tag: 'ellipse', attrs: { cx: r1(x), cy: r1(y + 0.6), rx: r1(6.6 * k), ry: r1(1.6 * Math.sqrt(k)), fill: '#000000', opacity: a } });
-  const near = GROUND - BACK.near, far = GROUND - BACK.far, [nl, nr] = sides(near), [fl, fr] = sides(far);
-  const clampX = (x: number) => r1(Math.max(5, Math.min(195, x)));
-  const slot = { ln: { x: clampX(nl - BACK.gap), y: near, k: BACK.k }, lf: { x: clampX(fl - BACK.gap - 15), y: far, k: BACK.farK },
-    rn: { x: clampX(nr + BACK.gap), y: near, k: BACK.k }, rf: { x: clampX(fr + BACK.gap + 15), y: far, k: BACK.farK } };
-  const free = [slot.ln, slot.lf, ...(d.garden ? [] : [slot.rn]), slot.rf];
-  const right = d.seasonal ? (d.garden ? slot.rf : slot.rn) : null;
-  if (right) free.splice(free.indexOf(right), 1);
-  const place = (key: string, s: { x: number; y: number; k: number }, art: SvgNode[]) =>
-    out.back.push(g(fade(key, s.x, s.y), [shade(s.x, s.y, s.k, 0.13), g({ transform: `translate(${s.x} ${r1(s.y)}) scale(${r2(s.k * FLOOR_K)})` }, art)]));
-  ks.slice(0, free.length).forEach((id, i) => place(detailKey('keepsake', id), free[i], keepsakeArt(id)));
-  if (d.seasonal && right) place('seasonal', right, seasonalArt(d.seasonal));
+  const y = r1(GROUND - (o.horizon ?? BACK.horizon)), [sl, sr] = sides(y);
+  const clampX = (x: number) => r1(Math.max(4, Math.min(196, x)));
+  // the garden's pot stands on the right: then the room props keep to the left
+  const slots = d.garden ? [clampX(sl - BACK.gap)] : [clampX(sl - BACK.gap), clampX(sr + BACK.gap)];
+  const home = !o.room || o.room === 'home';
+  const props: Array<[string, SvgNode[]]> = home
+    ? [...ks.slice(0, 1).map((id): [string, SvgNode[]] => [detailKey('keepsake', id), keepsakeArt(id)]),
+      ...(d.seasonal ? [['seasonal', seasonalArt(d.seasonal)] as [string, SvgNode[]]] : []),
+      ...ks.slice(1).map((id): [string, SvgNode[]] => [detailKey('keepsake', id), keepsakeArt(id)])]
+    : ks.filter((id) => id === o.room || (o.room === 'garden' && id === 'bloom')).slice(0, 1).map((id) => [detailKey('keepsake', id), keepsakeArt(id)]);
+  props.slice(0, Math.min(BACK.cap, slots.length)).forEach(([key, art], i) => {
+    const x = slots[i];
+    out.back.push(g(fade(key, x, y), [shade(x, y, BACK.k, 0.12), g({ transform: `translate(${x} ${y}) scale(${r2(BACK.k * FLOOR_K)})` }, art)]));
+  });
   // front: the garden's vessel right of the body (the Garden room's hero: bigger, a step in front)
   if (d.garden) {
     const p = gardenAt(m, o.hero);

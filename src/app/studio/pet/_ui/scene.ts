@@ -30,7 +30,7 @@ export interface Backdrop {
 export type SceneRoom = 'home' | 'play' | 'garden' | 'closet' | 'bedroom' | 'book';
 
 /** The away rooms' own light (roomLight.ts, a lazy chunk: the first paint never carries it). */
-export type AwayBackdrop = (look: Pick<CharacterLook, 'hue'>, room: Exclude<SceneRoom, 'home' | 'play'>, groundY?: number) => Backdrop;
+export type AwayBackdrop = (look: Pick<CharacterLook, 'hue'>, room: Exclude<SceneRoom, 'home'>, groundY?: number) => Backdrop;
 
 /**
  * A room in the agent's hue, lit softly behind the character and deepening to the Soft Weather ground at the edges,
@@ -39,7 +39,7 @@ export type AwayBackdrop = (look: Pick<CharacterLook, 'hue'>, room: Exclude<Scen
  * light. Gradients only: static, no filters, no blur (§10.7).
  */
 export function backdrop(look: Pick<CharacterLook, 'hue'>, room: SceneRoom = 'home', groundY?: number, away?: AwayBackdrop): Backdrop {
-  if (room !== 'home' && room !== 'play') { if (away) return away(look, room, groundY); room = 'home'; }
+  if (room !== 'home') { if (away) return away(look, room, groundY); if (room !== 'play') room = 'home'; }
   const t = TONES[look.hue], play = room === 'play';
   const core = mix(play ? t.light : t.base, PET_GROUND, play ? 0.5 : 0.62);
   const mid = mix(t.shadow, PET_GROUND, play ? 0.72 : 0.8);
@@ -52,6 +52,9 @@ export function backdrop(look: Pick<CharacterLook, 'hue'>, room: SceneRoom = 'ho
   };
 }
 
+/** The away rooms' horizon sits this far behind the character's ground line (px): the pet stands on the floor, its room props on the seam. */
+export const HORIZON_PX = 34;
+
 /** The stage-up glow ellipse, in the agent's hue in every room. */
 export const glowOf = (look: Pick<CharacterLook, 'hue'>) => { const t = TONES[look.hue]; return `radial-gradient(closest-side, ${t.light}cc, ${t.base}55 55%, ${t.base}00)`; };
 
@@ -61,17 +64,18 @@ export interface CharacterBox { x: number; y: number; size: number }
 const FIT = {
   // Peek and Short: ~74% of the width, centred near 45% of the height (360×640 reads balanced: kept as it was)
   small: { w: 0.74, h: 0.68 },
-  // Regular and Tall: the character fills the stage as it does on a small phone (≈ a third of the free height for the
-  // body), standing on a floor line ~68% down, with the bubble zone above its head; Tall grows toward the 520 cap
-  regular: { w: 0.9, h: 0.58, ground: 0.68 },
-  tall: { w: 0.94, h: 0.6, ground: 0.68 },
+  // Regular and Tall: the character fills the stage (the body ~70% of the width), standing low on a floor line ~85%
+  // down the free stage, so the gap to the rail is about a bubble zone and the bubble and thought zones sit above the
+  // head; Tall grows toward the 520 cap
+  regular: { w: 0.92, h: 0.58, ground: 0.85 },
+  tall: { w: 0.94, h: 0.6, ground: 0.85 },
 } as const;
 
 /**
  * The character's box (the body fills ~3/4 of its 200 box). Peek and Short: ~74% of the viewport width, centred near
  * 45% of the height (§1.1), shrunk on short screens so the head keeps room for the bubble under the safe area and the
- * feet never meet the dock. Regular and Tall (`cls`): bigger, standing on a floor line about two thirds down the free
- * stage, so the stage is never half empty above the dock.
+ * feet never meet the dock. Regular and Tall (`cls`): bigger, standing low on a floor line ~85% down the free stage,
+ * so the stage is never half empty above the dock.
  */
 export function characterBox(vw: number, vh: number, top = 0, dockTop = vh, cls?: 'peek' | 'short' | 'regular' | 'tall'): CharacterBox {
   const room = Math.max(120, dockTop - top);

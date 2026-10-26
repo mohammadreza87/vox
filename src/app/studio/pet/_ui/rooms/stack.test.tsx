@@ -1,5 +1,6 @@
 import { act, fireEvent, render } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HeightClass } from '../layout';
@@ -7,7 +8,8 @@ import { care, emptyPlay, fakeHost } from '../host.fixture';
 import { loadStrings, t, type PetLang, type PetStringKey } from '../strings';
 import BedroomRoom from './BedroomRoom';
 import BookRoom from './BookRoom';
-import ClosetRoom from './ClosetRoom';
+import ClosetRoom, { slotItems, slotOf } from './ClosetRoom';
+import { ItemIcon } from './art';
 import GardenRoom from './GardenRoom';
 import PlayRoom from './PlayRoom';
 import { ROOM_VERBS } from '.';
@@ -122,4 +124,57 @@ describe('dock labels are one line at 360 px, English and Persian', () => {
       }
     });
   }
+});
+
+describe('second-pass polish (PET_VISUAL_QA_2026_10_26_AFTER)', () => {
+  it('N-4: one page has no pager row under the card; several pages, or About me with its Visits link, keep it', () => {
+    const one = render(<BookRoom id="book" host={fakeHost()} />);
+    expect(one.container.querySelector('.pet-nav')).toBeNull();
+    fireEvent.click(one.getByRole('tab', { name: 'About me' }));
+    expect(one.container.querySelector('.pet-nav')?.textContent).toContain('Visits');
+    one.unmount();
+    const two = render(<BookRoom id="book" host={fakeHost({ play: emptyPlay({ book: [{ id: 'met', at: 1 }, { id: 'stage2', at: 2 }] }) })} />);
+    expect(two.container.querySelectorAll('.pet-nav .pet-dots i')).toHaveLength(2);
+  });
+
+  it('N-6: the Zen chip sits under the top safe area (Telegram\'s content inset included) and 16 px from the edges', () => {
+    const z = rule(ROOMS, '.pet-zen');
+    const border = px(z.border.split(' ')[0]);
+    expect(z.top).toMatch(/^calc\(var\(--pet-safe-top,env\(safe-area-inset-top,0px\)\) \+ (\d+)px\)$/);
+    expect(Number(/\+ (\d+)px/.exec(z.top)![1]) + border).toBeGreaterThanOrEqual(16);
+    expect(Number(/max\((\d+)px/.exec(z['inset-inline-start'])![1]) + border).toBeGreaterThanOrEqual(16);
+    expect(z.border).toMatch(/transparent/);
+    // the safe top the chip reads is device inset + Telegram's content inset (telegram.ts syncSafeAreas)
+    const tg = readFileSync(join(process.cwd(), 'src/app/studio/pet/_ui/telegram.ts'), 'utf8');
+    expect(tg).toMatch(/const top = \(app\.safeAreaInset\?\.top \?\? 0\) \+ \(app\.contentSafeAreaInset\?\.top \?\? 0\);/);
+  });
+
+  it('N-7: the bow is a Head item (the Closet keepsake bow is worn on the head), and the Neck slot is not drawn as a bow', () => {
+    expect(slotOf('bow')).toBe('head');
+    expect(slotItems(undefined, 'head')).toContain('bow');
+    expect(slotItems(undefined, 'neck')).not.toContain('bow');
+    const { container } = render(<ClosetRoom id="closet" host={fakeHost()} />);
+    const neck = [...container.querySelectorAll('.pet-verbs .pet-verb')].find((b) => b.textContent === 'Neck')!.querySelector('svg')!.innerHTML;
+    for (const id of ['bow', 'bowtie'] as const) expect(neck).not.toBe(renderToStaticMarkup(<ItemIcon id={id} />).replace(/^<svg[^>]*>|<\/svg>$/g, ''));
+  });
+
+  it('P-23: every dock is drawn in the Home toys\' style: filled, coloured art, never a currentColor line icon', () => {
+    for (const el of [<PlayRoom key="p" id="play" host={Object.assign(fakeHost(), { send: vi.fn(async () => true) })} />, <ClosetRoom key="c" id="closet" host={fakeHost()} />,
+      <BookRoom key="b" id="book" host={fakeHost()} />, <GardenRoom key="g" id="garden" host={fakeHost()} />, <BedroomRoom key="r" id="bedroom" host={fakeHost()} />]) {
+      const { container, unmount } = render(el);
+      const icons = [...container.querySelectorAll('.pet-verbs .pet-verb > i > svg')];
+      expect(icons.length).toBeGreaterThanOrEqual(2);
+      for (const svg of icons) {
+        expect(svg.querySelector('[stroke="currentColor"], [fill="currentColor"]'), svg.outerHTML.slice(0, 80)).toBeNull();
+        expect([...svg.querySelectorAll('[fill]')].some((n) => /^#/.test(n.getAttribute('fill')!)), svg.outerHTML.slice(0, 80)).toBe(true);
+      }
+      unmount();
+    }
+  });
+
+  it('N-3: the tray is opaque, the days chip waits out the tray rooms, and Short gets a lower tray', () => {
+    expect(rule(ROOMS, '.pet-tray').background).toBe('#16191E');
+    expect(rule(ROOMS, '.pet-root:is([data-room=closet], [data-room=book]) .pet-days').visibility).toBe('hidden');
+    expect(rule(ROOMS, '.pet-root:is([data-h=short], [data-h=peek]) .pet-grid')['grid-template-rows']).toBe('repeat(2, 44px)');
+  });
 });

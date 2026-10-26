@@ -289,6 +289,7 @@ class Engine implements PetEngine {
   private xLoading: Promise<void> | null = null;
   private disposed = false;
   private motionFns = new Set<(c: MotionCue) => void>();
+  private sticky = new Map<string, MotionCue>();
   /** reused per frame (no allocation): the composed pose and the procedural offsets */
   private proc: Partial<PoseTargets> = {};
   private dueTags: string[] = [];
@@ -513,7 +514,8 @@ class Engine implements PetEngine {
     this.withX((x) => x.guide(this));
   }
 
-  onMotion(fn: (c: MotionCue) => void): () => void { this.motionFns.add(fn); return () => { this.motionFns.delete(fn); }; }
+  /** A late listener (a lazy overlay that mounts after setGarden or setWearing) hears the last details and wearing at once. */
+  onMotion(fn: (c: MotionCue) => void): () => void { this.motionFns.add(fn); for (const c of this.sticky.values()) fn(c); return () => { this.motionFns.delete(fn); }; }
 
   get motion() {
     return { room: this.room, stage: this.stage, tier: this.tier, contentFloat: this.contentFloat, signatures: this.signaturePool().length, reduced: this.tier === 'reduced' };
@@ -750,7 +752,7 @@ class Engine implements PetEngine {
     this.wake();
   }
 
-  motionCue(c: MotionCue): void { for (const fn of this.motionFns) fn(c); }
+  motionCue(c: MotionCue): void { if (c.type === 'details' || c.type === 'wearing') this.sticky.set(c.type, { ...c, fresh: undefined } as MotionCue); for (const fn of this.motionFns) fn(c); }
 
   /** Is anything still moving (or due within a frame)? */
   private busy(now: number): boolean {

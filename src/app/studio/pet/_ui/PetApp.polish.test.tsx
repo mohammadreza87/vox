@@ -150,17 +150,53 @@ describe('PetApp, visual QA polish', () => {
     expect(guest.container.querySelector('.pet-days')).toBeNull();
   });
 
-  it('a check-in replay keeps the bubble for its own line: the first room visit lights after it (P-08)', async () => {
+  it('a check-in replay is the open\'s one moment: no hello first, no tips while it reads, no room-visit line after it (P-08, N-1)', async () => {
     telegram();
     const api = fast({}, { ci: 'C5', garden: 'bloom' });
     const play = vi.fn(api.play!);
     const { container } = render(<PetApp agentId="x" api={{ ...api, play }} />);
     await ready(container);
+    expect(engine().fire).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'hello' }));
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    fireEvent.pointerDown(document.body);
+    expect(host!.isBusy()).toBe(true);
     act(() => { host!.setRoom('garden'); });
-    expect(play).not.toHaveBeenCalledWith('x', { op: 'roomVisited', room: 'garden' }, expect.anything());
     act(() => { vi.advanceTimersByTime(6500); });
-    expect(play).toHaveBeenCalledWith('x', { op: 'roomVisited', room: 'garden' }, expect.anything());
+    expect(play).not.toHaveBeenCalledWith('x', { op: 'roomVisited', room: 'garden' }, expect.anything());
+  });
+
+  it('no tip or ask over a Bop round or the bedtime beat (N-1)', async () => {
+    telegram();
+    const { container } = render(<PetApp agentId="x" api={fast()} />);
+    await ready(container);
+    cue({ type: 'say', line: 'hi' });
+    fireEvent.pointerDown(document.body);
+    expect(host!.isBusy()).toBe(false);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    cue({ type: 'score', bops: 1, misses: 0 });
+    expect(host!.isBusy()).toBe(true);
+    cue({ type: 'playOver', bops: 6, won: true, misses: 0 });
+    act(() => { vi.advanceTimersByTime(1300); });
+    expect(host!.isBusy()).toBe(false);
+    // a round cut by the moon: busy through the bedtime beat, not only the round
+    cue({ type: 'score', bops: 2, misses: 0 });
+    fireEvent.click(container.querySelector('[data-toy="moon"]')!);
+    cue({ type: 'playOver', bops: 2, won: false, misses: 0 });
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(container.querySelector('.pet-score')).toBeNull();
+    expect(host!.isBusy()).toBe(true);
+    act(() => { vi.advanceTimersByTime(4000); });
+    expect(host!.isBusy()).toBe(false);
+  });
+
+  it('a stage-up that opens the page is the hello: no "Hi!" first, then what it learned (N-2)', async () => {
+    telegram();
+    const { container } = render(<PetApp agentId="x" api={fast({}, { stageUp: true })} />);
+    await ready(container);
+    expect(engine().fire).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'hello' }));
+    await waitFor(() => expect(engine().fire).toHaveBeenCalledWith(expect.objectContaining({ type: 'stageUp' })), { timeout: 3000 });
+    await waitFor(() => expect(bubble(container)).toBe(t('growth.stage.learned')), { timeout: 3000 });
+    expect(bubble(container)).not.toMatch(/^Hi/);
   });
 
   it('each room has its own backdrop, and Telegram\'s bars take its edge colour (P-04)', async () => {

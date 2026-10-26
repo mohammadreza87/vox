@@ -6,10 +6,9 @@ import { MOOD_BAND } from '@/lib/pet/types';
 import { MoonIcon } from '../Particles';
 import { t } from '../strings';
 import type { RoomProps } from '.';
+import { LampIcon, StoryIcon } from './art';
 import './rooms.css';
 
-const LampIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l3 8H5zM12 12v6M8 20h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" /></svg>;
-const StoryIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5C6.5 5 9.5 5 12 6.5 14.5 5 17.5 5 20 6.5V18c-2.5-1.5-5.5-1.5-8 0-2.5-1.5-5.5-1.5-8 0z M12 6.5V18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /></svg>;
 
 /**
  * Bedroom (design §4.4, S12): Lamp dims the room (an overlay of the room's own, under the engine's lights-off one),

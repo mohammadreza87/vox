@@ -6,12 +6,14 @@
 
 import { mix, TONES } from '@/lib/studio/character';
 import type { CharacterLook } from '@/lib/pet/types';
-import { glowOf, type Backdrop, type SceneRoom } from './scene';
+import { glowOf, HORIZON_PX as HORIZON, type Backdrop, type SceneRoom } from './scene';
 
-type Away = Exclude<SceneRoom, 'home' | 'play'>;
+type Away = Exclude<SceneRoom, 'home'>;
 /** A room's light (design §4, §10.5): fixed tints the agent's hue warms a little, so every room is still its world. */
 interface RoomLight { core: string; mid: string; edge: string; floor: [string, string]; line: string; pool: string }
 const ROOM_LIGHT: Record<Away, RoomLight> = {
+  // a sunny playroom: brighter and warmer than Home, a honey floor
+  play: { core: '#86967A', mid: '#3F5B54', edge: '#14231F', floor: ['#4C5E4E', '#17221D'], line: '#FFE7A640', pool: '#FFE6A8' },
   // fresh green: a lit sky, grass from the horizon, a soft line where they meet
   garden: { core: '#4F8466', mid: '#2C5341', edge: '#12241B', floor: ['#3A6E40', '#17301C'], line: '#A9DB8F66', pool: '#8FD39A' },
   // soft neutral: a warm grey wall and floor
@@ -22,6 +24,8 @@ const ROOM_LIGHT: Record<Away, RoomLight> = {
   book: { core: '#62492F', mid: '#3A2B1E', edge: '#18120C', floor: ['#33271B', '#140F0A'], line: '#FFE7BF26', pool: '#FFE2B0' },
 };
 /** the bedroom's stars, high on the wall (x %, y % of the stage, radius px) */
+/** the playroom's confetti (x %, y %, radius px, colour) */
+const CONFETTI: ReadonlyArray<[number, number, number, string]> = [[10, 12, 3, '#FFD45C99'], [24, 24, 2.5, '#FF9EC099'], [78, 10, 3, '#D6FF5C88'], [90, 26, 2.5, '#9CD3FF99'], [62, 20, 2, '#FFD45C88']];
 const STARS: ReadonlyArray<[number, number, number]> = [[12, 9, 1.4], [27, 17, 1], [44, 7, 1.2], [63, 14, 1.5], [81, 8, 1], [90, 21, 1.2], [8, 27, 1]];
 
 /**
@@ -42,12 +46,12 @@ export function awayBackdrop(look: Pick<CharacterLook, 'hue'>, room: Away, groun
       layers.push(`radial-gradient(34% 5% at 10% ${h}px, ${hill} 98%, #0000 100%)`, `radial-gradient(30% 4% at 92% ${h}px, ${hill} 98%, #0000 100%)`);
     }
   }
+  // the playroom's confetti, high on the wall
+  if (room === 'play') layers.push(...CONFETTI.map(([x, y, r, c]) => `radial-gradient(circle at ${x}% ${y}%, ${c} 0 ${r}px, #0000 ${r + 0.8}px)`));
   if (room === 'bedroom') layers.push(...STARS.map(([x, y, r]) => `radial-gradient(circle at ${x}% ${y}%, #FFF4D6cc 0 ${r}px, #0000 ${r + 0.8}px)`));
   // the room's light: high and open in the garden, low and warm by the lamp in the bedroom
-  const at = room === 'bedroom' ? '110% 70% at 32% 58%' : room === 'garden' ? '130% 80% at 50% 30%' : '120% 78% at 50% 42%';
+  const at = room === 'bedroom' ? '110% 70% at 32% 58%' : room === 'garden' ? '130% 80% at 50% 30%' : room === 'play' ? '140% 90% at 50% 36%' : '120% 78% at 50% 42%';
   layers.push(`radial-gradient(${at}, ${core} 0%, ${mid} 55%, ${edge} 100%)`);
   return { room, edge, glow: glowOf(look), hue: t.light, image: layers.join(', '), floor: `radial-gradient(closest-side, ${L.pool}40, ${L.pool}00)` };
 }
 
-/** The horizon sits this far behind the character's ground line (px): the pet stands on the floor, not on the seam. */
-const HORIZON = 34;

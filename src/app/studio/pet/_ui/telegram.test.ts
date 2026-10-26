@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { circleCode, clearLegacyPetSnapshots, bootTelegram, holdClosing, readStored, readyAfterPaint, startAccelerometer, syncSafeAreas, type PetTelegram } from './telegram';
+import { circleCode, clearLegacyPetSnapshots, bootTelegram, holdClosing, readStored, readyAfterPaint, startAccelerometer, syncSafeAreas, writeStored, type PetTelegram } from './telegram';
 
 /** A WebApp double that records every call in order. */
 function fakeApp(over: Partial<PetTelegram> = {}) {
@@ -118,11 +118,24 @@ describe('pet Telegram boot (§3.5)', () => {
   it('reads the snapshot from localStorage first, then DeviceStorage', async () => {
     vi.useRealTimers();
     const getItem = vi.fn((_k: string, cb: (e: string | null, v?: string | null) => void) => cb(null, 'from-device'));
-    const { app } = fakeApp({ DeviceStorage: { getItem, setItem: vi.fn() } });
+    const { app } = fakeApp({ isVersionAtLeast: () => true, DeviceStorage: { getItem, setItem: vi.fn() } });
     await expect(readStored('k1', 50, app)).resolves.toBe('from-device');
     localStorage.setItem('k2', 'from-local');
     await expect(readStored('k2', 50, app)).resolves.toBe('from-local');
     expect(getItem).toHaveBeenCalledTimes(1);
+  });
+
+  it('never touches DeviceStorage on a client older than Bot API 9.0 (the SDK logs an error on every access, P-27)', async () => {
+    vi.useRealTimers();
+    let touched = 0;
+    const { app } = fakeApp({ isVersionAtLeast: (v: string) => v <= '6.0' });
+    Object.defineProperty(app, 'DeviceStorage', { get: () => { touched++; return { getItem: vi.fn(), setItem: vi.fn() }; } });
+    await expect(readStored('k3', 20, app)).resolves.toBeNull();
+    writeStored('k3', 'v', app);
+    clearLegacyPetSnapshots('current', app);
+    expect(touched).toBe(0);
+    expect(localStorage.getItem('k3')).toBe('v');
+    localStorage.clear();
   });
 });
 
@@ -133,7 +146,7 @@ describe('legacy private pet snapshot migration', () => {
     localStorage.setItem('vox-pet:previous', 'PRIVATE_PREVIOUS');
     localStorage.setItem('unrelated-setting', 'keep');
     const getItem = vi.fn(); const removeItem = vi.fn(); const setItem = vi.fn();
-    const { app } = fakeApp({ DeviceStorage: { getItem, removeItem, setItem } });
+    const { app } = fakeApp({ isVersionAtLeast: () => true, DeviceStorage: { getItem, removeItem, setItem } });
     clearLegacyPetSnapshots('current', app);
     expect(localStorage.getItem('vox-pet:previous')).toBeNull();
     expect(localStorage.getItem('vox-pet:current')).toBeNull();
@@ -143,7 +156,7 @@ describe('legacy private pet snapshot migration', () => {
   });
   it('overwrites known DeviceStorage keys with empty values on clients without removeItem', () => {
     const getItem = vi.fn(); const setItem = vi.fn();
-    const { app } = fakeApp({ DeviceStorage: { getItem, setItem } });
+    const { app } = fakeApp({ isVersionAtLeast: () => true, DeviceStorage: { getItem, setItem } });
     clearLegacyPetSnapshots('current', app);
     expect(setItem).toHaveBeenCalledWith('vox-pet:current', '');
     expect(getItem).not.toHaveBeenCalled();

@@ -152,10 +152,13 @@ describe('the garden on the floor (§4.5)', () => {
       expect(gardenX(m)).toBeGreaterThan(cx + (widest - cx) * m.growth);
       const l = detailLayers(m, fitDetails({ garden: { kind: 'flower', state: 'bloomed' }, seasonal: 'yalda', keepsakes: ['play'] }, st));
       const xs = [...l.floor, ...l.back].map((g) => [g.attrs['data-detail'], Number(/translate\(([-\d.]+)/.exec(JSON.stringify(g))![1])] as const);
-      const pot = xs.find(([k]) => k === 'garden:flower:bloomed')![1], season = xs.find(([k]) => k === 'seasonal')![1], keep = xs.find(([k]) => k === 'keepsake:play')![1];
+      const pot = xs.find(([k]) => k === 'garden:flower:bloomed')![1], keep = xs.find(([k]) => k === 'keepsake:play')![1];
       expect(keep).toBeLessThan(cx);
       expect(pot).toBeGreaterThan(cx);
-      expect(season).toBeGreaterThan(cx);
+      // the pot stands on the right: the room props keep to the left (nothing hides behind the pot)
+      expect(xs.filter(([k]) => k !== 'garden:flower:bloomed').every(([, x]) => x < cx)).toBe(true);
+      const season = detailLayers(m, fitDetails({ seasonal: 'yalda', keepsakes: ['play'] }, st)).back.find((g) => g.attrs['data-detail'] === 'seasonal')!;
+      expect(Number(/translate\(([-\d.]+)/.exec(JSON.stringify(season))![1])).toBeGreaterThan(cx);
       // the pot stands in front (the floor layer, drawn over the body); the keepsakes in the room behind it
       expect(l.floor.map((g) => g.attrs['data-detail'])).toEqual(['garden:flower:bloomed']);
       // the Garden room's hero: bigger and a step in front of the pet
@@ -169,6 +172,17 @@ describe('the garden on the floor (§4.5)', () => {
     const f = h.engine.debug.frame!, g = geomOf(h);
     expect(poseToSvg(g, f, { details: { shown: NO_DETAILS } })).toBe(poseToSvg(g, f, { details: { shown: fitDetails({ garden: null }, 4) } }));
     expect(poseToSvg(g, f, { details: { shown: fitDetails({ garden: { kind: 'sabzeh', state: 'sprouted' } }, 4) } })).toContain('data-detail="garden:sabzeh:sprouted"');
+  });
+
+  it('a late listener (the lazy overlay mounting after setGarden) hears the garden at once: the pot is on stage before any line (P-07)', () => {
+    const h = harness();
+    h.engine.setGarden({ seed: 'flower', state: 'bloomed' });
+    h.engine.setWearing({ head: 'pomegranateCrown' });
+    const got: MotionCue[] = [];
+    const off = h.engine.onMotion((c) => got.push(c));
+    expect(got.find((c) => c.type === 'details')).toMatchObject({ details: { garden: { kind: 'flower', state: 'bloomed' } } });
+    expect(got.some((c) => c.type === 'wearing')).toBe(true);
+    off();
   });
 
   it('setGarden rides the details cue to the floor layer (every stage), and the loop rests after', () => {

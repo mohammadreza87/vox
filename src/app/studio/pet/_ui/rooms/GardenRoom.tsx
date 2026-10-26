@@ -6,6 +6,7 @@ import type { GardenState, PetPlayView, SeedKind } from '@/lib/pet/play';
 import { t } from '../strings';
 import type { RoomProps } from '.';
 import { roomIntent } from './intent';
+import { SeedIcon, RainIcon, BreatheIcon } from './art';
 import './rooms.css';
 
 /** "breathe with me" lasts a minute (§4.5), then the breath goes back to the pet's own */
@@ -13,10 +14,9 @@ const BREATHE_MS = 60_000;
 /** the guided cycle, in seconds (§4.5: a six-second cycle you follow) */
 const BREATHE_S = 6;
 const RAIN_MS = 1800;
+/** the bloom reaction's sparkle (engine reactions/rooms.ts `bloom`, 600 ms in), then a breath before the line */
+export const BLOOM_SPARKLE_MS = 600, BLOOM_BEAT_MS = 500, BLOOM_LINE_REDUCED_MS = 300;
 
-const SeedIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20v-7M12 13c0-4 3-7 7-7 0 4-3 7-7 7zM12 15c0-3-2.5-5.5-6-5.5 0 3 2.5 5.5 6 5.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" /></svg>;
-const RainIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14a4 4 0 0 1 .6-8 5 5 0 0 1 9.6 1.4A3.3 3.3 0 0 1 17 14zM9 17l-1 2.5M13 17l-1 2.5M17 17l-1 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" /></svg>;
-const BreatheIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="12" cy="12" r="3" fill="currentColor" /></svg>;
 
 /** The seeds on offer now: the flower always; sabzeh only while Nowruz is on (§4.5, §4.10; the server refuses it otherwise). */
 export const seedsFor = (play: PetPlayView | undefined): SeedKind[] => (play?.season === 'nowruz' ? ['flower', 'sabzeh'] : ['flower']);
@@ -68,11 +68,19 @@ export default function GardenRoom({ host }: RoomProps) {
   const lang = host.lang;
   const e = () => host.engine();
 
+  /**
+   * The bloom (C5, §4.5): the pot is already on stage; the pet looks down to it and the sparkle pops over the flower
+   * (the engine's beat at BLOOM_SPARKLE_MS), then, a breath later, the line. Reduced motion has no sparkle: the line
+   * follows the look after a short beat.
+   */
   function bloomed(fresh: boolean) {
     e()?.roomReact?.('bloom');
-    host!.say(t('garden.bloom', undefined, lang));
-    if (fresh) { setChip(t('garden.newKeepsake', { item: t('item.bloomPin', undefined, lang) }, lang)); later(3200, () => setChip(null)); }
-    host!.emit({ type: 'moment', kind: 'bloom' });
+    const reduced = host!.root()?.getAttribute('data-tier') === 'reduced';
+    later(reduced ? BLOOM_LINE_REDUCED_MS : BLOOM_SPARKLE_MS + BLOOM_BEAT_MS, () => {
+      host!.say(t('garden.bloom', undefined, lang));
+      if (fresh) { setChip(t('garden.newKeepsake', { item: t('item.bloomPin', undefined, lang) }, lang)); later(3200, () => setChip(null)); }
+      host!.emit({ type: 'moment', kind: 'bloom' });
+    });
   }
 
   const plant = async (seed: SeedKind) => {

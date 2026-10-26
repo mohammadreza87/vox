@@ -17,6 +17,7 @@ import { detailKey, detailLayers, NO_DETAILS, type ShownDetails } from '../_engi
 import { NO_WEARING, outfitLayers, type ShownWearing } from '../_engine/outfits';
 import './extras.css';
 import type { PetEngine } from './contract';
+import { HORIZON_PX } from './scene';
 
 const origin = ([x, y]: [number, number]): MotionStyle => ({ transformBox: 'view-box', originX: `${x}px`, originY: `${y}px` });
 const prop = (k: string) => (k.startsWith('data-') ? k : k.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()));
@@ -53,7 +54,8 @@ export default function Details({ engine, look, stage, size, part, room }: Detai
   }), [engine, part]);
   const model: CharacterModel = useMemo(() => characterModel(look, { uid: 'pd', mode: 'live', stage, expr: 'idle', size }), [look, stage, size]);
   const hero = room === 'garden', headWorn = !!wearing.head;
-  const layers = useMemo(() => detailLayers(model, shown, { hero, headWorn }), [model, shown, hero, headWorn]);
+  // room props stand on the backdrop's horizon (scene.ts HORIZON_PX, in view units at this size)
+  const layers = useMemo(() => detailLayers(model, shown, { hero, headWorn, room, horizon: (HORIZON_PX * 200) / size }), [model, shown, hero, headWorn, room, size]);
   const outfit = useMemo(() => outfitLayers(model, wearing, { look, uid: 'pw' }), [model, wearing, look]);
   const rig = engine.rig;
   if (part !== 'body') {

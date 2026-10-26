@@ -56,19 +56,25 @@ describe('the character on the stage (P-17, design §9.2, §9.3)', () => {
     expect(characterBox(360, 640, 0, 440, 'short').size).toBe(266);
   });
 
-  it('Regular and Tall: bigger, on a floor line about two thirds down the free stage, with the bubble zone above', () => {
-    for (const [vw, vh, dock, cls] of [[390, 844, 625, 'regular'], [430, 932, 670, 'tall']] as const) {
-      const was = characterBox(vw, vh, 0, dock);
+  it('Regular and Tall: bigger, standing low (the gap to the rail is about a bubble zone), with the bubble zone above', () => {
+    for (const [vw, vh, dock, cls] of [[390, 844, 634, 'regular'], [430, 932, 720, 'tall']] as const) {
       const box = characterBox(vw, vh, 0, dock, cls);
-      expect(box.size).toBeGreaterThan(was.size * 1.15);
+      // the body (~3/4 of the box) is ~70% of the width
+      expect(box.size * 0.75).toBeGreaterThan(vw * 0.68);
       const ground = groundPoint(box).y;
-      expect(ground / dock).toBeGreaterThan(0.64);
-      expect(ground / dock).toBeLessThan(0.72);
-      // the dead stage under the feet is gone (it was ~200 px), and the head keeps ≥ 150 px for a 4-line bubble
-      expect(dock - ground).toBeLessThan(220);
-      expect(box.y + box.size * 0.2).toBeGreaterThan(150);
+      expect(dock - ground).toBeGreaterThan(80);
+      expect(dock - ground).toBeLessThan(120);
+      // the head keeps room for a 5-line bubble and the thought under any header
+      expect(box.y + box.size * 0.2).toBeGreaterThan(220);
       expect(box.x).toBeGreaterThan(0);
     }
+    // 390×844: the shadow near y 540, the body ~270 px
+    const r = characterBox(390, 844, 0, 634, 'regular');
+    expect(Math.abs(groundPoint(r).y - 540)).toBeLessThan(6);
+    expect(Math.abs(r.size * 0.75 - 270)).toBeLessThan(6);
+    // under Telegram's fullscreen header the zones above the head stay clear of it
+    const f = characterBox(390, 844, 100, 634, 'regular');
+    expect(f.y + f.size * 0.2 - 100).toBeGreaterThan(180);
     // Tall grows toward the 520 cap with the screen
     expect(characterBox(430, 932, 0, 670, 'tall').size).toBeGreaterThan(characterBox(390, 844, 0, 625, 'regular').size);
     expect(characterBox(1200, 2000, 0, 1600, 'tall').size).toBe(520);

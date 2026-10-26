@@ -81,7 +81,8 @@ describe('PetApp open sequence', () => {
     app.initData = 'signed-current-400'; app.initDataUnsafe.user.id = 400;
     const getStored = vi.fn();
     const setStored = vi.fn();
-    Object.assign(app, { DeviceStorage: { getItem: getStored, setItem: setStored } });
+    // a Bot API 9.0 client: DeviceStorage is only touched where the SDK has it (telegram.ts deviceStorage, P-27)
+    Object.assign(app, { isVersionAtLeast: () => true, DeviceStorage: { getItem: getStored, setItem: setStored } });
     let resolve!: (v: typeof fresh) => void;
     const get = vi.fn(() => new Promise<typeof fresh>((r) => { resolve = r; }));
     const { container } = render(<PetApp agentId="x" api={{ ...createMockApi(), get }} />);

@@ -52,10 +52,13 @@ export function ItemIcon({ id }: { id: WearableId | Accessory }) {
   return <Draw />;
 }
 
-/** The Closet's three slot verbs (the room's dock): a hat, a bow tie, a little mitten. */
+/**
+ * The Closet's three slot verbs (the room's dock): a hat, a scarf, a little mitten. Neck is a scarf, never a bow: the
+ * Closet's keepsake bow is worn on the head (and the Bow item is a head item), so a bow on Neck filed it there (N-7).
+ */
 const SLOT: Record<WearSlot, () => ReactElement> = {
   head: ITEM.beret,
-  neck: ITEM.bowtie,
+  neck: () => <Svg><path d="M5 11c6 3.5 16 3.5 22 0v6c-6 3.5-16 3.5-22 0z" fill="#3D7BD9" /><path d="M19 16l4.5 11h-6.5l-1.5-10z" fill="#2A5DAE" /><path d="M9 13.2v5.6M14 14.2v5.6M24 12.6v5.2" stroke="#F2F1EC" strokeWidth="1.8" strokeLinecap="round" /></Svg>,
   hand: () => <Svg><path d="M9 27V15a3 3 0 0 1 6 0v-3a3 3 0 0 1 6 0v6.5l2-2a2.6 2.6 0 0 1 3.7 3.6L21 27z" fill="#F2A65A" /><rect x="8" y="24.5" width="14" height="4" rx="2" fill="#D9873A" /><path d="M11.5 14v5" stroke={HI} strokeWidth="1.6" strokeLinecap="round" /></Svg>,
 };
 export const SlotIcon = ({ slot }: { slot: WearSlot }) => SLOT[slot]();
@@ -81,3 +84,13 @@ export function Doodle({ faint }: { faint?: boolean }) {
     </svg>
   );
 }
+
+/**
+ * The Garden's and Bedroom's dock verbs (P-23), drawn like Home's cookie, ball and moon: every dock in one style.
+ * (The Bedroom's moon is Home's own MoonIcon.)
+ */
+export const SeedIcon = () => <Svg><path d="M16 18v-6" stroke="#5FB58F" strokeWidth="2.4" strokeLinecap="round" /><path d="M16 12c0-4 3-6.5 7.5-6.5 0 4-3 6.5-7.5 6.5z" fill="#7BC67E" /><path d="M16 13c0-3.2-2.6-5.5-6.5-5.5 0 3.2 2.6 5.5 6.5 5.5z" fill="#5FB58F" /><ellipse cx="16" cy="23" rx="7.5" ry="5.5" fill="#B9773F" /><ellipse cx="16" cy="22" rx="7.5" ry="5.5" fill="#E3A35E" /><path d="M11 20.5a5 3 0 0 1 3.5-2" stroke="#F6CF95" strokeWidth="1.8" strokeLinecap="round" fill="none" /></Svg>;
+export const RainIcon = () => <Svg><path d="M9 20a5.5 5.5 0 0 1-.8-10.9 7.5 7.5 0 0 1 14.4-1.4A5.6 5.6 0 0 1 23 20z" fill="#7FB8E6" /><path d="M9 18.5a5.5 5.5 0 0 1-.8-10.9 7.5 7.5 0 0 1 14.4-1.4A5.6 5.6 0 0 1 23 18.5z" fill="#BFE1FF" /><path d="M11 23.5l-1 3M16 23.5l-1 3M21 23.5l-1 3" stroke="#4A9FE0" strokeWidth="2.4" strokeLinecap="round" /><path d="M10.5 11.5a4 4 0 0 1 3-2.6" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" fill="none" /></Svg>;
+export const BreatheIcon = () => <Svg><circle cx="16" cy="16" r="12" fill="#3F8F6C" /><circle cx="16" cy="16" r="8" fill="#7FE0D0" /><circle cx="16" cy="16" r="3.6" fill="#F2F1EC" /><path d="M10 12.5a7 7 0 0 1 3.5-3.6" stroke="#ffffffb3" strokeWidth="1.8" strokeLinecap="round" fill="none" /></Svg>;
+export const LampIcon = () => <Svg><path d="M11 5h10l4 11H7z" fill="#F2C14E" /><path d="M11 5h10l1.2 3.4H9.8z" fill="#FFE27A" /><rect x="15" y="16" width="2.4" height="8" fill="#A9ADB5" /><rect x="9.5" y="23.5" width="13" height="3.5" rx="1.75" fill="#8A8F98" /><path d="M12 9.5 10.4 14" stroke="#fff9" strokeWidth="1.6" strokeLinecap="round" /></Svg>;
+export const StoryIcon = () => <Svg><rect x="8" y="5" width="18" height="22" rx="2.5" fill="#F4EBD9" /><rect x="6" y="4" width="18" height="22" rx="2.5" fill="#7A6CF0" /><rect x="6" y="4" width="4" height="22" rx="2" fill="#5B4FD0" /><path d={star(17, 14.5, 5.5)} fill="#FFE27A" /></Svg>;
