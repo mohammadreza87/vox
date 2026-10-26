@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import { signInitData } from '../auth';
 import { handleStudioRequest } from '../http';
 import { scrubHistory } from '../history';
@@ -21,6 +22,24 @@ let h: Harness;
 let org: Awaited<ReturnType<typeof seedOrg>>;
 let agentId: string;
 const directories: string[] = [];
+
+const publicHistorySchema = z.object({ history: z.array(z.object({
+  at: z.string().datetime(), actor: z.enum(['you', 'creator', 'admin', 'member', 'agent', 'vox']),
+  action: z.enum(['draft', 'hired', 'token', 'skills', 'voice', 'live-web', 'main-mini-app', 'group-behavior',
+    'visibility', 'access', 'unblock', 'admin-grant', 'admin-revoke', 'fired', 'memory-inherit', 'channel-post']),
+  detail: z.string().optional(),
+}).strict()) }).strict();
+function expectPublicHistory(value: unknown) {
+  const { history } = publicHistorySchema.parse(value);
+  for (const row of history) expect(new Date(row.at).toISOString()).toBe(row.at);
+  // Identifiers can coincide with digits in a valid timestamp. Every other
+  // field stays in the strict public projection and is checked for leaks.
+  const projection = JSON.stringify(history.map(row => {
+    const fields: Record<string, unknown> = { ...row }; delete fields.at; return fields;
+  }));
+  for (const leak of ['SECRET', '424242', String(ID.bob), String(ID.admin), String(ID.alice), String(ID.stranger),
+    'Bob', 'another-agent', 'agent.block', 'agent_boundary']) expect(projection).not.toContain(leak);
+}
 
 beforeEach(async () => {
   vi.stubEnv('STUDIO_SETTINGS_V2', '1');
@@ -137,6 +156,12 @@ describe('Change history', () => {
     await h.store.audit({ actor: ID.admin, action: 'agent.visibility', target: 'another-agent', detail: 'public' });
     await h.store.audit({ actor: agentId, action: 'agent.block', target: String(ID.stranger), detail: 'agent_boundary' });
 
+    // Reproduce the former false positive deterministically: a valid timestamp
+    // may contain the synthetic stranger id without identifying that person.
+    await h.store.update(state => {
+      state.audit.forEach((row, index) => { row.at = new Date(Date.UTC(2026, 9, 26, 13, 0, index, 999)).toISOString(); });
+    });
+
     const res = await get(`agents/${agentId}/history`, ID.alice);
     expect(res.status).toBe(200);
     const history = res.json.history as Array<{ at: string; actor: string; action: string; detail?: string }>;
@@ -152,13 +177,25 @@ describe('Change history', () => {
     expect(history.find(r => r.action === 'unblock')).not.toHaveProperty('detail');
     expect(history.filter(r => r.action === 'group-behavior')[0]).not.toHaveProperty('detail');
     expect(history.every(r => [...history].sort((a, b) => b.at.localeCompare(a.at)).indexOf(r) === history.indexOf(r))).toBe(true);
-    const json = JSON.stringify(res.json);
-    for (const leak of ['SECRET', '424242', String(ID.bob), String(ID.admin), String(ID.alice), String(ID.stranger), 'Bob', 'another-agent', 'agent.block', 'agent_boundary']) expect(json).not.toContain(leak);
+    expect(history.every((row, index) => index === 0 || history[index - 1].at > row.at)).toBe(true);
+    expect(JSON.stringify(res.json)).toContain('.999Z');
+    expectPublicHistory(res.json);
 
     expect((await get(`agents/${agentId}/history`, ID.admin)).json.history).toEqual(expect.arrayContaining([expect.objectContaining({ actor: 'creator', action: 'live-web' })]));
     expect((await get(`agents/${agentId}/history`, ID.bob)).status).toBe(403);
     vi.stubEnv('STUDIO_SETTINGS_V2', '0');
     expect((await get(`agents/${agentId}/history`, ID.alice)).status).toBe(404);
+  });
+
+  it('privacy assertions reject identity leaks and additional fields while allowing validated timestamp digits', () => {
+    const row = { at: '2026-10-26T13:00:00.999Z', actor: 'admin', action: 'unblock' };
+    expectPublicHistory({ history: [row] });
+    for (const leaked of [
+      { ...row, actor: String(ID.stranger) }, { ...row, detail: String(ID.stranger) },
+      { ...row, detail: 'SECRET about Bob' }, { ...row, telegramId: ID.stranger },
+      { ...row, person: { id: ID.stranger } }, { ...row, at: '999' },
+    ]) expect(() => expectPublicHistory({ history: [leaked] })).toThrow();
+    expect(() => expectPublicHistory({ history: [row], accountId: String(ID.stranger) })).toThrow();
   });
 
   it('caps the answer and keeps only the newest rows', () => {
