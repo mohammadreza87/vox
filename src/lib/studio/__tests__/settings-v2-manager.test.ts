@@ -89,8 +89,23 @@ describe('Connectors people use (counts only)', () => {
     await h.studio.setAccess(org.alice, agentId, [ID.bob]);
     await fileWorld([liveRow(ID.bob, 'gmail', agentId), liveRow(ID.bob, 'remote_mcp', agentId)]);
     const res = await get(`agents/${agentId}/connector-usage`, ID.alice);
-    expect(res).toEqual({ status: 200, json: { providers: [] } });
+    expect(res).toEqual({ status: 200, json: { providers: [], chosenAudience: true } });
     for (const leak of [...LEAKS, String(ID.bob)]) expect(JSON.stringify(res.json)).not.toContain(leak);
+  });
+
+  it('a hand-picked audience shows no counts: sybils on the list cannot single out the one real person', async () => {
+    await moreMembers(3);
+    const [sybil1, sybil2, filler] = [601, 602, 603];
+    // The manager picks Bob plus accounts they control; two of those connect Gmail, and so does Bob.
+    await h.studio.setVisibility(org.alice, agentId, 'private');
+    await h.studio.setAccess(org.alice, agentId, [ID.bob, sybil1, sybil2, filler]);
+    const counter = vi.fn((id: string, viewer: number) => connectionUsageFor(h.studio, id, viewer));
+    await fileWorld([liveRow(sybil1, 'gmail', agentId), liveRow(sybil2, 'gmail', agentId), liveRow(ID.bob, 'gmail', agentId)]);
+    h.studio.deps.connectionUsage = counter;
+    expect(await get(`agents/${agentId}/connector-usage`, ID.alice)).toEqual({ status: 200, json: { providers: [], chosenAudience: true } });
+    expect(counter).not.toHaveBeenCalled();
+    // the source refuses on its own too, so no other caller can skip the rule
+    expect(await connectionUsageFor(h.studio, agentId, ID.alice)).toEqual({ providers: [] });
   });
 
   it('end to end from file storage: the viewer is never counted, small counts and "everyone else" stay hidden, nothing identifies anyone', async () => {

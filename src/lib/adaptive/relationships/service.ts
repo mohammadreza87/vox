@@ -1,3 +1,4 @@
+import { resetTelegramArchives } from '../telegram-archive-state';
 import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
 import { productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
@@ -187,6 +188,7 @@ export class AdaptiveRelationshipService {
   async invalidate(telegramId: number, space: SpaceKind, input: { agentId?: string; sourceIds?: string[]; reason: string }): Promise<void> {
     if (!['work', 'personal'].includes(space) || (input.agentId !== undefined && !validId(input.agentId)) || (input.sourceIds && (input.sourceIds.length > 256 || !input.sourceIds.every(validId)))) throw new AdaptiveError(400, 'invalid_source');
     await this.adaptive.withAccountDocument(telegramId, (d, now) => {
+      resetTelegramArchives(d, now, space, input.agentId);
       if (!input.sourceIds && !input.agentId && ['forget', 'stop', 'owner_forget_all', 'reset', 'relationship_forget'].includes(input.reason)) for (const binding of d.relationships.bindings) if (binding.space === space && binding.status === 'active') { binding.status = 'revoked'; binding.revision++; }
       for (const source of d.relationships.sources) if (source.key.scope.space === space && (!input.agentId || source.key.personaId === input.agentId) && (!input.sourceIds || input.sourceIds.includes(source.id))) {
         if (source.status !== 'deleted') { source.status = 'deleted'; source.revision++; }
@@ -212,6 +214,7 @@ export class AdaptiveRelationshipService {
       if (action === 'stop') control.disabled = true;
       if (action === 'pause') control.pausedUntil = until ?? now + 7 * DAY;
       if (action === 'resume') { control.disabled = false; delete control.pausedUntil; }
+      if (action === 'forget') resetTelegramArchives(d, now, space, agentId);
       if (action === 'stop' || action === 'forget') {
         for (const source of d.relationships.sources) if (source.key.personaId === agentId && source.key.scope.space === space && source.status === 'active') { source.status = 'deleted'; source.revision++; }
         for (const item of d.relationships.inbox) if (item.key.personaId === agentId && item.key.scope.space === space) { item.status = 'cancelled'; item.text = ''; }

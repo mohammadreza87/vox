@@ -21,8 +21,6 @@ afterEach(() => vi.unstubAllEnvs());
 describe('Studio production routes', () => {
   it.each([
     ['/api/agents/agent-a/connections?space=personal', 'GET'],
-    ['/api/agents/agent-a/connections/mcp/enroll', 'POST'],
-    ['/api/agents/agent-a/connections/connection-a/resources?space=work', 'GET'],
     ['/oauth/callback/remote_mcp?state=synthetic&code=synthetic', 'GET'],
     ['/oauth/client-metadata.json', 'GET'],
   ])('admits the exact bot Connections or public OAuth route to its own handler: %s %s', (path, method) => {
@@ -30,6 +28,10 @@ describe('Studio production routes', () => {
   });
   it.each([
     ['/api/agents', 'GET'], ['/api/agents/agent-a', 'GET'], ['/api/agents/agent-a/connections-other', 'POST'],
+    // the agent-bot connect surface is a read-only dashboard now (agent-signed trust hotfix)
+    ['/api/agents/agent-a/connections', 'POST'], ['/api/agents/agent-a/connections/mcp/enroll', 'POST'],
+    ['/api/agents/agent-a/connections/profile/confirm', 'POST'], ['/api/agents/agent-a/connections/grants', 'POST'],
+    ['/api/agents/agent-a/connections/connection-a/resources?space=work', 'GET'], ['/api/agents/agent-a/connections/review/op-1', 'GET'],
     ['/api/agents/agent-a/connections', 'DELETE'], ['/api/agents/agent-a/connections', 'OPTIONS'],
     ['/oauth/callback/remote_mcp', 'POST'], ['/oauth/callback/remote_mcp/other', 'GET'],
     ['/oauth/client-metadata.json?override=1', 'GET'], ['/oauth/client-metadata.json', 'POST'],
@@ -198,8 +200,17 @@ describe('Circles S4 pet launch over a group', () => {
     expect(response.headers.get('Content-Security-Policy')).toContain('frame-ancestors https://web.telegram.org;');
   });
 
+  it('renders the My data page in place for the content-free mydata start param (the VoxxBot-signed data page)', () => {
+    const response = middleware(request('/studio?tgWebAppStartParam=mydata'));
+    expect(response.headers.get('x-middleware-rewrite')).toBe('https://studio.example.com/studio/my-data?tgWebAppStartParam=mydata');
+    expect(response.headers.get('Content-Security-Policy')).toContain('frame-ancestors https://web.telegram.org;');
+    expect(middleware(request('/studio/my-data')).headers.get('x-middleware-next')).toBe('1');
+    expect(middleware(request('/api/studio/my-data')).headers.get('x-middleware-next')).toBe('1');
+  });
+
   it('leaves the Studio as it is for anything else', () => {
-    for (const path of ['/studio', '/studio?tgWebAppStartParam=welcome', '/studio?tgWebAppStartParam=p_', '/studio/pet/ag1?tgWebAppStartParam=p_AbCdEf12_abcdefghijklmnopqrstuv']) {
+    for (const path of ['/studio', '/studio?tgWebAppStartParam=welcome', '/studio?tgWebAppStartParam=p_', '/studio/pet/ag1?tgWebAppStartParam=p_AbCdEf12_abcdefghijklmnopqrstuv',
+      '/studio?tgWebAppStartParam=mydata2', '/studio?tgWebAppStartParam=MYDATA', '/studio/pet/ag1?tgWebAppStartParam=mydata']) {
       const response = middleware(request(path));
       expect(response.headers.get('x-middleware-rewrite')).toBeNull();
       expect(response.headers.get('x-middleware-next')).toBe('1');

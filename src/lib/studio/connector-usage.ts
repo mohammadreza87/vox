@@ -6,7 +6,19 @@
  */
 export const USAGE_MIN_PEOPLE = 3;
 
-/** `audience`: how many people other than the viewer may use the agent, or null when unbounded (a public agent). */
-export function protectUsage<T extends { people: number }>(rows: readonly T[], audience: number | null): T[] {
+/**
+ * Who else may use the agent: how many people other than the viewer (an org-wide agent), null when unbounded (a public
+ * agent), or 'chosen' when its managers hand-pick that list (a private agent). A manager who picks the list can fill it
+ * with accounts they control, connect those, and read one chosen person's choice off the difference, whatever the
+ * threshold; so a hand-picked audience shows no counts at all.
+ */
+export type UsageAudience = number | null | 'chosen';
+
+export function usageAudience(visibility: 'public' | 'org' | 'private', countOthers: () => number): UsageAudience {
+  return visibility === 'public' ? null : visibility === 'private' ? 'chosen' : countOthers();
+}
+
+export function protectUsage<T extends { people: number }>(rows: readonly T[], audience: UsageAudience): T[] {
+  if (audience === 'chosen') return [];
   return rows.filter((r) => Number.isSafeInteger(r.people) && r.people >= USAGE_MIN_PEOPLE && (audience === null || r.people < audience));
 }

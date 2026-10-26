@@ -65,7 +65,7 @@ describe('Connectors & plugins page', () => {
     expect(add.getByText('Vox sets this up')).toBeInTheDocument();
     expect(add.getByText('Vox adds it for your account · Vox hasn’t set this up for your account and this agent yet.')).toBeInTheDocument();
     expect(section('Plugins (MCP servers)').getByRole('button', { name: 'Add MCP server' })).toBeInTheDocument();
-    expect(screen.getByText(/send \/ask in its Telegram chat/)).toBeInTheDocument();
+    expect(screen.getByText(/answers stay here in Vox/)).toBeInTheDocument();
     expectNoRawControls(view.container);
   });
 

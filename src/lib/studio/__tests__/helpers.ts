@@ -32,6 +32,7 @@ import { CircleService } from '../../circles/service';
 import { CircleNotes, NotesRepository } from '../../circles/notes';
 import { ChannelDrafts } from '../../circles/channels';
 import type { AgentVisibility, Member, PersonaSpec, Role } from '../types';
+import { TEST_INITDATA_KEY_HEX } from './initdata-keys';
 
 export const SECRET = 'test-secret-that-is-at-least-32-characters-long';
 export const ID = { superadmin: 100, admin: 200, alice: 300, bob: 400, pending: 500, stranger: 999 };
@@ -97,6 +98,7 @@ export function fakeTelegram() {
     getMe: vi.fn(async () => ({ id: 1, is_bot: true, first_name: 'Voxx', username: 'VoxxBot' })),
     deleteWebhook: vi.fn(async () => true),
     setWebhook: vi.fn(async () => true),
+    getWebhookInfo: vi.fn(async () => ({ url: '' })),
     // Long polling: hangs until a test scripts a batch with mockResolvedValueOnce.
     getUpdates: vi.fn((): Promise<TelegramUpdate[]> => new Promise(() => undefined)),
     getManagedBotToken: vi.fn(async (botId: number) => `token-${botId}`),
@@ -222,6 +224,8 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
     notesLedger: new CircleNotes(new NotesRepository(new FileAdaptiveStorage(join(dir, 'circles', 'notes')))),
     channelDrafts: new ChannelDrafts(new FileAdaptiveStorage(join(dir, 'circles', 'channel-drafts'))),
+    // Telegram's initData signature, checked against a test key (initdata-keys.ts) instead of the production one.
+    initDataKey: TEST_INITDATA_KEY_HEX,
   });
   return {
     studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, svgToPng, logger, clock, adaptive,

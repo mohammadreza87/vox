@@ -16,8 +16,12 @@ export interface PetTelegram {
   ready(): void;
   expand(): void;
   requestFullscreen?(): void;
+  isFullscreen?: boolean;
+  exitFullscreen?(): void;
   disableVerticalSwipes?(): void;
+  enableVerticalSwipes?(): void;
   lockOrientation?(): void;
+  unlockOrientation?(): void;
   setHeaderColor?(color: string): void;
   setBackgroundColor?(color: string): void;
   setBottomBarColor?(color: string): void;
@@ -76,18 +80,17 @@ export function circleCode(): string | null {
 const portrait = () => typeof window === 'undefined' || window.innerHeight >= window.innerWidth;
 
 /**
- * Boot, in the documented order (§3.5): expand → requestFullscreen (a desktop/web `fullscreenFailed`
- * is ignored) → disableVerticalSwipes → lockOrientation while portrait → header/background/bottom bar
- * to the backdrop colour. `ready()` is NOT called here: the page calls readyAfterPaint() once the
+ * Keep Telegram's normal window and dismissal gestures. Restore controls a previous surface may
+ * have disabled; never expand or enter fullscreen automatically. `ready()` is NOT called here:
+ * the page calls readyAfterPaint() once the
  * character is on screen, so Telegram's loading screen hands straight over to the character. The
  * safe-area vars are the page's layout effect's (syncSafeAreas, subscribed before it measures).
  */
 export function bootTelegram(color: string, app: PetTelegram | null = tg()): void {
   if (!app) return;
-  safely(() => app.expand());
-  safely(() => app.requestFullscreen?.());
-  safely(() => app.disableVerticalSwipes?.());
-  if (portrait()) safely(() => app.lockOrientation?.());
+  if (app.isFullscreen) safely(() => app.exitFullscreen?.());
+  safely(() => app.enableVerticalSwipes?.());
+  safely(() => app.unlockOrientation?.());
   paintChrome(color, app);
 }
 
@@ -150,12 +153,13 @@ export function holdClosing(app: PetTelegram | null = tg()): () => void {
 
 export const hideKeyboard = (app: PetTelegram | null = tg()) => safely(() => app?.hideKeyboard?.());
 
-/** Guests talk in the DM: open the agent's bot chat (outside Telegram, a new tab). */
-export function openDm(botUsername: string, app: PetTelegram | null = tg()) {
-  const url = `https://t.me/${botUsername}`;
+/** Open a t.me link inside Telegram (outside it, a new tab). */
+export function openTelegram(url: string, app: PetTelegram | null = tg()) {
   if (app?.initData && app.openTelegramLink) safely(() => app.openTelegramLink!(url));
   else if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
 }
+/** Guests talk in the DM: open the agent's bot chat. */
+export const openDm = (botUsername: string, app: PetTelegram | null = tg()) => openTelegram(`https://t.me/${botUsername}`, app);
 
 /** Telegram's BackButton while the "more" bubble is expanded (§3.5). Returns the cleanup. */
 export function backButton(onBack: () => void, app: PetTelegram | null = tg()): () => void {
@@ -165,7 +169,7 @@ export function backButton(onBack: () => void, app: PetTelegram | null = tg()): 
   return () => safely(() => { b.offClick(onBack); b.hide(); });
 }
 
-/** Telegram's ⋯ menu "Settings" item (the page's only settings: forget my pet). Returns the cleanup. */
+/** Telegram's ⋯ menu "Settings" item (the page's only settings: the person's data in Vox). Returns the cleanup. */
 export function settingsButton(onClick: () => void, app: PetTelegram | null = tg()): () => void {
   const b = app?.SettingsButton;
   if (!b) return () => {};

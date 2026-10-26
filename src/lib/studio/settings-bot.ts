@@ -7,12 +7,17 @@
  *    same opaque code (`?settings=`), and the app asks the server again (GET settings-link). An unknown, malformed
  *    (any `s_…` the grammar does not read) or forbidden code gets the hub reply, word for word: it never says
  *    whether an agent exists.
- *  - Agent bots, private chat: /settings, /memory, /activity and /voice (/connectors and /ask stay the Connectors
+ *  - Agent bots, private chat: /settings, /memory, /activity and /voice (/connectors and /ask go through the
  *    handoff in updates.ts). A Studio member who may open this agent in Studio (canUseAgent) gets a URL button into
  *    the manager bot (`?startapp=` when its Main Mini App is set, else `?start=`) plus, where useful, a web_app
- *    button to an agent-signed page. Anyone else talking to a public agent gets only agent-signed web_app pages
- *    (the pet page, /studio/connect/<id>). /voice is read-only: a sample of the voice, and for the creator while
- *    the agent forms a link to change it in Vox. Nothing in an agent bot changes voice or skills.
+ *    button to the pet page. Anyone else talking to a public agent gets the pet page, and for their notes the fixed
+ *    My data link into the manager bot (`mydata`, VoxxBot-signed; never an agent code). /voice is read-only: a
+ *    sample of the voice, and for the creator while the agent forms a link to change it in Vox. Nothing in an agent
+ *    bot changes voice or skills.
+ *  - Connectors and app answers live only in Vox (VoxxBot's Mini App): an agent's creator holds the agent bot's token,
+ *    so it can read anything that bot sends and harvest initData its pages are opened with. The agent chat therefore
+ *    carries only fixed, content-free copy and a URL button into Vox (the same `s_` code as every Vox link), never a
+ *    question, a connector name, a result, or a page of the agent's own (its connect page is a read-only dashboard).
  *  - Groups: nothing personal is posted. One agent answers (the one named, or the group's speaker). The group sees
  *    the same short reply whoever asked and whatever happened (with a URL button that starts the bot,
  *    `?start=settings`), so it never learns who may use the agent, who chose "Not me", or who hit a limit. A person
@@ -33,7 +38,6 @@ import { canShapeIdentity, canUseAgent, isLocked, visibilityOf, visibleAgents } 
 import { StudioRateLimiter, type StudioRequestRateLimiter } from './ratelimit';
 import { UNREACHABLE } from './receipts';
 import { BOT_SETTINGS_COMMANDS, MANAGER_MENU, parseSettingsLink, settingsCommandOf, settingsLinkCode, type BotSettingsCommand, type MenuLocale, type SettingsLetter, type SettingsSectionName } from './settings-commands';
-import { connectPageUrl } from './updates';
 import type { Studio } from './service';
 import type { Agent, Member, StudioState } from './types';
 
@@ -50,22 +54,21 @@ const COPY = {
     agent: (name: string) => `Settings for ${name}.`,
     open: 'Open settings',
     settings: 'Here are my settings. Your memory and connectors are just yours.',
-    settingsOutsider: 'Your notes with me, your choice to join, and apps you connected.',
+    settingsOutsider: 'Your notes with me and your choice to join.',
     openAgentSettings: (name: string) => `⚙︎ Open ${name} settings`,
     openPet: (name: string) => `Open ${name}`,
-    connectApp: 'Connect an app',
     memory: 'What I remember about you, and how to see or delete it.',
-    memoryOutsider: 'Your notes with me are on my page, where you can see and erase them.',
+    memoryOutsider: 'Your notes with me are in My data in Vox, where you can see and erase them.',
     openMemory: 'Open Memory settings',
     myNotes: 'My notes',
+    openMyData: 'Open My data',
     activity: 'What I did for you with the apps you connected.',
-    activityOutsider: 'What I did with the apps you connected is on my Connections page.',
+    activityOutsider: "Apps are connected in Vox, and nothing I did with them is shown in this chat.",
     openActivity: 'Open Activity',
-    openConnections: 'Open connections',
     openCheckins: 'Open check-ins',
     openInVox: 'Open in Vox',
-    connectors: (name: string) => `Open Connectors to ask ${name} with an app you connected. Each use is reviewed there, and answers stay private to you.`,
-    openConnectors: 'Open Connectors',
+    connectors: (name: string) => `Connect apps and ask ${name} with them in Vox. Each use is reviewed there, and answers stay in Vox, private to you.`,
+    connectorsOutsider: "Connecting apps happens in Vox, and it isn't open to you yet.",
     noVoice: "I don't have a voice yet; I talk by text.",
     voice: (label: string) => `I sound “${label}”.`,
     forming: " My voice is shaped in Vox while I'm forming, and after that it stays mine.",
@@ -80,22 +83,21 @@ const COPY = {
     agent: (name: string) => `تنظیمات ${name}.`,
     open: 'باز کردن تنظیمات',
     settings: 'تنظیمات من اینجاست. حافظه و اتصال‌های شما فقط مال خود شماست.',
-    settingsOutsider: 'یادداشت‌های شما با من، انتخاب شما برای پیوستن و برنامه‌هایی که وصل کرده‌اید.',
+    settingsOutsider: 'یادداشت‌های شما با من و انتخاب شما برای پیوستن.',
     openAgentSettings: (name: string) => `⚙︎ باز کردن تنظیمات ${name}`,
     openPet: (name: string) => `باز کردن ${name}`,
-    connectApp: 'وصل کردن یک برنامه',
     memory: 'آنچه درباره شما به خاطر دارم، و راه دیدن یا پاک کردنش.',
-    memoryOutsider: 'یادداشت‌های شما با من در صفحه من است؛ آنجا می‌توانید ببینید و پاکشان کنید.',
+    memoryOutsider: 'یادداشت‌های شما با من در «داده‌های من» در Vox است؛ آنجا می‌توانید ببینید و پاکشان کنید.',
     openMemory: 'باز کردن تنظیمات حافظه',
     myNotes: 'یادداشت‌های من',
+    openMyData: 'باز کردن داده‌های من',
     activity: 'کارهایی که با برنامه‌های وصل‌شده برای شما کردم.',
-    activityOutsider: 'کارهایی که با برنامه‌های وصل‌شده شما کردم در صفحه اتصال‌های من است.',
+    activityOutsider: 'برنامه‌ها در Vox وصل می‌شوند و کاری که با آن‌ها کرده‌ام در این گفتگو نشان داده نمی‌شود.',
     openActivity: 'باز کردن فعالیت',
-    openConnections: 'باز کردن اتصال‌ها',
     openCheckins: 'باز کردن بررسی‌ها',
     openInVox: 'باز کردن در Vox',
-    connectors: (name: string) => `برای پرسیدن از ${name} با برنامه‌ای که وصل کرده‌اید، اتصال‌ها را باز کنید. هر استفاده همان‌جا بررسی می‌شود و پاسخ‌ها فقط برای شما می‌ماند.`,
-    openConnectors: 'باز کردن اتصال‌ها',
+    connectors: (name: string) => `برنامه‌ها را در Vox وصل کنید و با آن‌ها از ${name} بپرسید. هر استفاده همان‌جا بررسی می‌شود و پاسخ‌ها در Vox و فقط برای شما می‌ماند.`,
+    connectorsOutsider: 'وصل کردن برنامه‌ها در Vox انجام می‌شود و هنوز برای شما باز نیست.',
     noVoice: 'هنوز صدایی ندارم؛ با نوشتن حرف می‌زنم.',
     voice: (label: string) => `صدای من «${label}» است.`,
     forming: ' صدای من تا وقتی در حال شکل گرفتنم در Vox ساخته می‌شود و بعد از آن همین می‌ماند.',
@@ -166,6 +168,9 @@ export class StudioSettingsBot {
     try { code = settingsLinkCode(agentShortCode(this.studio.deps.secret, agent.id), letter); } catch { return null; }
     return `https://t.me/${manager}?${this.studio.settingsMainApp() ? 'startapp' : 'start'}=${code}`;
   }
+
+  /** My data in the manager bot (`?startapp=mydata` / `?start=mydata`, fixed and content-free); null without a manager bot. */
+  private dataLink(): string | null { return this.studio.dataLink() ?? null; }
 
   /** The active agent a short code names, among those this member may open in Studio; null for anything else. */
   async resolveLink(member: Member, code: string): Promise<Agent | null> {
@@ -263,7 +268,7 @@ export class StudioSettingsBot {
     return true;
   }
 
-  /** The private reply to one settings command (not /voice); null when there is no page to open. */
+  /** The private reply to one settings command (not /voice); null when there is nothing to open (today's path). */
   reply(agent: Agent, entry: BotSettingsCommand, from: TelegramUser, audience: 'member' | 'outsider'): Reply | null {
     const copy = COPY[localeOf(from.language_code)], name = agent.persona.name, webAppUrl = this.studio.deps.webAppUrl;
     const pet = petPageUrl(webAppUrl, agent.id), member = audience === 'member';
@@ -272,15 +277,18 @@ export class StudioSettingsBot {
       case 'settings':
         text = member ? copy.settings : copy.settingsOutsider;
         keyboard = member ? keyboardOf(url(copy.openAgentSettings(name), this.voxLink(agent)), webApp(copy.openPet(name), pet))
-          : keyboardOf(webApp(copy.openPet(name), pet), webApp(copy.connectApp, connectPageUrl(webAppUrl, agent.id, { ask: false })));
+          : keyboardOf(webApp(copy.openPet(name), pet));
         break;
       case 'memory':
         text = member ? copy.memory : copy.memoryOutsider;
-        keyboard = member ? keyboardOf(url(copy.openMemory, this.voxLink(agent, 'm')), webApp(copy.myNotes, pet)) : keyboardOf(webApp(copy.openMemory, pet));
+        // Notes are seen and erased only in My data (VoxxBot-signed); the agent's pet page refuses them for its own initData.
+        keyboard = member ? keyboardOf(url(copy.openMemory, this.voxLink(agent, 'm')), url(copy.myNotes, this.dataLink())) : keyboardOf(url(copy.openMyData, this.dataLink()));
         break;
       case 'activity':
-        text = member ? copy.activity : copy.activityOutsider;
-        keyboard = member ? keyboardOf(url(copy.openActivity, this.voxLink(agent, 'a'))) : keyboardOf(webApp(copy.openConnections, connectPageUrl(webAppUrl, agent.id, { ask: false })));
+        // An outsider has nowhere in Vox to see it yet ("My apps" is not built): the fixed line alone, no page.
+        if (!member) return { text: copy.activityOutsider };
+        text = copy.activity;
+        keyboard = keyboardOf(url(copy.openActivity, this.voxLink(agent, 'a')));
         break;
       case 'connectors':
         return this.connectorsReply(agent, from, member);
@@ -297,15 +305,16 @@ export class StudioSettingsBot {
   }
 
   /**
-   * /connectors and /ask: a web_app button to the agent's own Connections page (the reviewed task runs there); a
-   * member also gets "Open in Vox". Null when there is no page to open.
+   * /connectors and /ask: fixed copy and one URL button into Vox, to this agent's Connectors & plugins page (`s_<code>_c`,
+   * opened by the manager bot, where access is checked again); never a page of the agent's own and never the question
+   * or anything about the person's apps. An outsider (no Vox page for them yet) gets the fixed line alone. Null when a
+   * member's Vox link cannot be built (no manager username): today's path.
    */
   connectorsReply(agent: Agent, from: TelegramUser | undefined, member: boolean): Reply | null {
-    const page = connectPageUrl(this.studio.deps.webAppUrl, agent.id);
-    if (!page) return null;
     const copy = COPY[localeOf(from?.language_code)];
-    const vox = member && settingsV2() ? url(copy.openInVox, this.voxLink(agent, 'c')) : null;
-    return { text: copy.connectors(agent.persona.name), keyboard: keyboardOf(webApp(copy.openConnectors, page), vox) };
+    if (!member) return { text: copy.connectorsOutsider };
+    const keyboard = keyboardOf(url(copy.openInVox, this.voxLink(agent, 'c')));
+    return keyboard ? { text: copy.connectors(agent.persona.name), keyboard } : null;
   }
 
   /**
@@ -349,7 +358,7 @@ export class StudioSettingsBot {
       const copy = COPY[localeOf(from.language_code)], member = audience === 'member', pet = petPageUrl(this.studio.deps.webAppUrl, agent.id);
       switch (command.replace(/^\//, '').toLowerCase()) {
         case 'memories': case 'forget': case 'forgetall': case 'forgetnote': case 'notes':
-          return keyboardOf(member ? url(copy.openMemory, this.voxLink(agent, 'm')) : webApp(copy.openMemory, pet));
+          return keyboardOf(member ? url(copy.openMemory, this.voxLink(agent, 'm')) : url(copy.openMyData, this.dataLink()));
         case 'pause': case 'resume': case 'stop':
           return member ? keyboardOf(url(copy.openCheckins, this.voxLink(agent, 'p'))) : undefined;
         case 'leave':

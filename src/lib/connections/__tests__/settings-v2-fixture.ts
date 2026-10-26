@@ -8,7 +8,7 @@ import type { StudioState } from '../../studio/types';
 import { AdaptiveRepository } from '../../adaptive/persistence/repository';
 import { AdaptiveService } from '../../adaptive/persistence/service';
 import { MemoryAdaptiveStorage } from '../../adaptive/runtime/storage';
-import { signInitData } from '../../studio/auth';
+import { agentInit, TEST_INITDATA_KEY_HEX } from '../../studio/__tests__/initdata-keys';
 import { authenticateAgentConnections } from '../bot-principal';
 import { InMemoryConnectionsStorage } from '../storage';
 import { createStudioConnectionsApplication } from '../studio-application';
@@ -47,10 +47,11 @@ export async function settingsV2Fixture(o: FixtureOptions) {
     agents: [agent('alpha'), agent('beta'), agent('secret', { visibility: 'private' }), agent('blocked', { blocked: [123] })], groups: [], audit: [] } as unknown as StudioState;
   const llm = { identity: { provider: 'anthropic', model: 'synthetic' }, complete: vi.fn(async () => '{}') };
   const store = { read: async () => structuredClone(state), ...(o.committed === false ? {} : { readCommittedForEffect: () => structuredClone(state) }) };
-  const studio = { botToken: (a: { id: string }) => `SYNTHETIC_BOT_${a.id}`, deps: { adaptive, store, chatLLM: llm, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } } as unknown as Studio;
+  const studio = { botToken: (a: { id: string }) => `SYNTHETIC_BOT_${a.id}`, deps: { adaptive, store, chatLLM: llm, initDataKey: TEST_INITDATA_KEY_HEX, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } } as unknown as Studio;
   const manager: ConnectionActor = { accountId: 'telegram-account:123' };
   const botActor = async (agentId: string) => (await authenticateAgentConnections(studio, new Request('https://vox.fixture.net', { headers: {
-    'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, `SYNTHETIC_BOT_${agentId}`) } }), agentId)).actor;
+    // Agent-signed initData needs Telegram's Ed25519 signature for that bot (agent(id).bot.id = id.length + 100).
+    'x-telegram-init-data': agentInit({ id: 123, first_name: 'Synthetic' }, `SYNTHETIC_BOT_${agentId}`, undefined, {}, agentId.length + 100) } }), agentId)).actor;
   const config = connectionsConfigurationSchema.parse({ schemaVersion: 1, enabled: true, profiles: [], selfServiceMcp: { enabled: o.mcpEnabled !== false, dailyModelTokenCeiling: 500_000, dailyToolCallCeiling: 20 },
     modelPolicy: { provider: 'anthropic', model: 'synthetic', qualified: true, evidenceReference: 'synthetic-only' } });
   const storage = new InMemoryConnectionsStorage(), budgets = new ConnectionsBudgetLedger(new MemoryAdaptiveStorage());

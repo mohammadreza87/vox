@@ -7,7 +7,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TelegramChatMemberUpdated, TelegramUpdate, TelegramUser } from '../../tireh/telegram/client';
+import { agentInit } from './initdata-keys';
 import { signInitData } from '../auth';
+import { generateKeyPairSync } from 'crypto';
 import { handlePetLaunch, handlePetRequest } from '../pet-http';
 import { handleAgentUpdate } from '../updates';
 import { StudioRateLimiter } from '../ratelimit';
@@ -74,7 +76,7 @@ async function setup(o: { mode?: CirclesMode; mainApp?: string | null } = {}) {
     const extra: Record<string, string> = c.startParam ? { start_param: c.startParam, chat_type: 'supergroup', chat_instance: '-8812' } : {};
     const request = new Request(`${ORIGIN}/api/studio/pet/${agentId}${path.length ? `/${path.join('/')}` : ''}${c.query ?? ''}`, {
       method, headers: { origin: ORIGIN, 'content-type': 'application/json', 'x-pet-tz': 'UTC',
-        'x-telegram-init-data': signInitData({ id: c.as ?? ID.stranger, first_name: NAMES[c.as ?? ID.stranger] ?? 'S' }, c.token ?? MANAGER, undefined, extra) },
+        'x-telegram-init-data': agentInit({ id: c.as ?? ID.stranger, first_name: NAMES[c.as ?? ID.stranger] ?? 'S' }, c.token ?? MANAGER, undefined, extra) },
       ...(c.body !== undefined ? { body: JSON.stringify(c.body) } : {}),
     });
     return handlePetRequest(h.studio, request, agentId, path, c.manager ?? MANAGER);
@@ -175,10 +177,10 @@ describe('a pet launched over the group', () => {
     expect((await x.pet(['circle', 'decision'], { startParam: cookieCode, agentId: x.mina.agent.id, body: { code: cookieCode, choice: 'joined', revision } })).status).toBe(401);
     // ...and a launch for Mina never opens Cookie.
     expect((await x.pet(['circle'], { startParam: minaCode })).status).toBe(401);
-    // Cookie's own bot with Mina's code: that code names nothing for Cookie.
+    // Cookie's own bot, any code: agent-signed initData never decides a circle (decision 8).
     const crossed = await x.pet(['circle', 'decision'], { token: x.cookie.token, body: { code: minaCode, choice: 'joined', revision } });
-    expect(crossed.status).toBe(404);
-    expect(await crossed.json()).toEqual({ error: 'circle_unavailable' });
+    expect(crossed.status).toBe(403);
+    expect(await crossed.json()).toEqual({ error: 'circle_use_vox' });
     // A manager-signed launch speaks only for its own signed code.
     expect((await x.pet(['circle'], { startParam: cookieCode, query: `?code=${minaCode}` })).status).toBe(404);
     expect((await x.doc())!.participants).toEqual([]);
@@ -296,13 +298,13 @@ describe('joining from the pet', () => {
     expect((await x.pet(['circle', 'leave'], { startParam: code, body: { code } })).status).toBe(429);
     expect((await x.pet(['notes', 'aa-aaaaaaaaaaaa'], { startParam: code, method: 'DELETE' })).status).toBe(429);
     const hostile = new Request(`${ORIGIN}/api/studio/pet/${x.cookie.agent.id}/circle/leave`, { method: 'POST', body: JSON.stringify({ code }),
-      headers: { origin: 'https://hostile.example', 'content-type': 'application/json', 'x-telegram-init-data': signInitData({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } });
+      headers: { origin: 'https://hostile.example', 'content-type': 'application/json', 'x-telegram-init-data': agentInit({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } });
     expect((await handlePetRequest(x.h.studio, hostile, x.cookie.agent.id, ['circle', 'leave'], MANAGER)).status).toBe(403);
   });
 });
 
 describe('the DM hop (c) into the pet', () => {
-  it("a verified j_ link's DM card opens the pet with ?j=, and the agent's own initData reads that group with the bare join code", async () => {
+  it("a verified j_ link's DM card opens the pet with ?j=; the agent's own initData never reads that group (decision 8)", async () => {
     const x = await setup({ mainApp: null });
     await x.open();
     const code = await x.joinCode(), bot = x.cookie.bot();
@@ -311,8 +313,8 @@ describe('the DM hop (c) into the pet', () => {
     const pet = (sent[2] as { keyboard: { inline_keyboard: Array<Array<{ web_app?: { url: string } }>> } }).keyboard.inline_keyboard.flat().find((b) => b.web_app)!;
     expect(pet.web_app!.url).toBe(`${ORIGIN}/studio/pet/${x.cookie.agent.id}?j=${code}`);
     const read = await x.pet(['circle'], { token: x.cookie.token, query: `?code=${code}` });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ chatTitle: 'HOOR family', myState: null });
+    expect(read.status).toBe(403);
+    expect(await read.json()).toEqual({ error: 'circle_use_vox' });
     // A plain /start (no group) keeps the plain pet URL.
     await x.send({ update_id: updateId++, message: { message_id: updateId, date: 0, text: '/start', from: user(ID.stranger), chat: { id: ID.stranger, type: 'private' } } });
     const plain = (bot.sendMessage.mock.calls.at(-1)![2] as { keyboard: { inline_keyboard: Array<Array<{ web_app?: { url: string } }>> } }).keyboard.inline_keyboard.flat().find((b) => b.web_app)!;
@@ -352,15 +354,16 @@ describe('notes in the pet', () => {
     x.h.studio.deps.circles = () => 'reply';
     // The manager route is off with the flag; the agent's own bot sees no notes either.
     expect((await x.pet(['notes'], { startParam: code })).status).toBe(401);
+    // The agent's own bot never serves notes now (hotfix): they are read and erased in Vox.
     const own = await x.pet(['notes'], { token: x.cookie.token, query: `?code=${code}` });
-    expect(own.status).toBe(404);
-    expect(await own.json()).toEqual({ error: 'circle_unavailable' });
+    expect(own.status).toBe(403);
+    expect(await own.json()).toEqual({ error: 'circle_use_vox' });
   });
 });
 
 describe('the pet launch page resolver', () => {
   const resolve = (x: Awaited<ReturnType<typeof setup>>, code: string, token = MANAGER, manager = MANAGER) =>
-    handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': signInitData({ id: ID.stranger, first_name: 'P' }, token, undefined, { start_param: code }) } }), manager);
+    handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': agentInit({ id: ID.stranger, first_name: 'P' }, token, undefined, { start_param: code }) } }), manager);
 
   it('maps a signed launch code to its agent (manager bot, or the agent bot itself), and nothing else', async () => {
     const x = await setup();
@@ -374,10 +377,26 @@ describe('the pet launch page resolver', () => {
     x.h.studio.deps.circles = () => 'reply';
     expect((await resolve(x, code)).status).toBe(404);
   });
+
+  it("the agent's own bot branch needs Telegram's signature: missing or forged is 401; the manager's present signature must verify", async () => {
+    const x = await setup({ mainApp: null });
+    await x.open();
+    const code = await x.codeFor(x.cookie.agent.id);
+    const launch = (init: string) => handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': init } }), MANAGER);
+    const who = { id: ID.stranger, first_name: 'P' };
+    expect((await launch(agentInit(who, x.cookie.token, undefined, { start_param: code }))).status).toBe(200);
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }))).status).toBe(401);
+    const otherKey = generateKeyPairSync('ed25519').privateKey;
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }, { botId: x.cookie.botId, privateKey: otherKey }))).status).toBe(401);
+    // the shadow switch relaxes this low-value lookup only for a missing signature, never a forged one
+    x.h.studio.deps.initDataSignature = () => 'shadow';
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }))).status).toBe(200);
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }, { botId: x.cookie.botId, privateKey: otherKey }))).status).toBe(401);
+  });
 });
 
 describe('S4 review fixes', () => {
-  it("route b says the 📌 copies come from the agent's own bot (dm), so the pet never asks write access for the manager; route a and the DM pet do not", async () => {
+  it("route b says the 📌 copies come from the agent's own bot (dm), so the pet never asks write access for the manager; route a and the DM pet read no circle", async () => {
     const x = await setup();
     await x.open();
     const code = await x.codeFor(x.cookie.agent.id);
@@ -386,9 +405,9 @@ describe('S4 review fixes', () => {
     const revision = viaManager.card.revision;
     const joined = await (await x.pet(['circle', 'decision'], { startParam: code, body: { code, choice: 'joined', revision } })).json() as PetCircle;
     expect(joined.dm).toEqual({ bot: x.cookie.agent.bot!.username, name: 'Cookie' });
-    // The agent's own bot opened it (route a, or the DM's ?j= pet): its write access is the right one, no dm.
-    expect(await (await x.pet(['circle'], { token: x.cookie.token, startParam: code, query: `?code=${code}` })).json()).not.toHaveProperty('dm');
-    expect(await (await x.pet(['circle'], { token: x.cookie.token, query: `?code=${await x.joinCode()}` })).json()).not.toHaveProperty('dm');
+    // The agent's own bot opened it (route a, or the DM's ?j= pet): agent-signed, so no circle at all (decision 8).
+    expect(await (await x.pet(['circle'], { token: x.cookie.token, startParam: code, query: `?code=${code}` })).json()).toEqual({ error: 'circle_use_vox' });
+    expect(await (await x.pet(['circle'], { token: x.cookie.token, query: `?code=${await x.joinCode()}` })).json()).toEqual({ error: 'circle_use_vox' });
   });
 
   it('someone Telegram says left the group is never named to the others, and is marked left', async () => {
@@ -422,14 +441,16 @@ describe('S4 review fixes', () => {
     const x = await setup();
     await x.open();
     const code = await x.codeFor(x.cookie.agent.id);
-    const resolve = () => handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': signInitData({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } }), MANAGER);
+    const resolve = () => handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': agentInit({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } }), MANAGER);
     expect((await resolve()).status).toBe(200);
     expect((await x.pet([], { startParam: code })).status).toBe(200);
     x.h.studio.deps.circleChats = () => new Set();
     expect((await resolve()).status).toBe(404);
-    for (const [path, c] of [[[], {}], [['care'], { body: { action: 'feed' } }], [['export'], {}], [['circle'], {}]] as const) {
+    for (const [path, c] of [[[], {}], [['care'], { body: { action: 'feed' } }], [['circle'], {}]] as const) {
       expect((await x.pet([...path], { startParam: code, ...c })).status).toBe(401);
     }
+    // export left the pet altogether (moved to My data), whoever signs
+    expect((await x.pet(['export'], { startParam: code })).status).toBe(410);
     // The agent's own bot still opens its own pet (that never depended on the group).
     expect((await x.pet([], { token: x.cookie.token })).status).toBe(200);
   });
@@ -440,16 +461,17 @@ describe('S4 review fixes', () => {
     await x.add(x.mina);
     x.later();
     await x.h.store.update((s) => { s.agents.find((a) => a.id === x.cookie.agent.id)!.blocked = [ID.stranger]; });
-    const revision = (await x.doc())!.card!.id, joinCode = await x.joinCode();
+    const revision = (await x.doc())!.card!.id, minaCode = await x.codeFor(x.mina.agent.id);
     expect((await x.doc())!.card!.agentIds).toEqual([x.cookie.agent.id]);
-    const viaMina = await x.pet(['circle', 'decision'], { token: x.mina.token, agentId: x.mina.agent.id, body: { code: joinCode, choice: 'joined', revision } });
+    // Mina's pet, opened through VoxxBot (agent-signed initData never decides a circle, decision 8).
+    const viaMina = await x.pet(['circle', 'decision'], { startParam: minaCode, agentId: x.mina.agent.id, body: { code: minaCode, choice: 'joined', revision } });
     expect(viaMina.status).toBe(404);
     expect(await viaMina.json()).toEqual({ error: 'circle_unavailable' });
     expect((await x.doc())!.participants).toEqual([]);
     expect(await x.h.studio.agentChoice(x.cookie.agent.id, ID.stranger)).toBeUndefined();
     // Unblocked, the same request joins.
     await x.h.store.update((s) => { s.agents.find((a) => a.id === x.cookie.agent.id)!.blocked = []; });
-    expect((await x.pet(['circle', 'decision'], { token: x.mina.token, agentId: x.mina.agent.id, body: { code: joinCode, choice: 'joined', revision } })).status).toBe(200);
+    expect((await x.pet(['circle', 'decision'], { startParam: minaCode, agentId: x.mina.agent.id, body: { code: minaCode, choice: 'joined', revision } })).status).toBe(200);
   });
 
   it('a store failing under a circle route answers circle_failed (shown in the sheet), never pet_unavailable', async () => {

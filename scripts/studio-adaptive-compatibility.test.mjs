@@ -273,6 +273,22 @@ function putCanonical(f, doc, format = f.env.STUDIO_ADAPTIVE_FORMAT) {
   head.accounts = [ref]; writeFileSync(headPath, JSON.stringify(head)); writeFileSync(join(store, 'records', `${uuid}.json`), JSON.stringify(doc));
 }
 function legacy(f) { rmSync(f.managed, { recursive: true }); rmSync(join(f.env.STUDIO_DATA_DIR, 'adaptive'), { force: true }); f.env.STUDIO_ADAPTIVE_FORMAT = 'file'; }
+
+test('Telegram archive extension prevents downgrade even when disabled or empty', () => fixture(f => {
+  legacy(f);
+  const { supportedTelegramArchiveSchemas: _archive, ...old } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(_archive, [1]);
+  putCanonical(f, document());
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, old));
+  for (const rows of [[], [{ agentId: 'agent', space: 'personal', enabled: false, generation: 1, clearedAt: 100, index: [] }], [{ agentId: 'agent', space: 'personal', enabled: true, generation: 1, clearedAt: 100, index: [], authorityStamp: 'a'.repeat(64) }]]) {
+    putCanonical(f, { ...document(), telegramArchives: rows });
+    assert.equal(requiredAdaptiveCapabilities(f.env).telegramArchiveSchema, 1);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).telegramArchiveSchema, 1);
+  }
+  putCanonical(f, { ...document(), telegramArchives: [{ agentId: 'agent', space: 'personal', enabled: false, generation: 1, clearedAt: 100, index: [], state: { schemaVersion: 2 } }] });
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+}));
 function putRights(f, version = 2) {
   const directory = join(f.env.STUDIO_DATA_DIR, 'rights-intake', 'v1'); mkdirSync(directory, { recursive: true });
   const file = join(directory, `${accountKey}.json`); writeFileSync(file, JSON.stringify({ version, accountId, revision: 1, observedServerTime: 200, requests: [], commandReceipts: [], ...(version === 2 ? { tombstones: [] } : {}) })); return file;

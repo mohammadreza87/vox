@@ -10,11 +10,10 @@ import type { ConnectionsApplication } from './application';
 import { ConnectionsError } from './errors';
 import { idSchema, type ConnectionActor, type ConnectionContext } from './contracts';
 import { authenticateAgentConnections } from './bot-principal';
-import { identityInput } from '../adaptive/persistence/validation';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { settingsV2 } from '../studio/flags';
 import { connectionReceipts } from './receipts';
-import type { ConnectionsSnapshot } from './contracts';
+import type { AgentConnectionsHandoff, ConnectionsSnapshot } from './contracts';
 
 /** Changes that leave the person a quiet Telegram record (Settings v2). */
 const RECEIPT_ROUTES = new Set(['setup/claim', 'mcp/setup/claim', 'grants', 'revoke']);
@@ -31,6 +30,11 @@ const json = (value: unknown, status = 200, headers: Record<string, string> = {}
 /** There is deliberately no wire route for completeEnrollment, broker dispatch,
  * provider credentials, arbitrary URLs, model source labels or account IDs. */
 export async function handleConnectionsRequest(studio: Studio, application: ConnectionsApplication | ((actor: ConnectionActor, space: 'work' | 'personal') => Promise<ConnectionsApplication>), request: Request, path: string[], botToken: string, botAgentId?: string): Promise<Response> {
+  // The agent-bot surface is content-free: its initData is signed with a token the agent's creator holds, so it can be
+  // harvested by a repointed menu even with Telegram's signature. Identity confirmation, grants, tasks, setup, MCP
+  // enrollment, revoke, provider resources and action review are refused before anything is read or built, and the
+  // one GET answers a handoff to Vox, never the dashboard.
+  if (botAgentId && !(request.method === 'GET' && path.length === 0)) return json({ error: 'not_found' }, 404);
   try {
     let limiter = studio.deps.rateLimiter ?? limiters.get(studio);
     if (!limiter) { limiter = new StudioRateLimiter(); limiters.set(studio, limiter); }
@@ -41,6 +45,12 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     const user = authenticated?.user ?? verifyInitData(init, botToken);
     if (!user) return json({ error: 'authentication_required' }, 401);
     await limiter.consume('api', user.id);
+    if (botAgentId) {
+      // Decision 8: no connection record, provider or profile state leaves through agent-signed initData. The app is never built.
+      const agent = (await studio.deps.store.read()).agents.find(a => a.id === botAgentId);
+      const body: AgentConnectionsHandoff = { agent: { id: botAgentId, name: agent?.persona.name ?? '' }, manageInVox: true };
+      return json(body);
+    }
     if (!authenticated) {
       const member = await studio.ensureMember(user);
       if (member.role === 'pending') return json({ error: 'approval_required' }, 403);
@@ -75,13 +85,6 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     let body: unknown;
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     if (botAgentId && body && typeof body === 'object' && 'agentId' in body && body.agentId !== botAgentId) return json({ error: 'agent_connection_mismatch' }, 403);
-    if (botAgentId && path.join('/') === 'profile/confirm') {
-      if (!studio.deps.adaptive) return json({ error: 'identity_unavailable' }, 503);
-      await authenticateAgentConnections(studio, request, botAgentId);
-      await studio.deps.adaptive.confirm(user.id, identityInput.parse(body), space);
-      const confirmedContext = await app.service.context(actor, space); app.service.assertContextCurrent(actor, confirmedContext);
-      return json({ confirmed: true });
-    }
     if (typeof application === 'function') {
       const mutationSpace = z.object({ space: spaceSchema }).parse(body).space;
       app = await application(actor, mutationSpace);
@@ -117,7 +120,8 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     const response = await dispatch();
     if (before && receiptSpace.success && response.ok) {
       const space = receiptSpace.data.space, locale = user.language_code?.toLowerCase().startsWith('fa') ? 'fa' as const : 'en' as const;
-      const allowsWriteToPm = botAgentId ? user.allows_write_to_pm : undefined;
+      // Connection records come from the manager bot, whose initData this is (the agent-bot surface never gets here).
+      const allowsWriteToPm = user.allows_write_to_pm;
       studio.receipts.track((async () => {
         const after = await app.service.list(actor, { space });
         for (const receipt of connectionReceipts(before, after)) await studio.receipts.send({ ...receipt, telegramId: user.id, locale, ...(allowsWriteToPm === false ? { allowsWriteToPm } : {}) });

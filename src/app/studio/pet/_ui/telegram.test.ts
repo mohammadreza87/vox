@@ -9,7 +9,8 @@ function fakeApp(over: Partial<PetTelegram> = {}) {
   const app: PetTelegram = {
     initData: 'query_id=1',
     ready: rec('ready'), expand: rec('expand'), requestFullscreen: rec('requestFullscreen'),
-    disableVerticalSwipes: rec('disableVerticalSwipes'), lockOrientation: rec('lockOrientation'),
+    disableVerticalSwipes: rec('disableVerticalSwipes'), enableVerticalSwipes: rec('enableVerticalSwipes'),
+    lockOrientation: rec('lockOrientation'), unlockOrientation: rec('unlockOrientation'), exitFullscreen: rec('exitFullscreen'),
     setHeaderColor: vi.fn((c: string) => { calls.push(`header:${c}`); }), setBackgroundColor: vi.fn((c: string) => { calls.push(`background:${c}`); }),
     setBottomBarColor: vi.fn((c: string) => { calls.push(`bottomBar:${c}`); }),
     enableClosingConfirmation: rec('enableClosing'), disableClosingConfirmation: rec('disableClosing'),
@@ -29,12 +30,12 @@ describe('pet Telegram boot (§3.5)', () => {
   });
   afterEach(() => { vi.useRealTimers(); delete (window as { Telegram?: unknown }).Telegram; });
 
-  it('boots in the documented order and leaves ready() for after the first character paint', () => {
+  it('preserves the normal window and dismissal controls, leaving ready() for after paint', () => {
     const { app, calls } = fakeApp();
     (window as unknown as { Telegram: { WebApp: PetTelegram } }).Telegram = { WebApp: app };
     bootTelegram('#123456');
     expect(calls).toEqual([
-      'expand', 'requestFullscreen', 'disableVerticalSwipes', 'lockOrientation',
+      'enableVerticalSwipes', 'unlockOrientation',
       'header:#123456', 'background:#123456', 'bottomBar:#123456',
     ]);
     expect(app.ready).not.toHaveBeenCalled();
@@ -47,22 +48,25 @@ describe('pet Telegram boot (§3.5)', () => {
     expect(calls.slice(-2)).toEqual(['ready', 'paint→hello']);
   });
 
-  it('ignores an unsupported fullscreen (desktop/web) and old clients that throw', () => {
+  it('restores a previously fullscreen window even if optional controls are unsupported', () => {
     const { app, calls } = fakeApp({
-      requestFullscreen: vi.fn(() => { throw new Error('WebAppMethodUnsupported'); }),
-      lockOrientation: undefined,
+      isFullscreen: true,
+      exitFullscreen: vi.fn(() => { throw new Error('WebAppMethodUnsupported'); }),
+      unlockOrientation: undefined,
       setBottomBarColor: vi.fn(() => { throw new Error('WebAppMethodUnsupported'); }),
     });
     expect(() => bootTelegram('#0E1013', app)).not.toThrow();
-    expect(calls).toEqual(['expand', 'disableVerticalSwipes', 'header:#0E1013', 'background:#0E1013']);
+    expect(calls).toEqual(['enableVerticalSwipes', 'header:#0E1013', 'background:#0E1013']);
+    expect(app.expand).not.toHaveBeenCalled();
+    expect(app.requestFullscreen).not.toHaveBeenCalled();
   });
 
-  it('locks the orientation only while portrait', () => {
-    Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true });
-    Object.defineProperty(window, 'innerHeight', { value: 400, configurable: true });
-    const { app } = fakeApp();
+  it('exits inherited fullscreen and unlocks orientation', () => {
+    const { app } = fakeApp({ isFullscreen: true });
     bootTelegram('#000000', app);
     expect(app.lockOrientation).not.toHaveBeenCalled();
+    expect(app.exitFullscreen).toHaveBeenCalledOnce();
+    expect(app.unlockOrientation).toHaveBeenCalledOnce();
   });
 
   it('a cancelled ready (unmounted before paint) never fires', () => {

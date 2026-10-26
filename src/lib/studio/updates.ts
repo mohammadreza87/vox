@@ -1,3 +1,4 @@
+import { ArchiveAdmissionRefusedError, ArchiveCommandDeliveryError } from './telegram-archive';
 import { handleRequestedRoutineMessage, noteRequestedRoutineActivity } from './requested-routines';
 /**
  * What VoxxBot and the agent bots do with each Telegram update. Shared by the
@@ -19,10 +20,11 @@ import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
 import { settingsV2 } from './flags';
 import { BOT_SETTINGS_COMMANDS, commandNames } from './settings-commands';
+import { MY_DATA_CODE, MY_DATA_PAGE } from './my-data-contract';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 /** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
-export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
+export const AGENT_UPDATES = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'chat_member'];
 /** What the stranger decision sees for an untranscribed voice note; never audio or a transcript. */
 export const STRANGER_VOICE_PLACEHOLDER = '(a voice message; it was not listened to)';
 
@@ -35,6 +37,13 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   }
   const msg = update.message;
   if (!msg?.from || msg.from.is_bot || msg.chat.type !== 'private') return;
+  // "My data" (the pet's Settings, t.me/<VoxxBot>?start=mydata): one web_app button to the VoxxBot-signed page. Before
+  // ensureMember, so someone who only uses public agents is never added to the pending list by asking for their data.
+  if (msg.chat.id === msg.from.id && new RegExp(`^/start(?:@\\w+)?\\s+${MY_DATA_CODE}$`).test(msg.text?.trim() ?? '')) {
+    const page = myDataPageUrl(studio.deps.webAppUrl);
+    if (page) await manager.sendMessage(msg.chat.id, MY_DATA_PROMPT, { keyboard: { inline_keyboard: [[{ text: MY_DATA_BUTTON, web_app: { url: page } }]] } });
+    return;
+  }
   const member = await studio.ensureMember(msg.from);
   if (member.role !== 'pending' && msg.chat.id === msg.from.id && studio.deps.reminderEndpointId) {
     // A verified private manager DM establishes this bot's reachable recipient.
@@ -58,6 +67,20 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
     `User ID: ${who.id}`,
   ].join('\n');
   await manager.sendMessage(msg.chat.id, `${text}\n\n${account}`, open ? { keyboard: open } : {});
+}
+
+/** EN and FA in one message: the manager bot does not know the person's language before they open the page. */
+const MY_DATA_PROMPT = 'Your Vox data: see it, copy it or erase it.\nداده‌های شما در وکس: ببینید، کپی کنید یا پاک کنید.';
+const MY_DATA_BUTTON = 'My data · داده‌های من';
+/** STUDIO_WEBAPP_URL is …/studio; the page sits beside it. Undefined when the Mini App URL is not configured. */
+function myDataPageUrl(webAppUrl: string | undefined): string | undefined {
+  if (!webAppUrl) return undefined;
+  try {
+    const url = new URL(webAppUrl);
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') return undefined;
+    url.pathname = MY_DATA_PAGE; url.search = ''; url.hash = '';
+    return url.toString();
+  } catch { return undefined; }
 }
 
 /**
@@ -109,7 +132,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     }
     return;
   }
-  const msg = update.message;
+  const msg = update.message ?? update.edited_message;
   if (!msg) {
     await gateway.handleUpdate(agentId, update);
     return;
@@ -127,8 +150,9 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.verifyGroupAudience(agentId, msg.chat.id);
     // Circles: /leave in a circle chat withdraws before anything else sees it.
     if (await studio.circleGroups.groupCommand(live, msg)) return;
-    // Settings v2: /settings and the other settings commands answer by a private message, never in the group.
-    if (await studio.settingsBot.groupCommand(live, msg, state)) return;
+    // Settings v2: /settings and the other settings commands answer by a private message, never in the group. New
+    // messages only: an edit (even into "/voice") never answers, admits a guest or spends speech; it goes on as an edit.
+    if (!update.edited_message && await studio.settingsBot.groupCommand(live, msg, state)) return;
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     await studio.noteGroupSpeaker(msg.chat.id, msg.from);
     ({ gateway } = await studio.gateway(endpoint));
@@ -138,13 +162,40 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   if (msg.chat.type !== 'private') return;
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
-  // Settings v2: /ask or /connectors hands off to this agent's own Connections Mini App, where the reviewed task runs
-  // (each tool call reviewed and approved there). No question, connector data or result enters this chat or its history.
-  if (settingsV2() && CONNECTORS_COMMAND.test((msg.text ?? '').trim()) && (member && canUseAgent(member, live) || visibilityOf(live) === 'public')
-    && await connectorsHandoff(studio, live, msg, update.update_id, !!member && canUseAgent(member, live))) return;
-  // Settings v2: /settings, /memory, /activity, /voice and /start settings (members, and outsiders of a public agent).
-  if (await studio.settingsBot.privateCommand(live, msg, update.update_id, state)) return;
+  // Settings v2 commands answer new messages only: an edit (even into "/settings") goes on to the archive's invalidation below.
+  if (!update.edited_message) {
+    // Settings v2: /ask or /connectors hands off to Vox (VoxxBot's Mini App), the only place connectors and app answers
+    // live. This chat gets fixed copy and a URL button: no question, connector data or result enters it or its history.
+    if (settingsV2() && CONNECTORS_COMMAND.test((msg.text ?? '').trim()) && (member && canUseAgent(member, live) || visibilityOf(live) === 'public')
+      && await connectorsHandoff(studio, live, msg, update.update_id, !!member && canUseAgent(member, live))) return;
+    // Settings v2: /settings, /memory, /activity, /voice and /start settings (members, and outsiders of a public agent).
+    if (await studio.settingsBot.privateCommand(live, msg, update.update_id, state)) return;
+  }
   if (member && canUseAgent(member, live)) {
+    if (studio.deps.telegramArchive) {
+      if (update.edited_message) {
+        await studio.deps.telegramArchive.invalidateEditedMessage(agentId, msg);
+        return;
+      }
+      try {
+        if (await studio.deps.telegramArchive.command(agentId, msg)) return;
+        await studio.deps.telegramArchive.capture(agentId, msg, update.update_id);
+      } catch (error) {
+        if (error instanceof ArchiveCommandDeliveryError) {
+          logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed');
+          return;
+        }
+        if (error instanceof ArchiveAdmissionRefusedError) {
+          await botOf(studio, live)?.sendMessage(msg.chat.id, 'The archive is unavailable for this request. This message was not saved or processed. Use /archive status, /archive clear or /archive disable. You can resend your message after recovery.');
+          return;
+        }
+        if (/^\/archive(?:@\S+)?(?:\s|$)/i.test(msg.text ?? '')) {
+          await botOf(studio, live)?.sendMessage(msg.chat.id, 'The archive request is unavailable. Use /archive status to check the current state.');
+          return;
+        }
+        throw error;
+      }
+    }
     // Circles: a member's /leave withdraws from the circles where they cover this agent; otherwise today's path.
     if (studio.circlesMode() === 'circles' && /^\/leave(@\S+)?$/i.test((msg.text ?? '').trim())) {
       const left = await studio.circleGroups.leaveAll(member.telegramId, agentId, `leave:dm:${agentId}:${update.update_id}`);
@@ -221,17 +272,9 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 /** The bot side of the registry's 'agent.connectors' command and its alias, from the one command table (settings-commands.ts). */
 export const CONNECTORS_COMMANDS: readonly string[] = commandNames(BOT_SETTINGS_COMMANDS.find((c) => c.settingId === 'agent.connectors')!);
 const CONNECTORS_COMMAND = new RegExp(`^/(${CONNECTORS_COMMANDS.join('|')})(@\\S+)?$`, 'i');
-/** `https://host/studio/connect/<agentId>?ask=1` (`ask: false` drops `?ask=1`), or null when the Studio URL can't host a Mini App. */
-export function connectPageUrl(webAppUrl: string | undefined, agentId: string, o: { ask?: boolean } = {}): string | null {
-  if (!webAppUrl || !/^[A-Za-z0-9_-]{1,128}$/.test(agentId)) return null;
-  let base: URL;
-  try { base = new URL(webAppUrl); } catch { return null; }
-  if (base.protocol !== 'https:' || base.username || base.password) return null;
-  return `${base.origin}/studio/connect/${agentId}${o.ask === false ? '' : '?ask=1'}`;
-}
 /**
- * A quiet reply with a web_app button to the agent's own Connections page (a member also gets "Open in Vox");
- * false (today's path) when there is no page to open.
+ * A quiet reply: fixed copy and, for a member, one URL button into Vox (settings-bot.ts connectorsReply); false
+ * (today's path) when there is nothing to send. Never a web_app button to an agent-signed page.
  */
 async function connectorsHandoff(studio: Studio, live: Agent, msg: TelegramMessage, updateId: number, member: boolean): Promise<boolean> {
   const reply = studio.settingsBot.connectorsReply(live, msg.from, member), token = studio.botToken(live);

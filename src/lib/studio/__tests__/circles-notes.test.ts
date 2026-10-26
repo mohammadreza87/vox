@@ -787,21 +787,21 @@ describe('the notes store', () => {
 });
 
 describe('Settings v2: the settings button under /notes, /forget and /leave', () => {
-  it('a member gets Memory settings in Vox, an outsider the agent-signed pet; an erase keeps the row; /leave offers settings', async () => {
+  it('a member gets Memory settings in Vox, an outsider My data (VoxxBot); an erase keeps the row; /leave offers settings', async () => {
     vi.stubEnv('STUDIO_SETTINGS_V2', '1');
     const x = await circle();
     x.h.studio.deps.webAppUrl = 'https://vox.example/studio';
     await x.save();
-    const bot = x.cookie.bot(), pet = `https://vox.example/studio/pet/${x.cookie.agent.id}`;
+    const bot = x.cookie.bot(), pet = `https://vox.example/studio/pet/${x.cookie.agent.id}`, myData = 'https://t.me/VoxxBot?start=mydata';
     const vox = `https://t.me/VoxxBot?start=s_${agentShortCode(SECRET, x.cookie.agent.id)}_m`;
     await x.send(dm(ID.stranger, '/notes'));
     const [, , options] = bot.sendMessage.mock.calls.at(-1)!;
-    expect(flat(options).map((b) => b.text)).toEqual(['Erase 1', 'Open Memory settings']);
-    expect(flat(options)[1]).toEqual({ text: 'Open Memory settings', web_app: { url: pet } });
+    expect(flat(options).map((b) => b.text)).toEqual(['Erase 1', 'Open My data']);
+    expect(flat(options)[1]).toEqual({ text: 'Open My data', url: myData });
     await x.send(tap(ID.stranger, flat(options)[0].callback_data!, { id: ID.stranger, type: 'private' }, 77));
-    expect(bot.editMessageText).toHaveBeenLastCalledWith(ID.stranger, 77, EN.none('Cookie'), { inline_keyboard: [[{ text: 'Open Memory settings', web_app: { url: pet } }]] });
+    expect(bot.editMessageText).toHaveBeenLastCalledWith(ID.stranger, 77, EN.none('Cookie'), { inline_keyboard: [[{ text: 'Open My data', url: myData }]] });
     await x.send(dm(ID.stranger, '/forget 1'));
-    expect(flat(bot.sendMessage.mock.calls.at(-1)![2])).toEqual([{ text: 'Open Memory settings', web_app: { url: pet } }]);
+    expect(flat(bot.sendMessage.mock.calls.at(-1)![2])).toEqual([{ text: 'Open My data', url: myData }]);
     await x.send(dm(ID.alice, '/notes'));
     expect(flat(bot.sendMessage.mock.calls.at(-1)![2]).at(-1)).toEqual({ text: 'Open Memory settings', url: vox });
     await x.send(dm(ID.stranger, '/leave'));

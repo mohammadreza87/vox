@@ -11,7 +11,7 @@ import { settingsBotCopy, StudioSettingsBot } from '../settings-bot';
 import { BOT_SETTINGS_COMMANDS, commandNames } from '../settings-commands';
 import { settingsCopy } from '../../../app/studio/_lib/settings-copy';
 import { agentShortCode } from '../../circles/codec';
-import { TelegramApiError, type InlineKeyboard, type TelegramUpdate } from '../../tireh/telegram/client';
+import { TelegramApiError, type InlineKeyboard, type TelegramMessage, type TelegramUpdate } from '../../tireh/telegram/client';
 import type { AgentJoin } from '../types';
 import { StudioRateLimiter } from '../ratelimit';
 import { hire, ID, makeStudio, SECRET, seedOrg, type FakeTelegram, type Harness } from './helpers';
@@ -201,11 +201,11 @@ describe('agent bot DM: a Studio member', () => {
     expect(h.chatLLM.replyRequests.length).toBe(before);
   });
 
-  it('/start settings is /settings; /memory → _m (and the pet notes), /activity → _a', async () => {
+  it('/start settings is /settings; /memory → _m (and My data for notes), /activity → _a', async () => {
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/start settings'));
     expect(buttons(lastTo(bot(), ID.bob)![2])[0]).toEqual({ text: '⚙︎ Open Nova settings', url: vox() });
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/memory'));
-    expect(buttons(lastTo(bot(), ID.bob)![2])).toEqual([{ text: 'Open Memory settings', url: vox('m') }, { text: 'My notes', web_app: { url: pet() } }]);
+    expect(buttons(lastTo(bot(), ID.bob)![2])).toEqual([{ text: 'Open Memory settings', url: vox('m') }, { text: 'My notes', url: 'https://t.me/VoxxBot?start=mydata' }]);
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/activity', 'fa'));
     expect(lastTo(bot(), ID.bob)![1]).toBe('کارهایی که با برنامه‌های وصل‌شده برای شما کردم.');
     expect(buttons(lastTo(bot(), ID.bob)![2])).toEqual([{ text: 'باز کردن فعالیت', url: vox('a') }]);
@@ -233,10 +233,27 @@ describe('agent bot DM: a Studio member', () => {
     expect(buttons(lastTo(bot(), ID.bob)![2])).toEqual([{ text: 'Open check-ins', url: vox('p') }]);
   });
 
-  it('/connectors and /ask keep the Connections page and add Open in Vox', async () => {
-    await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/connectors'));
-    expect(buttons(lastTo(bot(), ID.bob)![2])).toEqual([
-      { text: 'Open Connectors', web_app: { url: `https://vox.example/studio/connect/${nova.agent.id}?ask=1` } }, { text: 'Open in Vox', url: vox('c') }]);
+  it('/connectors and /ask: fixed copy and one URL button into Vox (Connectors & plugins), never a page of the agent\'s own', async () => {
+    for (const text of ['/connectors', '/ask', '/ask@nova_bot']) {
+      await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, text));
+      const [, said, opts] = lastTo(bot(), ID.bob)!;
+      expect(said).toBe('Connect apps and ask Nova with them in Vox. Each use is reviewed there, and answers stay in Vox, private to you.');
+      expect(opts).toEqual({ silent: true, keyboard: { inline_keyboard: [[{ text: 'Open in Vox', url: vox('c') }]] } });
+    }
+    expect(JSON.stringify(calls(bot()))).not.toMatch(/web_app|studio\/connect/);
+  });
+
+  it('an edit into a settings command is not answered (it goes on to the archive\'s edit handling)', async () => {
+    const archive = { invalidateEditedMessage: vi.fn(async () => undefined), command: vi.fn(async () => false), capture: vi.fn(async () => undefined), context: vi.fn() };
+    h.studio.deps.telegramArchive = archive as unknown as NonNullable<typeof h.studio.deps.telegramArchive>;
+    bot().sendMessage.mockClear();
+    for (const text of ['/settings', '/ask']) {
+      const { message, update_id } = dm(ID.bob, text) as { message: TelegramMessage; update_id: number };
+      await handleAgentUpdate(h.studio, nova.agent.id, { update_id, edited_message: message } as TelegramUpdate);
+    }
+    expect(calls(bot())).toEqual([]);
+    expect(archive.invalidateEditedMessage).toHaveBeenCalledTimes(2);
+    delete h.studio.deps.telegramArchive;
   });
 
   it('a private agent\'s non-member still hears "I\'m private"; a lookalike or another bot\'s command is not a settings command', async () => {
@@ -310,30 +327,35 @@ describe('agent bot /voice is read-only', () => {
 });
 
 describe('agent bot DM: an outsider of a public agent', () => {
-  it('/settings, /memory and /activity: only agent-signed web_app pages, never a link into Vox', async () => {
+  it('/settings, /memory and /activity: the pet page or My data, never an agent settings link into Vox or the connect page', async () => {
     const pip = await publicAgent();
-    const pet = `https://vox.example/studio/pet/${pip.agent.id}`, connect = `https://vox.example/studio/connect/${pip.agent.id}`;
+    const pet = `https://vox.example/studio/pet/${pip.agent.id}`, myData = 'https://t.me/VoxxBot?start=mydata';
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/settings'));
-    expect(lastTo(pip.bot(), ID.stranger)).toEqual([ID.stranger, 'Your notes with me, your choice to join, and apps you connected.', { silent: true, keyboard: { inline_keyboard: [
-      [{ text: 'Open Pip', web_app: { url: pet } }], [{ text: 'Connect an app', web_app: { url: connect } }]] } }]);
+    expect(lastTo(pip.bot(), ID.stranger)).toEqual([ID.stranger, 'Your notes with me and your choice to join.', { silent: true, keyboard: { inline_keyboard: [
+      [{ text: 'Open Pip', web_app: { url: pet } }]] } }]);
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/memory'));
-    expect(buttons(lastTo(pip.bot(), ID.stranger)![2])).toEqual([{ text: 'Open Memory settings', web_app: { url: pet } }]);
+    expect(lastTo(pip.bot(), ID.stranger)).toEqual([ID.stranger, 'Your notes with me are in My data in Vox, where you can see and erase them.', { silent: true, keyboard: { inline_keyboard: [
+      [{ text: 'Open My data', url: myData }]] } }]);
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/activity'));
-    expect(buttons(lastTo(pip.bot(), ID.stranger)![2])).toEqual([{ text: 'Open connections', web_app: { url: connect } }]);
+    expect(lastTo(pip.bot(), ID.stranger)).toEqual([ID.stranger, 'Apps are connected in Vox, and nothing I did with them is shown in this chat.', { silent: true }]);
+    expect(JSON.stringify(calls(pip.bot()))).not.toContain('studio/connect');
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/memories'));
-    expect(buttons(lastTo(pip.bot(), ID.stranger)![2])).toEqual([{ text: 'Open Memory settings', web_app: { url: pet } }]);
-    expect(JSON.stringify(calls(pip.bot()))).not.toContain('t.me/');
+    expect(buttons(lastTo(pip.bot(), ID.stranger)![2])).toEqual([{ text: 'Open My data', url: myData }]);
+    // The only Vox link an outsider gets is the fixed, content-free My data one: never an agent settings code.
+    expect(JSON.stringify(calls(pip.bot()))).not.toMatch(/start(app)?=s_/);
     // A pending Studio member is an outsider here too.
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.pending, '/settings'));
     expect(JSON.stringify(lastTo(pip.bot(), ID.pending))).not.toContain('t.me/');
   });
-  it('/voice: the sample only; /connectors: the Connections page only', async () => {
+  it('/voice: the sample only; /connectors and /ask: a fixed line, no button (Vox has no page for outsiders yet)', async () => {
     const pip = await publicAgent();
     await setVoice(pip.agent.id);
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/voice'));
     expect((pip.bot().sendVoice.mock.calls.at(-1) as unknown as [number, ArrayBuffer, { keyboard?: InlineKeyboard }])[2].keyboard).toBeUndefined();
-    await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/connectors'));
-    expect(buttons(lastTo(pip.bot(), ID.stranger)![2])).toEqual([{ text: 'Open Connectors', web_app: { url: `https://vox.example/studio/connect/${pip.agent.id}?ask=1` } }]);
+    for (const text of ['/connectors', '/ask']) {
+      await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, text));
+      expect(lastTo(pip.bot(), ID.stranger)).toEqual([ID.stranger, "Connecting apps happens in Vox, and it isn't open to you yet.", { silent: true }]);
+    }
   });
   it('counts against the guest limit', async () => {
     const pip = await publicAgent();
@@ -342,7 +364,7 @@ describe('agent bot DM: an outsider of a public agent', () => {
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/memory'));
     await handleAgentUpdate(h.studio, pip.agent.id, dm(ID.stranger, '/activity'));
     const said = calls(pip.bot()).filter(([c]) => c === ID.stranger).map(([, t]) => t);
-    expect(said).toEqual(['Your notes with me, your choice to join, and apps you connected.', "I've enjoyed talking, but I need a break. Let's pick this up tomorrow."]);
+    expect(said).toEqual(['Your notes with me and your choice to join.', "I've enjoyed talking, but I need a break. Let's pick this up tomorrow."]);
   });
   it('someone who chose "Not me" (Circles on) gets silence', async () => {
     const pip = await publicAgent();
@@ -372,6 +394,22 @@ describe('groups: nothing personal is posted', () => {
       return { message_id: 1, chat: { id: chatId, type: 'supergroup' }, date: 0 };
     });
   };
+
+  it('an edit into a settings command in the group is not answered: no DM, no group reply, no guest admission, no speech', async () => {
+    const pip = await publicAgent();
+    await setVoice(pip.agent.id);
+    await h.store.update((s) => { s.groups.find((g) => g.chatId === CHAT)!.agentIds.push(pip.agent.id); });
+    const admit = vi.spyOn(h.studio, 'admitGuest');
+    h.eleven.speak.mockClear();
+    for (const [agent, from, text] of [[nova, ID.bob, '/settings'], [pip, ID.stranger, `/voice@${pip.agent.bot!.username}`], [pip, ID.stranger, '/settings']] as const) {
+      agent.bot().sendMessage.mockClear();
+      const { message, update_id } = inGroup(CHAT, from, text) as { message: TelegramMessage; update_id: number };
+      await handleAgentUpdate(h.studio, agent.agent.id, { update_id, edited_message: message } as TelegramUpdate).catch(() => undefined);
+      expect(calls(agent.bot()).filter(([c, said]) => c === from || said === settingsBotCopy('en').inPrivate)).toEqual([]);
+    }
+    expect(admit).not.toHaveBeenCalled();
+    expect(h.eleven.speak).not.toHaveBeenCalled();
+  });
 
   it('a named /settings sends a quiet DM; the group gets one short reply with a start link, no web_app button and nothing personal', async () => {
     const update = inGroup(CHAT, ID.bob, `/settings@${nova.agent.bot!.username}`);

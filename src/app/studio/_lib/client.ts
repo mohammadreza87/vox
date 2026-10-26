@@ -154,7 +154,8 @@ export interface RelationshipView {
 const enc = encodeURIComponent;
 const withDefined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 
-export interface ConnectorUsage { providers: Array<{ id: string; name: string; people: number }>; unavailable?: true }
+/** chosenAudience: a private agent's managers pick who may use it, so no counts are shown (connector-usage.ts). */
+export interface ConnectorUsage { providers: Array<{ id: string; name: string; people: number }>; unavailable?: true; chosenAudience?: true }
 
 export const api = {
   relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),

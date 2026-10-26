@@ -9,7 +9,7 @@ import { backdrop } from './scene';
 import { readyAfterPaint } from './telegram';
 import './sleeper.css';
 
-export type SleeperKind = 'private' | 'outside' | 'resting' | 'offline' | 'unavailable';
+export type SleeperKind = 'private' | 'outside' | 'resting' | 'offline' | 'unavailable' | 'chat-access';
 
 const TEXT: Record<SleeperKind, { title: string; body: string }> = {
   private: { title: COPY.privateTitle, body: COPY.privateBody },
@@ -17,6 +17,7 @@ const TEXT: Record<SleeperKind, { title: string; body: string }> = {
   resting: { title: COPY.restingTitle, body: COPY.restingBody },
   offline: { title: COPY.offlineTitle, body: COPY.offlineBody },
   unavailable: { title: COPY.unavailableTitle, body: COPY.unavailableBody },
+  'chat-access': { title: COPY.chatAccessTitle, body: COPY.chatAccessBody },
 };
 
 /** When the server sent no look (outside Telegram, offline): the reference cloud. */

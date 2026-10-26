@@ -1,3 +1,4 @@
+import { StudioTelegramArchive } from './telegram-archive';
 import { createStudioRequestedRoutines } from './requested-routines';
 import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
 import { lstatSync } from 'node:fs';
@@ -174,6 +175,8 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const storage = env.STUDIO_STORAGE?.trim() || 'file';
   if (storage !== 'file' && storage !== 'firestore') throw new Error('STUDIO_STORAGE must be file or firestore');
   const adaptiveFormat = parseAdaptiveStorageFormat(env.STUDIO_ADAPTIVE_FORMAT, storage, !(env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1' || env.STUDIO_PUBLIC_URL?.trim()));
+  if (env.STUDIO_TELEGRAM_ARCHIVE !== undefined && !['', '0', '1'].includes(env.STUDIO_TELEGRAM_ARCHIVE)) throw new Error('STUDIO_TELEGRAM_ARCHIVE must be 0 or 1');
+  if (env.STUDIO_TELEGRAM_ARCHIVE === '1' && (storage !== 'file' || adaptiveFormat !== 'file' || env.STUDIO_BOTS !== '1')) throw new Error('STUDIO_TELEGRAM_ARCHIVE=1 requires canonical FILE and persistent STUDIO_BOTS=1 polling');
   const mediaBucket = env.STUDIO_MEDIA_BUCKET?.trim() || env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET?.trim();
   let publicUrl = env.STUDIO_PUBLIC_URL?.trim() || undefined;
   if (publicUrl && env.STUDIO_BOTS === '1') throw new Error('STUDIO_PUBLIC_URL webhooks cannot run with STUDIO_BOTS=1 long polling');
@@ -378,6 +381,10 @@ async function create(): Promise<Studio> {
       circleChats: () => parseCircleChats(process.env.STUDIO_CIRCLE_CHATS),
       noteSelector: () => parseNoteSelector(process.env.STUDIO_NOTE_SELECTOR),
       mainAppBot: () => process.env.STUDIO_MAIN_APP_BOT,
+      // Agent-signed initData needs Telegram's Ed25519 signature (production key, auth.ts). The emergency switch
+      // STUDIO_INITDATA_SIGNATURE=shadow relaxes it for low-value pet routes only (initdata-trust.ts); read per use.
+      initDataSignature: () => (process.env.STUDIO_INITDATA_SIGNATURE?.trim() === 'shadow' ? 'shadow' : 'enforce'),
+      integrityAlerts: () => process.env.STUDIO_BOT_INTEGRITY_ALERTS?.trim() !== 'off',
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).
@@ -505,6 +512,8 @@ async function create(): Promise<Studio> {
         },
       });
     }
+    // Keep protective clear/disable commands available when capture is switched off.
+    if (config.storage === 'file' && config.adaptiveFormat === 'file') studio.deps.telegramArchive = new StudioTelegramArchive(studio, () => process.env.STUDIO_TELEGRAM_ARCHIVE === '1');
     studio.deps.maintenanceHealth = () => readMaintenanceHealth(storage.maintenanceStorage);
     if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
       storage.adaptive!.repository.storage, storage.maintenanceStorage, {

@@ -9,6 +9,7 @@ import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { signInitData } from '../auth';
+import { agentInit } from './initdata-keys';
 import { handleStudioRequest } from '../http';
 import { canManageSettings, canShapeIdentity, formingDaysLeft } from '../permissions';
 import { handlePetRequest } from '../pet-http';
@@ -277,7 +278,7 @@ describe('voice and skills on the server', () => {
     const { agent: a, token } = await hire(h, org.alice);
     const identity = async () => { const x = await stored(a.id); return { voice: x.voice, persona: x.persona, identityVersion: x.identityVersion }; };
     const before = await identity();
-    const initData = signInitData({ id: ID.alice, first_name: 'Alice' }, token);
+    const initData = agentInit({ id: ID.alice, first_name: 'Alice' }, token);
     const smuggled = { action: 'feed', voiceId: 'fixture-sarah', voice: { voiceId: 'x' }, persona: { skillIds: [], presentation: 'masculine' }, skillIds: [] };
     // A trusted origin and valid agent-signed initData, so only the router itself can refuse.
     const pet = (method: string, path: string[], body: unknown = smuggled) => handlePetRequest(h.studio, new Request(`${ORIGIN}/api/studio/pet/${a.id}${path.length ? `/${path.join('/')}` : ''}`, {

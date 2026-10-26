@@ -71,6 +71,8 @@ describe('manager counts: people per connected app', () => {
     expect(protectUsage(rows, null)).toEqual([{ people: 3 }, { people: 7 }, { people: 8 }]);
     expect(protectUsage([{ people: 1 }], 1)).toEqual([]);
     expect(protectUsage([{ people: 3 }], 3)).toEqual([]);
+    // a hand-picked audience (a private agent's list) never shows a count, however large
+    expect(protectUsage(rows, 'chosen')).toEqual([]);
     expect(USAGE_MIN_PEOPLE).toBe(3);
   });
 

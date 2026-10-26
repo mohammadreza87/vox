@@ -1,13 +1,14 @@
 /**
- * Settings v2 quiet Telegram records: silent, content-light, from the agent's own bot, skipped silently when the
- * person never started that bot (and not retried for a day), never sent with the flag off. Plus the voice/skills
+ * Settings v2 quiet Telegram records: silent, content-light, connection records from the manager bot (never the
+ * agent's own bot, whose creator holds its token), voice/skills records to the creator from the agent's bot; skipped
+ * silently when the person never started that bot (and not retried for a day), never sent with the flag off. Plus the voice/skills
  * records for the creator and the /ask handoff in the agent's private chat.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { signInitData } from '../auth';
 import { handleStudioRequest } from '../http';
 import { receiptText } from '../receipts';
-import { connectPageUrl, CONNECTORS_COMMANDS, handleAgentUpdate } from '../updates';
+import { CONNECTORS_COMMANDS, handleAgentUpdate } from '../updates';
 import { TelegramApiError, type TelegramUpdate } from '../../tireh/telegram/client';
 import { connectionReceipts } from '../../connections/receipts';
 import type { ConnectionsSnapshot } from '../../connections/contracts';
@@ -33,32 +34,47 @@ const sent = () => bot().sendMessage.mock.calls;
 const forbidden = () => new TelegramApiError('sendMessage', "Forbidden: bot can't initiate conversation with a user");
 
 describe('StudioReceipts', () => {
-  it('sends a silent, content-light record from the agent\'s own bot', async () => {
-    bot().sendMessage.mockClear();
+  const manager = () => h.manager.sendMessage.mock.calls;
+  it('sends a silent, content-light connection record from the manager bot, never the agent\'s own bot', async () => {
+    bot().sendMessage.mockClear(); h.manager.sendMessage.mockClear();
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'access', provider: 'Gmail', hours: 8 })).toBe('sent');
-    expect(sent()).toEqual([[ID.bob, 'Record: you let Nova use Gmail for 8 hours. It asks before each use.', { silent: true }]]);
+    expect(manager()).toEqual([[ID.bob, 'Record: you let Nova use Gmail for 8 hours. It asks before each use.', { silent: true }]]);
+    expect(sent()).toEqual([]);
+  });
+
+  it('voice and skills records for the creator come from the agent\'s own bot', async () => {
+    bot().sendMessage.mockClear(); h.manager.sendMessage.mockClear();
+    expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.alice, kind: 'skills', count: 2, max: 8 })).toBe('sent');
+    expect(sent()).toEqual([[ID.alice, 'Record: Nova’s skills changed (2 of 8).', { silent: true }]]);
+    expect(manager()).toEqual([]);
   });
 
   it('skips silently when the person never started the bot, and does not retry within a day', async () => {
-    bot().sendMessage.mockClear();
-    bot().sendMessage.mockRejectedValueOnce(forbidden());
+    h.manager.sendMessage.mockClear();
+    h.manager.sendMessage.mockRejectedValueOnce(forbidden());
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'connected', provider: 'Gmail' })).toBe('skipped');
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'disconnected', provider: 'Gmail' })).toBe('skipped');
-    expect(sent()).toHaveLength(1);
+    expect(manager()).toHaveLength(1);
     expect(h.logger.warn).not.toHaveBeenCalledWith('[studio] receipt_failed');
   });
 
-  it('respects a signed allows_write_to_pm=false, the flag, and a missing or retired agent', async () => {
-    bot().sendMessage.mockClear();
+  it('respects a signed allows_write_to_pm=false, the flag, a missing or retired agent and a missing manager bot', async () => {
+    bot().sendMessage.mockClear(); h.manager.sendMessage.mockClear();
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'connected', provider: 'Gmail', allowsWriteToPm: false })).toBe('skipped');
     expect(await h.studio.receipts.send({ agentId: 'missing', telegramId: ID.bob, kind: 'connected', provider: 'Gmail' })).toBe('skipped');
     vi.stubEnv('STUDIO_SETTINGS_V2', '0');
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'connected', provider: 'Gmail' })).toBe('skipped');
+    vi.stubEnv('STUDIO_SETTINGS_V2', '1');
+    const managerBot = h.studio.deps.managerBot;
+    h.studio.deps.managerBot = null;
+    expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'connected', provider: 'Gmail' })).toBe('skipped');
+    h.studio.deps.managerBot = managerBot;
+    expect(manager()).toEqual([]);
     expect(sent()).toEqual([]);
   });
 
   it('other Telegram failures are logged once and never thrown', async () => {
-    bot().sendMessage.mockRejectedValue(new Error('socket hang up'));
+    h.manager.sendMessage.mockRejectedValue(new Error('socket hang up'));
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.bob, kind: 'connected', provider: 'Gmail' })).toBe('failed');
     expect(await h.studio.receipts.send({ agentId: nova.agent.id, telegramId: ID.alice, kind: 'connected', provider: 'Gmail' })).toBe('failed');
     expect(h.logger.warn.mock.calls.filter(c => c[0] === '[studio] receipt_failed')).toHaveLength(1);
@@ -174,30 +190,30 @@ describe('voice and skills records for the creator', () => {
   });
 });
 
-describe('/ask in the agent\'s private chat hands off to its Connections Mini App', () => {
+describe('/ask in the agent\'s private chat hands off to Vox (VoxxBot\'s Mini App) only', () => {
   let n = 9000;
   const dm = (from: number, text: string, chat: { id: number; type: string } = { id: from, type: 'private' }, language_code?: string): TelegramUpdate =>
     ({ update_id: ++n, message: { message_id: n, date: 0, text, from: { id: from, is_bot: false, first_name: 'X', ...(language_code ? { language_code } : {}) }, chat } }) as TelegramUpdate;
-  it('a member gets a quiet web_app button; nothing reaches the model or the chat history', async () => {
+  it('a member gets fixed copy and one URL button into Vox; nothing reaches the model or the chat history', async () => {
     bot().sendMessage.mockClear();
     const before = h.chatLLM.replyRequests.length + h.chatLLM.extractionCalls;
     const append = vi.spyOn(h.studio.deps.memory.history, 'append');
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/ask'));
-    // Part 3: a Studio member also gets "Open in Vox" (Settings › Nova › Connectors through the manager bot).
-    expect(sent()).toEqual([[ID.bob, 'Open Connectors to ask Nova with an app you connected. Each use is reviewed there, and answers stay private to you.',
-      { silent: true, keyboard: { inline_keyboard: [[{ text: 'Open Connectors', web_app: { url: `https://vox.example/studio/connect/${nova.agent.id}?ask=1` } }],
-        [{ text: 'Open in Vox', url: `https://t.me/VoxxBot?start=s_${agentShortCode(SECRET, nova.agent.id)}_c` }]] } }]]);
+    // Settings › Nova › Connectors & plugins through the manager bot; never the agent's own (agent-signed) connect page.
+    expect(sent()).toEqual([[ID.bob, 'Connect apps and ask Nova with them in Vox. Each use is reviewed there, and answers stay in Vox, private to you.',
+      { silent: true, keyboard: { inline_keyboard: [[{ text: 'Open in Vox', url: `https://t.me/VoxxBot?start=s_${agentShortCode(SECRET, nova.agent.id)}_c` }]] } }]]);
     expect(h.chatLLM.replyRequests.length + h.chatLLM.extractionCalls).toBe(before);
     expect(append).not.toHaveBeenCalled();
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/connectors@nova_bot', undefined, 'fa'));
-    expect(sent()[1][1]).toContain('اتصال‌ها');
+    expect(sent()[1][1]).toContain('برنامه‌ها را در Vox وصل کنید');
+    expect(JSON.stringify(sent())).not.toMatch(/web_app|studio\/connect/);
   });
   it('flag off: /ask takes today\'s path (no handoff button)', async () => {
     vi.stubEnv('STUDIO_SETTINGS_V2', '0');
     bot().sendMessage.mockClear();
     const append = vi.spyOn(h.studio.deps.memory.history, 'append');
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/ask')).catch(() => undefined);
-    expect(JSON.stringify(sent())).not.toContain('studio/connect');
+    expect(JSON.stringify(sent())).not.toContain('t.me/VoxxBot');
     expect(append.mock.calls.length + h.chatLLM.replyRequests.length).toBeGreaterThan(0);
   });
   it('answers exactly the commands the settings registry declares for Connectors & plugins', async () => {
@@ -207,17 +223,17 @@ describe('/ask in the agent\'s private chat hands off to its Connections Mini Ap
     for (const command of [entry.command, ...entry.aliases ?? []]) {
       bot().sendMessage.mockClear();
       await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, `/${command}`));
-      expect(JSON.stringify(sent())).toContain('studio/connect');
+      expect(JSON.stringify(sent())).toContain(`s_${agentShortCode(SECRET, nova.agent.id)}_c`);
     }
     // A command the registry does not declare is not handed off.
     bot().sendMessage.mockClear();
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/connect')).catch(() => undefined);
-    expect(JSON.stringify(sent())).not.toContain('studio/connect');
+    expect(JSON.stringify(sent())).not.toContain('t.me/VoxxBot');
   });
-  it('builds only an HTTPS Mini App URL', () => {
-    expect(connectPageUrl('http://vox.example/studio', 'a1')).toBeNull();
-    expect(connectPageUrl(undefined, 'a1')).toBeNull();
-    expect(connectPageUrl('https://vox.example/studio', '../x')).toBeNull();
-    expect(connectPageUrl('https://vox.example/studio', 'a1')).toBe('https://vox.example/studio/connect/a1?ask=1');
+  it('without a manager username there is no Vox link, so /ask takes today\'s path (no button to an agent page either)', async () => {
+    h.studio.deps.managerUsername = '';
+    bot().sendMessage.mockClear();
+    await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/ask')).catch(() => undefined);
+    expect(JSON.stringify(sent())).not.toMatch(/Open in Vox|web_app|studio\/connect/);
   });
 });

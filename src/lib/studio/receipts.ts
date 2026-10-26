@@ -2,10 +2,14 @@ import type { Studio } from './service';
 import { settingsV2 } from './flags';
 
 /**
- * Quiet Telegram records (Settings v2): a short silent DM from the agent's own bot when a person connects or
- * disconnects an app or an MCP server for that agent, and to the creator when its voice or skills change. The
- * server stays the record of truth; this is the person's copy in Telegram. Content-light: a provider name, an
- * MCP host (never its path), the agent's name and a duration. No account ids, labels, tokens or URLs.
+ * Quiet Telegram records (Settings v2): a short silent DM when a person connects or disconnects an app or an MCP
+ * server for an agent, and to the creator when its voice or skills change. The server stays the record of truth;
+ * this is the person's copy in Telegram. Content-light: a provider name, an MCP host (never its path), the agent's
+ * name and a duration. No account ids, labels, tokens or URLs.
+ *
+ * Connection records come from the manager bot (VoxxBot), never the agent's own bot: the agent's creator holds that
+ * bot's token and can read anything it ever sent (forwardMessage/copyMessage), and connectors are Vox-only. Voice and
+ * skills records go to the creator, from the agent's own bot (the only reader of that chat it could expose is them).
  *
  * Nothing records whether someone started a bot, so a send is tried and Telegram's refusal ("bot can't initiate
  * conversation", "blocked by the user") is the signal: it is skipped silently and not retried for a day.
@@ -25,10 +29,13 @@ export interface ReceiptInput {
   voice?: string;
   count?: number;
   max?: number;
-  /** From verified initData of the agent's own bot: false means the person turned its messages off. */
+  /** From verified initData of the bot that sends this record: false means the person turned its messages off. */
   allowsWriteToPm?: boolean;
 }
 export type ReceiptOutcome = 'sent' | 'skipped' | 'failed';
+
+/** Records about a person's connections: sent by the manager bot only. */
+const CONNECTION_KINDS: ReadonlySet<ReceiptKind> = new Set(['connected', 'access', 'access_ended', 'disconnected', 'mcp_added', 'mcp_removed']);
 
 const DAY = 86_400_000;
 const num = (n: number, fa: boolean) => fa ? n.toLocaleString('fa-IR') : String(n);
@@ -82,14 +89,17 @@ export class StudioReceipts {
   async send(input: ReceiptInput): Promise<ReceiptOutcome> {
     try {
       if (!settingsV2() || input.allowsWriteToPm === false || !Number.isSafeInteger(input.telegramId) || input.telegramId <= 0) return 'skipped';
-      const key = `${input.agentId}:${input.telegramId}`, now = Date.now();
+      const viaManager = CONNECTION_KINDS.has(input.kind);
+      const key = `${viaManager ? 'manager' : input.agentId}:${input.telegramId}`, now = Date.now();
       const until = this.unreachable.get(key);
       if (until && until > now) return 'skipped';
       const agent = (await this.studio.deps.store.read()).agents.find(a => a.id === input.agentId);
-      const token = agent && agent.status === 'active' && agent.bot ? this.studio.botToken(agent) : null;
-      if (!agent || !token) return 'skipped';
+      if (!agent || agent.status !== 'active') return 'skipped';
+      const token = viaManager ? null : agent.bot ? this.studio.botToken(agent) : null;
+      const client = viaManager ? this.studio.deps.managerBot : token ? this.studio.deps.botFor(token) : null;
+      if (!client) return 'skipped';
       try {
-        await this.studio.deps.botFor(token).sendMessage(input.telegramId, receiptText(input, agent.persona.name), { silent: true });
+        await client.sendMessage(input.telegramId, receiptText(input, agent.persona.name), { silent: true });
         return 'sent';
       } catch (error) {
         if (UNREACHABLE.test(error instanceof Error ? error.message : String(error))) {

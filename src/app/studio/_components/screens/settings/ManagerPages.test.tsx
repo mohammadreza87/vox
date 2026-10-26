@@ -60,6 +60,16 @@ describe('manager pages', () => {
     expect(await screen.findByText('No app is connected to Nova by enough people to show yet.')).toBeInTheDocument();
   });
 
+  it('a private agent (a hand-picked audience) says why there are no counts, in English and Persian', async () => {
+    state.connectorUsage.mockResolvedValue({ providers: [], chosenAudience: true });
+    await open(agent({ visibility: 'private' }), 'connector-usage');
+    expect(await screen.findByText('Counts show only when Nova is open to your whole company or to everyone. While you choose who may use it, a count could point to one of them.')).toBeInTheDocument();
+    expect(screen.queryByText('No app is connected to Nova by enough people to show yet.')).toBeNull();
+    cleanup(); setNav('fa');
+    await open(agent({ visibility: 'private' }), 'connector-usage');
+    expect(await screen.findByText(/^شمارش فقط وقتی نشان داده می‌شود که Nova/)).toBeInTheDocument();
+  });
+
   it('Change history: what changed and who by role, never a person', async () => {
     await open(agent(), 'history');
     expect(await screen.findByText('Who can talk → 2 people')).toBeInTheDocument();

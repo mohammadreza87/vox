@@ -36,7 +36,8 @@ export function ConnectorUsagePage({ agent }: { agent: AgentView }) {
       : !value ? <SkeletonRows rows={3} lead="tile" label={k.usageTitle} />
         : <Section foot={k.usageFoot}>
           {value.unavailable && <div className="vx-row"><span className="vx-row-sub">{k.usageUnavailable}</span></div>}
-          {!value.unavailable && !value.providers.length && <div className="vx-row"><span className="vx-row-sub">{k.usageNone(name)}</span></div>}
+          {value.chosenAudience && <div className="vx-row"><span className="vx-row-sub">{k.usageChosen(name)}</span></div>}
+          {!value.unavailable && !value.chosenAudience && !value.providers.length && <div className="vx-row"><span className="vx-row-sub">{k.usageNone(name)}</span></div>}
           {value.providers.map((p) => {
             const label = p.id === 'remote_mcp' ? k.customMcp : p.name;
             return <Row key={p.id} plain lead={<LetterTile text={label} />} title={label} value={k.people(p.people)} />;

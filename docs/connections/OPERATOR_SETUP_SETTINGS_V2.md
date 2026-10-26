@@ -18,7 +18,9 @@ The page tells each person what is missing for their account, agent and space. I
 ## How connectors reach conversations
 
 - **Studio Mini App.** A person uses a connected app from **Connectors & plugins**, with **Ask \<Agent\>**. This runs the existing isolated task runtime. Each tool call is reviewed and approved there, and the result stays in that private session.
-- **Telegram DM.** With `STUDIO_SETTINGS_V2=1`, `/ask` or `/connectors` in the agent's private chat sends a quiet button to `/studio/connect/<agentId>?ask=1`. That page runs the same reviewed task with the agent bot's own sign-in. No question text, connector data or result enters the DM or its history.
+- **Telegram DM.** With `STUDIO_SETTINGS_V2=1`, `/ask` or `/connectors` in the agent's private chat sends fixed copy and one URL button into Vox: `t.me/<VoxxBot>?startapp=s_<code>_c` when `STUDIO_MAIN_APP_BOT` names the manager, else `?start=`. It opens that agent's **Connectors & plugins** in the Vox Mini App, where access is checked again and the reviewed task runs under VoxxBot's sign-in. No question text, connector data or result enters the DM or its history.
+  - The agent bot never opens a page of its own for this. Its creator holds its token, so anything it sends, and initData its pages receive, is theirs to read. The agent's `/studio/connect/<agentId>` page only points to Vox: its one GET answers the agent's name and nothing about anyone's connections, and every other route on `/api/agents/<id>/connections` answers 404.
+  - Someone who is not a Vox member (an outsider of a public agent) gets a fixed line with no button until Vox has a "My apps" area for them.
 - **Not yet supported:**
   - ordinary chat replies, Telegram replies and calls (push-to-talk and live) don't use connected apps;
   - voice can't approve a reviewed call;

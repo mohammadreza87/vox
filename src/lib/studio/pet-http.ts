@@ -5,6 +5,15 @@
  *
  * Auth is per agent: initData is signed with the bot that opened the page, so it is verified with
  * that agent's own token (never a loop over tokens) and bot A's initData can never act on agent B.
+ * An agent's creator owns its bot and can read the token, so the HMAC alone proves nothing: Telegram's Ed25519
+ * `signature` is required too (initdata-trust.ts; only view and care may run without one, and only under
+ * STUDIO_INITDATA_SIGNATURE=shadow). A creator can still harvest genuine signed initData by repointing
+ * the bot's menu, so nothing that erases or discloses a person's data across agents runs here at all: export and
+ * forget answer 410 `moved_to_vox` and notes answer `circle_use_vox` for agent-signed requests; those live on the
+ * VoxxBot-signed "My data" page (my-data-http.ts), which the pet's Settings button opens (PetView.dataUrl).
+ * Talk stays on agent-signed initData (D1, kept by the product owner on 2026-10-26) within its 1 h window; the circle
+ * routes (they name the group and its members, and record or withdraw consent) answer `circle_use_vox` and run only on
+ * a VoxxBot-signed launch.
  * The path's agentId is only a routing hint. One exception (S4, R2 decision 5): a launch through the manager bot's
  * Main Mini App is signed by the manager bot; it is accepted only for the launch routes, while that route is on, and
  * only when the signed start_param names this agent (and a group it is in), so the manager's signature proves who the
@@ -20,7 +29,8 @@
  */
 
 import { z } from 'zod';
-import { verifyInitData, type InitDataUser } from './auth';
+import type { InitDataUser } from './auth';
+import { agentInitDataExpired, verifyAgentInitData, verifyManagerInitData } from './initdata-trust';
 import { circleDecision, circleLeave, circleNotes, CirclePetError, circleView, groupForCode } from './circle-pet';
 import { normalizeLook, stageFor } from './character';
 import { converseAuthorized } from './conversation';
@@ -38,7 +48,7 @@ import { agentShortCode, parsePetLaunch, sameShort } from '../circles/codec';
 import { apply, decay, newCare, open, talk, type CareResult } from '../pet/care';
 import { isGoodbye } from '../pet/goodbye';
 import {
-  PET_ACTIONS, PET_TZ_HEADER, type CareResponse, type PetAction, type PetCare, type PetErrorCode, type PetExportResponse, type PetForgetResponse,
+  PET_ACTIONS, PET_TZ_HEADER, type CareResponse, type PetAction, type PetCare, type PetErrorCode,
   type PetPrivateView, type PetRole, type PetView, type TalkResponse, type TalkVoiceResponse,
 } from '../pet/types';
 
@@ -46,6 +56,8 @@ const AGENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_INIT_DATA = 16_384;
 /** verifyInitData's default max age (24 h, like the rest of Studio in v1) */
 const INIT_DATA_MAX_AGE_S = 86_400;
+/** Agent-signed talk and consent: a harvested initData stays usable for at most an hour (D2). */
+const AGENT_STRICT_MAX_AGE_S = 3_600;
 const MAX_CARE_BYTES = 1024;
 const MAX_TALK_BYTES = 16 * 1024;
 const MAX_TALK_CHARS = 2000;
@@ -87,7 +99,7 @@ export function plausibleInitData(initData: string, nowSeconds = Math.floor(Date
 }
 
 /** What the pre-auth gate knows about an agent: read from state at most once per GATE_TTL_MS per process. */
-interface Gate { at: number; active: boolean; tokenEnc?: string; token: string | null }
+interface Gate { at: number; active: boolean; tokenEnc?: string; token: string | null; botId: number }
 const gates = new WeakMap<Studio, Map<string, Gate>>();
 const GATE_TTL_MS = 30_000;
 /** a signature that fails against a cached token this old re-reads the agent once (a refreshed token) */
@@ -109,7 +121,7 @@ async function gateFor(studio: Studio, limiter: StudioRequestRateLimiter, agentI
   const state = await studio.deps.store.read();
   const agent = state.agents.find((a) => a.id === agentId);
   const active = !!agent && agent.status === 'active' && !!agent.bot;
-  const gate: Gate = { at: now, active, ...(agent?.tokenEnc ? { tokenEnc: agent.tokenEnc } : {}), token: active ? studio.botToken(agent!) : null };
+  const gate: Gate = { at: now, active, ...(agent?.tokenEnc ? { tokenEnc: agent.tokenEnc } : {}), token: active ? studio.botToken(agent!) : null, botId: agent?.bot?.id ?? 0 };
   cache.delete(agentId);
   if (cache.size >= GATE_MAX) cache.delete(cache.keys().next().value!);
   cache.set(agentId, gate);
@@ -145,8 +157,17 @@ export function souvenir(agentId: string, userId: number, now: number): string {
 const clock = (studio: Studio) => (studio.deps.now?.() ?? new Date()).getTime();
 
 type PetRoute = 'view' | 'export' | 'care' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase';
-/** What a manager-signed launch (S4) may do: the person's own pet, its rights and the circle. Talk stays with the agent's own bot (the DM). */
-const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'export', 'care', 'forget', 'circle', 'circle-decision', 'circle-leave', 'notes', 'notes-erase']);
+/** What a manager-signed launch (S4) may do: the person's own pet and the circle. Talk stays with the agent's own bot (the DM). */
+const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'circle', 'circle-decision', 'circle-leave', 'notes', 'notes-erase']);
+/**
+ * Low-value routes that may run on agent-signed initData without Telegram's signature, only under the shadow switch:
+ * the person's own pet in this one agent. Never the circle view (it names the group and the other joined members).
+ */
+const RELAXABLE: ReadonlySet<PetRoute> = new Set(['view', 'care']);
+/** Agent-signed routes that act as the person (talk) or record their consent: a 1 h window instead of 24 h. */
+const STRICT_AGE: ReadonlySet<PetRoute> = new Set(['talk', 'talk-voice', 'circle-decision', 'circle-leave']);
+/** Moved to the VoxxBot-signed My data page (my-data-http.ts): never authorised by any pet initData again. */
+const MOVED: ReadonlySet<PetRoute> = new Set(['export', 'forget']);
 const COPY_ID = /^[0-9a-z]{1,11}-[A-Za-z0-9_-]{12}$/;
 function routeOf(method: string, path: string[]): { route: PetRoute; copyId?: string } | null {
   const action = path.join('/');
@@ -166,7 +187,7 @@ function managerLaunch(studio: Studio, initData: string, agentId: string, manage
   const code = new URLSearchParams(initData).get('start_param');
   const launch = parsePetLaunch(code);
   if (!launch || !sameShort(launch.short, agentShortCode(studio.deps.secret, agentId))) return null;
-  const user = verifyInitData(initData, managerToken);
+  const user = verifyManagerInitData(studio, initData, managerToken, 'pet');
   return user ? { user, code: code! } : null;
 }
 
@@ -186,6 +207,8 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     const routed = routeOf(method, path);
     if (!routed || !AGENT_ID.test(agentId)) return fail('pet_unavailable', 404);
     const { route } = routed;
+    // Erase and export left the agent-signed page (a creator can forge or harvest its initData): nothing is read or erased.
+    if (MOVED.has(route)) return fail('moved_to_vox', 410);
     const initData = request.headers.get('x-telegram-init-data') ?? '';
     if (!initData || initData.length > MAX_INIT_DATA || !plausibleInitData(initData)) return fail('authentication_required', 401);
     if (method !== 'GET') {
@@ -199,8 +222,10 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     // this agent's own entrance: a busy public pet never starves another agent, or the Studio
     await limiter.consume('ingress', `pet:${agentId}`);
     if (!gate.token) return fail('pet_unavailable', 503);
-    // The opening bot signed this initData; another agent's bot never verifies it.
-    let user = verifyInitData(initData, gate.token);
+    // The opening bot signed this initData; another agent's bot never verifies it. Telegram's signature is required.
+    const agentSigned = (g: Gate) => g.token ? verifyAgentInitData(studio, initData, { token: g.token, botId: g.botId }, 'pet',
+      { relaxable: RELAXABLE.has(route), ...(STRICT_AGE.has(route) ? { maxAgeSeconds: AGENT_STRICT_MAX_AGE_S } : {}) }) : null;
+    let user = agentSigned(gate);
     // The signed launch code when the manager bot signed this initData (S4); unset for the agent's own bot.
     let launched: string | undefined;
     if (!user && LAUNCH_ROUTES.has(route)) {
@@ -209,9 +234,11 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     }
     if (!user && Date.now() - gate.at >= GATE_REFRESH_MS) {
       gate = await gateFor(studio, limiter, agentId, true);
-      user = gate.active && gate.token ? verifyInitData(initData, gate.token) : null;
+      user = gate.active ? agentSigned(gate) : null;
     }
-    if (!user) return fail('authentication_required', 401);
+    // Genuine initData only past the 1 h talk/consent window (a Mini App left open): "reopen me", not "outside".
+    if (!user) return fail(STRICT_AGE.has(route) && gate.active && gate.token && agentInitDataExpired(studio, initData, { token: gate.token, botId: gate.botId })
+      ? 'session_expired' : 'authentication_required', 401);
     await limiter.consume('api', user.id);
 
     // authenticated: the current state decides from here (the gate may be up to GATE_TTL_MS old)
@@ -227,33 +254,13 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     if (!launched && agent.tokenEnc !== gate.tokenEnc) {
       const token = studio.botToken(agent);
       if (!token) return fail('pet_unavailable', 503);
-      if (verifyInitData(initData, token)?.id !== user.id) return fail('authentication_required', 401);
+      if (agentSigned({ ...gate, token, botId: agent.bot.id })?.id !== user.id) return fail('authentication_required', 401);
     }
+    // Note texts are readable and erasable only in Vox (My data), or through a VoxxBot-signed launch (S4); the circle
+    // (the group, its members, a join or a leave) only through that launch (decision 8).
+    if ((route.startsWith('notes') || route.startsWith('circle')) && !launched) return fail('circle_use_vox', 403);
     void sweepPetCare(studio);
     const pets = await petStoreFor(studio);
-
-    // The person's own pet data, whatever their role (a guest, someone removed from Studio, a blocked
-    // person): the signed initData proves who they are.
-    if (route === 'export') {
-      // A failing choice store never blocks the pet export: pet care still goes out.
-      const choices = await studio.agentChoicesFor(user.id).catch(() => []);
-      const circles = await studio.circleParticipationFor(user.id).catch(() => []);
-      const notes = await studio.notesFor(user.id).catch(() => []);
-      const body: PetExportResponse = { petCare: await pets.listForUser(user.id), ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}) };
-      return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-pet-export.json"' });
-    }
-    if (route === 'forget') {
-      await limiter.consume('mutation', user.id);
-      // Circle rows, note copies, channel post drafts and choices are erased first, so a failing store fails the request before pet care is touched.
-      const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id);
-      await studio.forgetChannelDrafts(user.id);
-      const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
-      // Connections in both spaces, for every agent: best-effort, it never fails the forget (a vault entry may wait for the broker).
-      const connections = await studio.forgetConnections(user.id);
-      const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}),
-        ...(connections.erased ? { connectionsErased: connections.erased } : {}), ...(connections.pending ? { connectionsPending: connections.pending } : {}) };
-      return json(body);
-    }
 
     if (route.startsWith('circle') || route.startsWith('notes')) return await circleRoute(studio, limiter, request, route, routed.copyId, agent, user.id, state, launched);
 
@@ -289,13 +296,17 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       return fn(decay(current ?? newCare(agent.id, user.id, at, tz ?? 'UTC', stage), at, tz), at);
     }, expectedEpoch);
 
+    // Talk runs on the agent's own bot (D1); a manager-signed launch never speaks to the agent.
+    const talkHere = !launched;
     if (route === 'view') {
+      const dataUrl = studio.dataLink();
       const opened = await step((care, at) => { const o = open(care, at, stage); return { care: o.care, result: { ...o, at } }; });
       const view: PetView = {
         careEpoch: expectedEpoch, agentId: agent.id, name: agent.persona.name, look: normalizeLook(agent.look), stage, formingDay: formingDay(agent, new Date(now)),
         botUsername: agent.bot.username, voice: !!agent.voice && !!studio.deps.eleven,
-        listen: role !== 'guest' && !launched && (!!studio.deps.openai || !!studio.deps.eleven), role, care: opened.care, now: opened.at,
-        ...(launched ? { talkInDm: true as const } : {}),
+        listen: role !== 'guest' && talkHere && (!!studio.deps.openai || !!studio.deps.eleven), role, care: opened.care, now: opened.at,
+        ...(talkHere ? {} : { talkInDm: true as const }),
+        ...(dataUrl ? { dataUrl } : {}),
         ...(opened.welcome ? { welcome: { souvenir: souvenir(agent.id, user.id, opened.at), awayMs: opened.welcome.awayMs } } : {}),
         ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
         ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
@@ -468,7 +479,8 @@ export async function handlePetLaunch(studio: Studio, request: Request, managerT
       .find((a): a is Agent => !!a && sameShort(launch.short, agentShortCode(studio.deps.secret, a.id)));
     if (!agent) return fail('pet_unavailable', 404);
     const own = studio.botToken(agent);
-    const user = (managerToken && studio.mainApp() ? verifyInitData(initData, managerToken) : null) ?? (own ? verifyInitData(initData, own) : null);
+    const user = (managerToken && studio.mainApp() ? verifyManagerInitData(studio, initData, managerToken, 'pet_launch') : null)
+      ?? (own ? verifyAgentInitData(studio, initData, { token: own, botId: agent.bot!.id }, 'pet_launch', { relaxable: true }) : null);
     if (!user) return fail('authentication_required', 401);
     await limiter.consume('api', user.id);
     return json({ agentId: agent.id });

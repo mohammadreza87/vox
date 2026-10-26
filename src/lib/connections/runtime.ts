@@ -19,7 +19,7 @@ import { erasedAuthority, eraseConnections, exportConnections, type ConnectionsE
 import { botAuthenticationRevision } from './bot-principal';
 import { listProviderDefinitions } from './catalog';
 import { canUseAgent, visibilityOf } from '../studio/permissions';
-import { protectUsage } from '../studio/connector-usage';
+import { protectUsage, usageAudience } from '../studio/connector-usage';
 
 const PATHS = ['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/invalidate', '/v1/mcp/enrollments', '/v1/mcp/enrollments/preview', '/v1/mcp/enrollments/claim', '/v1/mcp/enrollments/cancel', '/v1/mcp/callback', '/v1/mcp/client-metadata', '/v1/erase'] as const;
 interface RuntimeState { storage: ConnectionsStorage; budgets: ConnectionsBudgetLedger; broker?: ConnectionsBrokerPort; authenticator?: BrokerAuthenticator;
@@ -106,8 +106,9 @@ export async function connectionUsageFor(studio: Studio, agentId: string, viewer
   const counts = await runtime.storage.countLivePeopleByAgent?.(agentId, viewerTelegramId === undefined ? undefined : `telegram-account:${viewerTelegramId}`) ?? {};
   const state = await studio.deps.store.read();
   const agent = state.agents.find(a => a.id === agentId);
-  const audience = !agent || visibilityOf(agent) === 'public' ? null
-    : state.members.filter(m => m.role !== 'pending' && m.telegramId !== viewerTelegramId && canUseAgent(m, agent) && !(agent.blocked ?? []).includes(m.telegramId)).length;
+  // No agent: nothing to protect a count against, so nothing is shown (a hand-picked audience shows nothing either).
+  const audience = !agent ? 'chosen' as const : usageAudience(visibilityOf(agent),
+    () => state.members.filter(m => m.role !== 'pending' && m.telegramId !== viewerTelegramId && canUseAgent(m, agent) && !(agent.blocked ?? []).includes(m.telegramId)).length);
   const names = new Map(listProviderDefinitions().map(p => [p.id, p.label]));
   const value: ConnectorUsage = { providers: protectUsage(Object.entries(counts).map(([id, people]) => ({ id, name: id === 'remote_mcp' ? 'Custom MCP servers' : names.get(id) ?? id, people })), audience)
     .sort((a, b) => b.people - a.people || a.name.localeCompare(b.name)) };
