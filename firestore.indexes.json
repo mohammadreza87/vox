@@ -56,6 +56,24 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "vox_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "personaId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "memoryIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "at",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

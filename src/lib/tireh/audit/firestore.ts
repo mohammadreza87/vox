@@ -2,10 +2,13 @@
  * Firestore implementations of the content-free audit log (`vox_audit`) and
  * the supersede notices (`tireh_supersede_notices`).
  *
- * vox_audit list() needs one composite index (personaId ASC, at DESC). S06
- * owns firestore.indexes.json, so the integrator adds it after both merge;
- * until then list() fails on Firestore while append and sweep work. memoryId
- * and since are filtered in memory so no further index is needed.
+ * vox_audit list() runs every filter in the query, before the limit, so it
+ * returns the same rows as the in-memory and file stores: personaId ==,
+ * memoryIds array-contains (with memoryId), at >= since (with since), ordered
+ * by at DESC. Its composite indexes are in firestore.indexes.json:
+ * (personaId ASC, at DESC) and (personaId ASC, memoryIds CONTAINS, at DESC).
+ * selectAuditRows stays as a final filter over the fetched page. sweep() uses
+ * the single-field `at` index.
  *
  * Notices are fanned out to one document per (notice, recipient). listFor
  * needs a composite index (personaId ASC, recipientPersonId ASC, at DESC),
@@ -44,12 +47,12 @@ export class FirestoreAuditStore implements AuditStore {
     return stored;
   }
 
+  /** Filters in the query, then the limit (newest first); selectAuditRows re-checks the page. */
   async list(filter: { personaId: string; memoryId?: string; since?: Date; limit?: number }): Promise<AuditRow[]> {
-    const snapshot = await this.db.collection(AUDIT_COLLECTION)
-      .where('personaId', '==', filter.personaId)
-      .orderBy('at', 'desc')
-      .limit(clampAuditLimit(filter.limit))
-      .get();
+    let query = this.db.collection(AUDIT_COLLECTION).where('personaId', '==', filter.personaId);
+    if (filter.memoryId !== undefined) query = query.where('memoryIds', 'array-contains', filter.memoryId);
+    if (filter.since !== undefined) query = query.where('at', '>=', filter.since);
+    const snapshot = await query.orderBy('at', 'desc').limit(clampAuditLimit(filter.limit)).get();
     const rows = snapshot.docs.map((doc) => {
       const data = doc.data() as Omit<AuditRow, 'at'> & { at: unknown };
       return { ...data, id: data.id ?? doc.id, at: toDate(data.at) };
