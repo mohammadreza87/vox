@@ -171,6 +171,7 @@ export class StudioTelegramArchive {
   }
   async invalidateEditedMessage(agentId: string, message: TelegramMessage): Promise<void> {
     if (message.chat.type !== 'private' || !message.from || message.from.is_bot || message.chat.id !== message.from.id) return;
+    try {
     // An unconfigured/off rollout must not create or rewrite an account merely
     // because Telegram delivered an edit. Existing archive rows still suppress.
     const read = this.adaptive.repository.readCommittedForEffect(`telegram-account:${message.from.id}`, () => this.now());
@@ -204,6 +205,12 @@ export class StudioTelegramArchive {
         }
       }
     });
+    } catch {
+      // An edit is acknowledged only after its current suppression is durable.
+      // Policy/read/write failures all retain this and later polling updates;
+      // a revoked scope must not turn a failed tombstone into a lost edit.
+      throw new ArchiveCapturePendingError();
+    }
   }
   async clear(scope: ArchiveScope, disable = false): Promise<void> {
     await this.adaptive.withAccountDocument(ownerId(scope), (d, now) => {

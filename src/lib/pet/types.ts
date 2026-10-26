@@ -141,6 +141,8 @@ export interface PetView {
   bondMilestone?: number;
   /** opened over a group through the manager bot (Circles S4): talk happens in the agent's DM */
   talkInDm?: true;
+  /** the person's own data page in Vox (t.me/<VoxxBot>?startapp=mydata): export, erase, notes. The ⋯ menu's Settings opens it. */
+  dataUrl?: string;
 }
 
 /* ---------- the pet over a group (Circles S4): GET circle answers PetCircle ---------- */
@@ -189,9 +191,9 @@ export interface TalkVoiceResponse {
 }
 
 /**
- * GET /export: this person's care for every agent (the self-service copy of what the rights export
- * carries). POST /forget: deletes it all; the next visit meets the pet anew. Anyone whose initData the
- * agent's bot signed may call both, whatever their role, so guests have their own rights path.
+ * The person's care for every agent (the self-service copy of what the rights export carries), and its erasure.
+ * Served only by the VoxxBot-signed My data page (GET /api/studio/my-data, POST …/forget): an agent's creator
+ * holds that agent's bot token, so the pet's own GET /export and POST /forget now answer 410 `moved_to_vox`.
  */
 /** agentChoices: the person's agent-card choices with their evidence (Circles), present only when any exist.
  * circles: their own group-circle participation (evidence, membership windows), present only when any exists. */
@@ -202,6 +204,7 @@ export interface PetForgetResponse { erased: number; choicesErased?: number; cir
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot
+  | 'session_expired' // genuine agent-signed initData past the 1 h talk/consent window (401): reopen the pet, never the end of it
   | 'pet_private' // private agent, caller cannot use it (body is PetPrivateView)
   | 'pet_unavailable' // agent missing, not active, or no bot token
   | 'guest_talk' // guests talk in the DM
@@ -210,12 +213,14 @@ export type PetErrorCode =
   | 'invalid_request'
   | 'rate_limited'
   | 'conversation_failed'
+  | 'moved_to_vox' // export and forget: only on the VoxxBot-signed My data page now (410)
   // Circles S4: shown in place by the group sheet, never the end of the pet session
   | 'circle_unavailable' // Circles off here, no open circle, or a code that names nothing for this agent
   | 'circle_not_member' // not a present member of that group (nothing about it is shown)
   | 'circle_full' // 12 people already joined (or too many joins and leaves)
   | 'circle_stale' // the card changed: reload and choose again
-  | 'circle_failed'; // a store failed under a circle route: try again (never ends the pet)
+  | 'circle_failed' // a store failed under a circle route: try again (never ends the pet)
+  | 'circle_use_vox'; // notes on agent-signed initData: read and erase them in Vox (My data) instead (403, never ends the pet)
 
 export interface PetErrorBody { error: PetErrorCode; message?: string }
 /** 403 body for a private agent: enough to draw the character asleep on the "This one's private" screen. */

@@ -200,6 +200,29 @@ describe('FILE Telegram user-message archive runtime',()=>{
 });
 
 describe('Telegram polling durable capture barrier',()=>{
+  it('retains a failed edited-source suppression and later updates until the edit commits durably',async()=>{
+    const x=await setup();await x.archive.capture(x.hired.agent.id,x.message('RETRY_EDITED_SOURCE',10),10);
+    await x.archive.capture(x.hired.agent.id,x.message('RETRY_KEPT_SOURCE',11),11);
+    vi.useFakeTimers();
+    const transaction=vi.spyOn(x.adaptive,'withAccountDocument').mockRejectedValueOnce(new Error('synthetic FILE commit failure'));
+    const edited={update_id:20,edited_message:x.message('replacement',10)},later={update_id:21};
+    let resumed!:()=>void;const complete=new Promise<void>(resolve=>{resumed=resolve;});
+    const getUpdates=vi.fn().mockResolvedValueOnce([edited,later]).mockResolvedValueOnce([edited,later]).mockImplementation(async()=>{resumed();return new Promise(()=>{});});
+    const after=vi.fn();
+    const loop=pollLoop({getUpdates,deleteWebhook:async()=>true} as unknown as TelegramBotClient,[],async update=>{
+      if(update.update_id===20) await x.archive.invalidateEditedMessage(x.hired.agent.id,edited.edited_message);
+      else after();
+    },{info:vi.fn(),warn:vi.fn(),error:vi.fn()});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transaction).toHaveBeenCalledTimes(1);expect(after).not.toHaveBeenCalled();expect(getUpdates).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(3000);
+      await complete;
+      expect(after).toHaveBeenCalledOnce();expect(getUpdates.mock.calls[1][0]).toBeUndefined();expect(getUpdates.mock.calls[2][0]).toBe(22);
+    } finally {loop.stop();vi.useRealTimers();}
+    x.restart();const context=(await x.archive.context(ID.alice,x.hired.agent.id,'work')).text.join();
+    expect(context).not.toContain('RETRY_EDITED_SOURCE');expect(context).toContain('RETRY_KEPT_SOURCE');
+  });
   it('does not advance offset or handle later updates before failed capture is service-durable',async()=>{
     vi.useFakeTimers();let attempt=0;const later=vi.fn();
     const getUpdates=vi.fn().mockResolvedValueOnce([{update_id:10},{update_id:11}]).mockImplementationOnce(async(offset:number|undefined)=>{expect(offset).toBeUndefined();return [{update_id:10},{update_id:11}];}).mockImplementation(async()=>new Promise(()=>{}));

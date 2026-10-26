@@ -33,42 +33,24 @@ describe('public agent Connections page', () => {
       expect(recoveries).toEqual([]); expect(within(container).getByRole('main')).toHaveAttribute('dir', 'rtl');
     } finally { await act(async () => root?.unmount()); container.remove(); }
   });
-  it('removes access controls after confirmed disconnect without retaining stale selections', async () => {
-    const connected = dashboard('Own account'); let current = connected;
-    m.api.read.mockImplementation(async () => current); m.api.resources.mockResolvedValue({ resources: [] });
-    m.api.revoke.mockImplementation(async () => { current = { ...connected, connections: connected.connections.map(c => ({ ...c, lifecycle: 'revoked' })) }; });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    try {
-      render(<AgentConnectionsApp agentId="alpha" />); fireEvent.click(await screen.findByRole('button', { name: 'Choose access' }));
-      fireEvent.click(await screen.findByRole('button', { name: 'Disconnect this account' }));
-      await screen.findByText('Access stopped.');
-      expect(screen.queryByRole('button', { name: 'Allow selected access' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Disconnect this account' })).not.toBeInTheDocument();
-    } finally { confirm.mockRestore(); }
-  });
-  it('makes profile confirmation explicit and does not enable optional features or tool grants', async () => {
-    m.api.read.mockRejectedValueOnce(new ApiError(403, 'profile_confirmation_required')).mockResolvedValue(dashboard()); m.api.confirm.mockResolvedValue({ confirmed: true });
+  it('is read-only: lists the person’s connections with no confirm, connect, access, task or disconnect control', async () => {
+    m.api.read.mockResolvedValue({ ...dashboard('Own account'), providers: [{ id: 'github', name: 'GitHub', description: 'Code', availability: 'ready', tools: [] }] } as unknown as ConnectionsDashboard);
     render(<AgentConnectionsApp agentId="alpha" />);
-    const button = await screen.findByRole('button', { name: 'Confirm my account' }); expect(button).toBeDisabled();
-    fireEvent.click(screen.getByRole('checkbox', { name: /This is my Telegram account/ })); fireEvent.click(button);
-    await screen.findByRole('heading', { name: 'Your connections' }); expect(m.api.confirm).toHaveBeenCalledExactlyOnceWith('personal'); expect(m.api.grant).not.toHaveBeenCalled();
+    await screen.findByText('Own account');
+    expect(screen.getByText('Manage connections in Vox. This page only shows them.')).toBeInTheDocument();
+    for (const name of ['Choose access', 'Connect', 'Disconnect this account', 'Confirm my account', 'Continue', 'Finish setup', 'Allow selected access', 'Start task'])
+      expect(screen.queryByRole('button', { name, exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    for (const call of [m.api.confirm, m.api.enroll, m.api.mcpEnroll, m.api.setup, m.api.grant, m.api.revoke, m.api.task, m.api.resources, m.api.review, m.api.approve, m.api.execute])
+      expect(call).not.toHaveBeenCalled();
   });
-  it('requires a deliberate exact catalog acceptance after returning from MCP OAuth', async () => {
-    let current = dashboard(); m.api.read.mockImplementation(async () => current);
-    const pending = { id: 'mcp-alpha', agentId: 'alpha', providerId: 'remote_mcp', displayLabel: 'My server', revision: 1, lifecycle: 'pending', health: 'unknown', checkedAt: null, revocationEpoch: 0 };
-    m.api.mcpEnroll.mockImplementation(async () => { current = { ...dashboard(), connections: [pending] } as ConnectionsDashboard; return current; });
-    m.api.setup.mockResolvedValue({ flowId: 'synthetic-flow', kind: 'remote_mcp', status: 'pending', expiresAt: Date.now() + 60_000, authorizationUrl: 'https://auth.fixture.net/authorize' });
-    m.api.mcpPreview.mockResolvedValue({ flowId: 'synthetic-flow', status: 'pending', expiresAt: Date.now() + 60_000,
-      catalog: { resource: 'https://mcp.fixture.net/private/mcp', catalogDigest: 'a'.repeat(64), identityEvidence: 'unavailable', tools: [{ id: 'tool-a', title: 'Read own document', description: 'Untrusted description', inputSchema: { type: 'object' } }] } });
-    m.api.mcpClaim.mockImplementation(async () => { current = { ...current, connections: [{ ...pending, lifecycle: 'connected', revision: 2 }] } as ConnectionsDashboard; return { flowId: 'synthetic-flow', status: 'connected' }; });
-    render(<AgentConnectionsApp agentId="alpha" />); fireEvent.change(await screen.findByLabelText('Server URL'), { target: { value: 'https://mcp.fixture.net/private/mcp' } });
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My server' } }); fireEvent.click(screen.getByRole('button', { name: 'Continue', exact: true }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Check connection' }));
-    const review = await screen.findByRole('region', { name: 'Review MCP server' });
-    expect(within(review).getByText('https://mcp.fixture.net/private/mcp')).toBeInTheDocument();
-    const connect = within(review).getByRole('button', { name: 'Connect reviewed server' }); expect(connect).toBeDisabled(); expect(m.api.mcpClaim).not.toHaveBeenCalled();
-    fireEvent.click(within(review).getByRole('checkbox')); fireEvent.click(connect);
-    await screen.findByRole('button', { name: 'Choose access' }); expect(m.api.mcpClaim).toHaveBeenCalledExactlyOnceWith('personal', 'synthetic-flow', 'a'.repeat(64)); expect(m.api.grant).not.toHaveBeenCalled();
+  it('without a confirmed profile it points to Vox instead of offering confirmation', async () => {
+    m.api.read.mockRejectedValue(new ApiError(403, 'profile_confirmation_required'));
+    render(<AgentConnectionsApp agentId="alpha" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Manage connections in Vox. This page only shows them.');
+    expect(screen.queryByRole('button', { name: 'Confirm my account' })).not.toBeInTheDocument();
+    expect(m.api.confirm).not.toHaveBeenCalled();
   });
   it('cannot restore a late Personal account response after switching to Work', async () => {
     let release!: (value: ConnectionsDashboard) => void;
@@ -91,18 +73,17 @@ describe('public agent Connections page', () => {
     m.bridge.initData = 'SYNTHETIC_OTHER_PERSON'; act(() => frames.at(-1)!(0)); expect(screen.queryByText('OLD_PRIVATE_CANARY')).not.toBeInTheDocument();
     view.rerender(<AgentConnectionsApp agentId="beta" />); expect(screen.queryByText('OLD_PRIVATE_CANARY')).not.toBeInTheDocument(); expect(m.factory).toHaveBeenLastCalledWith('beta', 'SYNTHETIC_OTHER_PERSON', expect.any(Function));
   });
-  it('clears all account and access state when an independent resources request loses authority', async () => {
-    m.api.read.mockResolvedValue(dashboard('RESOURCE_PRIVATE_CANARY'));
-    m.api.resources.mockRejectedValue(new ApiError(403, 'agent_unavailable'));
-    render(<AgentConnectionsApp agentId="alpha" />); fireEvent.click(await screen.findByRole('button', { name: 'Choose access' }));
+  it('clears the account view when the dashboard loses authority', async () => {
+    m.api.read.mockResolvedValueOnce(dashboard('RESOURCE_PRIVATE_CANARY')).mockRejectedValue(new ApiError(403, 'agent_unavailable'));
+    render(<AgentConnectionsApp agentId="alpha" />); await screen.findByText('RESOURCE_PRIVATE_CANARY');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Space' }), { target: { value: 'work' } });
     await screen.findByRole('alert'); expect(screen.queryByText('RESOURCE_PRIVATE_CANARY')).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Your connections' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Allow selected access' })).not.toBeInTheDocument();
   });
   it('supports Persian RTL and native focusable controls without changing authority', async () => {
     m.bridge.initDataUnsafe.user.language_code = 'fa'; render(<AgentConnectionsApp agentId="alpha" />);
     await screen.findByRole('heading', { name: 'اتصال‌ها' }); expect(screen.getByRole('main')).toHaveAttribute('dir', 'rtl');
     const language = screen.getByRole('combobox', { name: 'زبان' }); language.focus(); expect(language).toHaveFocus();
-    expect(await screen.findByRole('button', { name: 'ادامه', exact: true })).toBeDisabled(); expect(m.api.grant).not.toHaveBeenCalled();
+    expect(await screen.findByText('اتصال‌ها را در وکس مدیریت کنید. این صفحه فقط آن‌ها را نشان می‌دهد.')).toBeInTheDocument(); expect(m.api.grant).not.toHaveBeenCalled();
   });
 });

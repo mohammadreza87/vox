@@ -20,6 +20,7 @@ import type {LLMRequest} from '../../tireh/llm';
 import {handleConversationRequest} from '../conversation';
 import {handlePetRequest} from '../pet-http';
 import {signInitData} from '../auth';
+import {agentInit} from './initdata-keys';
 import {personId} from '../org-bridge';
 
 const NOW = T0.getTime(), TOKEN = '123:synthetic-manager', ORIGIN = 'https://vox.example', REPLY = 'Sure.';
@@ -57,7 +58,7 @@ async function fixture() {
     headers: {origin: ORIGIN, 'content-type': 'application/json', 'x-telegram-init-data': signInitData({id: ID.alice, first_name: 'Alice'}, TOKEN)},
     body: JSON.stringify({agentId: agent.id, space: 'work', text})}), TOKEN);
   const petText = (text: string) => handlePetRequest(h.studio, new Request(`${ORIGIN}/api/studio/pet/${agent.id}/talk`, {method: 'POST',
-    headers: {origin: ORIGIN, 'content-type': 'application/json', 'x-pet-tz': 'UTC', 'x-telegram-init-data': signInitData({id: ID.alice, first_name: 'Alice'}, token)},
+    headers: {origin: ORIGIN, 'content-type': 'application/json', 'x-pet-tz': 'UTC', 'x-telegram-init-data': agentInit({id: ID.alice, first_name: 'Alice'}, token)},
     body: JSON.stringify({text})}), agent.id, ['talk']);
   const voice = () => h.studio.callTurn(users.alice, agent.id, new ArrayBuffer(3), 'audio/webm');
   /** Commits `action` once, either before the reply's provider call or after it returns. */

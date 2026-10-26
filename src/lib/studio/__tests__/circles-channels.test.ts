@@ -14,7 +14,7 @@ import { ChannelDrafts, channelCode, channelLink, clip, draftKey, DRAFT_TTL_MS, 
 import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
 import { parseStartPayload } from '../../circles/codec';
 import { AGENT_UPDATES, handleAgentUpdate } from '../updates';
-import { signInitData } from '../auth';
+import { agentInit } from './initdata-keys';
 import { handleStudioRequest } from '../http';
 import { hire, ID, makeStudio, SECRET, seedOrg, type Harness } from './helpers';
 
@@ -575,7 +575,7 @@ describe('wire formats', () => {
 describe('Studio routes', () => {
   const BOT_TOKEN = '555:voxx-test-token';
   const call = async (h: Harness, method: string, path: string, as: number, body?: unknown) => {
-    const headers: Record<string, string> = { 'x-telegram-init-data': signInitData({ id: as, first_name: 'U' }, BOT_TOKEN) };
+    const headers: Record<string, string> = { 'x-telegram-init-data': agentInit({ id: as, first_name: 'U' }, BOT_TOKEN) };
     if (body !== undefined) headers['content-type'] = 'application/json';
     const res = await handleStudioRequest(h.studio, new Request(`http://localhost/api/studio/${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }), path.split('/'), { botToken: BOT_TOKEN, devUser: null });
     return { status: res.status, json: await res.json() as Record<string, unknown> };

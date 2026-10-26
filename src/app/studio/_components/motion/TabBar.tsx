@@ -4,6 +4,7 @@ import { motion, type TargetAndTransition } from 'framer-motion';
 import { forwardRef } from 'react';
 import { barVariants, SPRING, type NavCtx } from '../../_lib/motion';
 import { Icon } from '../ui';
+import { useFrozenExit } from './useFrozenExit';
 
 export interface TabItem<R extends string = string> { route: R; label: string; icon: string }
 
@@ -20,8 +21,10 @@ export const TabBar = forwardRef<HTMLElement, {
   label?: string;
   onSelect(route: string): void;
 }>(function TabBar({ tabs, current, disabled, ctx, label = 'Main', onSelect }, ref) {
+  // Leaves the way the navigation that hid it says, even if another one lands mid-exit (useFrozenExit)
+  const exit = useFrozenExit(barVariants, ctx);
   return (
-    <motion.nav ref={ref} className="vx-tabbar" aria-label={label} custom={ctx} variants={barVariants} initial="initial" animate="enter" exit="exit"
+    <motion.nav ref={ref} className="vx-tabbar" aria-label={label} custom={ctx} variants={barVariants} initial="initial" animate="enter" exit={exit}
       style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
       {tabs.map((t) => {
         const active = current === t.route;

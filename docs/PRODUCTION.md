@@ -255,6 +255,76 @@ Mac Studio host. See [connections/ACCOUNT_ONBOARDING.md](connections/ACCOUNT_ONB
 `src/lib/env.ts` validates only the legacy web-app variables and is not used by
 Studio, which reads its `STUDIO_*` and `VOXX_*` variables in `src/lib/studio/runtime.ts`.
 
+### Agent bot tokens are not Vox's alone
+
+Every agent bot is a Telegram managed bot owned by its creator, who can read its
+token in BotFather at any time. So initData signed with an agent's token proves
+nothing by its HMAC alone, and a token holder can redirect the bot's updates.
+The agent-signed trust hotfix (branch `fix/agent-signed-trust`) does four things:
+
+- **Telegram's Ed25519 `signature` is required** on every agent-signed request
+  (the pet page, the pet launch lookup, the agent connect page), checked with
+  Telegram's published production key and the bot's id, on top of the HMAC
+  (`src/lib/studio/auth.ts`, `initdata-trust.ts`). Manager-signed (VoxxBot)
+  initData keeps HMAC-only authority; a signature it carries must verify.
+- **Erase, export and notes moved to VoxxBot.** The pet's export and forget now
+  answer `410 moved_to_vox`; its notes answer `403 circle_use_vox` unless the
+  launch is VoxxBot-signed. They live on **My data** (`/studio/my-data`,
+  `/api/studio/my-data`), which accepts only VoxxBot-signed initData and works
+  for members, pending people and outsiders without creating a member. The pet's
+  ⋯ → Settings opens `t.me/<VoxxBot>?startapp=mydata` (or `?start=mydata`, which
+  the manager answers with a My data button before any member is created).
+- **The agent connect page is a read-only dashboard.** Identity confirmation,
+  enrollment, setup, grants, tasks, MCP, revoke, resources and action review
+  answer 404 on `/api/agents/:id/connections/*`; the middleware admits only the
+  dashboard GET.
+- **Redirected updates are detected, never acted on.** Each poll loop watches for
+  a foreign webhook or a competing poller (getUpdates conflicts) and a rejected
+  token. After 60 s it probes `getWebhookInfo` at most once a minute and raises
+  `webhook_foreign`, `poll_conflict` or `token_rejected`: a content-free
+  `bot_integrity` log line, an `agent.integrity` audit row and a VoxxBot DM (EN
+  and FA) to each superadmin, at most once per bot and reason every 6 hours.
+  Nothing is deleted, re-pointed or stopped. Conflicts retry every 15 s.
+
+Operator steps for this release:
+
+1. Optional but recommended: in BotFather set VoxxBot's Main Mini App to
+   `STUDIO_WEBAPP_URL`, then set `STUDIO_MAIN_APP_BOT=<VoxxBot username>` so the
+   pet's Settings opens My data directly. Without it the `?start=mydata` fallback
+   works through the VoxxBot chat.
+2. Release through the normal procedure, then smoke test on iOS, Android,
+   Desktop and Web: open a pet from the agent's menu and DM button, care and
+   talk; check `server.log` shows `initdata_signature` outcome `valid` and no
+   `missing`; open Settings → My data, export, erase one note and (test account)
+   Forget everything; the connect page shows only the list and a POST returns 404.
+3. Watch for 24 h: `initdata_signature` `missing`/`invalid` lines, pet 401 rates
+   and `bot_integrity` alerts. A pet 401 `session_expired` is not an attack: a
+   genuine pet left open over an hour tried to talk or choose, and was asked to
+   reopen (the pet keeps running).
+
+On a `bot_integrity` alert: check the named agent and its creator. Vox changed
+nothing. While a competing poller holds the token, Vox keeps retrying every 3 s
+(slowing down would hand it more messages); only once a probe has seen a webhook
+does it retry every 15 s. A service restart takes polling back (each loop deletes the webhook once
+at start); a creator who keeps a webhook or poller running is a policy matter
+(fire the agent). Never start a second poller to diagnose.
+
+Kill switches (a service restart applies them, no rebuild):
+
+| Variable | Effect |
+|---|---|
+| `STUDIO_INITDATA_SIGNATURE=shadow` | Lets pet view, care and the launch lookup run on agent-signed initData **without** a signature (a client that sends none). Never the circle view (it names the group and its joined members), talk, consent, notes, connections or My data, and never a forged signature. |
+| `STUDIO_PET_DISABLED=1` | Turns the whole pet surface off (existing). |
+| `STUDIO_BOT_INTEGRITY_ALERTS=off` | Silences the superadmin DMs only; the log line and audit row stay. |
+
+There is deliberately no switch that brings back agent-signed erase or export.
+A creator can still harvest genuine agent-signed initData by repointing their
+bot's menu: that reaches pet view, care and talk (talk and consent only within
+an hour of opening) and the read-only connect list, never erase, export, notes,
+identity confirmation, grants or tasks. Reading past bot messages by message id,
+and redirecting updates, cannot be prevented, only detected (the latter). The
+Firebase webhook profile has no integrity probe yet.
+
 Telegram Web framing is allowed only from `https://web.telegram.org`. Calls still
 require microphone permission and delegation by the Telegram client. See
 [Telegram clients](https://telegram.org/apps),
