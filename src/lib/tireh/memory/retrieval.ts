@@ -14,6 +14,7 @@ import { createHash } from 'crypto';
 import type { ChatContext, MemoryRecord } from '../types';
 import type { OrgDirectory } from '../org/directory';
 import { tirehFlags } from '../flags';
+import { foldPersian } from '../text/persian';
 import { audienceOf, hasGuestAudience, isMemoryAllowedInChat, scopeKey } from './visibility';
 import { contentHash, memoryV2 } from './record-v2';
 import { cosine } from './embeddings';
@@ -101,16 +102,8 @@ function selectMemoriesV1(
 // v2: Persian-aware tokenisation
 // ============================================
 
-const ARABIC_LETTER_MAP: Readonly<Record<string, string>> = {
-  'ي': 'ی', 'ى': 'ی', 'ئ': 'ی',
-  'ك': 'ک',
-  'ة': 'ه',
-  'أ': 'ا', 'إ': 'ا', 'ٱ': 'ا', 'آ': 'ا',
-  'ؤ': 'و',
-};
-const ARABIC_LETTERS = /[يىئكةأإٱآؤ]/g;
-// Combining marks (harakat, hamza above U+0654), tatweel, ZWJ, LRM, RLM, BOM. ZWNJ is handled separately.
-const REMOVED = /[\p{M}ـ‍‎‏﻿]/gu;
+// The shared fold (text/persian.ts), lowercased: NFKC, Arabic letter variants, marks, tatweel, ZWJ, LRM, RLM, BOM,
+// digits. ZWNJ is kept for the affix handling below.
 const ZWNJ = '‌';
 const ZWNJ_PREFIX = /^(ن?می)‌/;
 const ZWNJ_SUFFIX = /‌(هایشان|هایمان|هایتان|هایی|های|ها|ترین|تر|ام|ات|اش|ای|اند)$/;
@@ -118,13 +111,7 @@ const ARABIC_SCRIPT = /\p{Script=Arabic}/u;
 const DIGITS = /^\p{N}+$/u;
 
 function normalizeText(text: string): string {
-  return text
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(ARABIC_LETTERS, (c) => ARABIC_LETTER_MAP[c] ?? c)
-    .replace(REMOVED, '')
-    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
-    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+  return foldPersian(text, { lowercase: true });
 }
 
 const EN_STOP = new Set([

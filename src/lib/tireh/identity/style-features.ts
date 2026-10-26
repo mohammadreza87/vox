@@ -12,6 +12,7 @@
  * Pure, synchronous and side-effect free; never throws on hostile Unicode.
  */
 import { z } from 'zod';
+import { isArabicScriptLetter } from '../text/persian';
 import type { StyleFeatures } from './types';
 
 export interface StyleObservationInput {
@@ -68,7 +69,6 @@ export const FINGLISH_LEXICON: ReadonlySet<string> = new Set([
 const DIGIT_AS_LETTER = /^[a-z]*[a-z][2378][a-z]+$/i;
 const WORD = /[\p{L}\p{M}\p{N}‌]+/gu;
 const LETTER = /\p{L}/u;
-const ARABIC = /\p{Script=Arabic}/u;
 const LATIN = /\p{Script=Latin}/u;
 const UPPER = /\p{Lu}/u;
 const DIGIT = /\p{Nd}/u;
@@ -199,9 +199,38 @@ function safeText(value: unknown): string {
   return text;
 }
 
-/** Content-free features of one message. Never throws; never returns or retains text. */
+/**
+ * The zero feature set of a modality: what a hostile input (for example a
+ * throwing getter) yields. Every count is 0, every ratio null, burstIndex 1
+ * and hourBucket 0; it passes styleFeaturesSchema.
+ */
+export function zeroStyleFeatures(kind: 'text' | 'voice'): StyleFeatures {
+  return {
+    version: 1, kind, lengthBucket: 0, wordBucket: 0,
+    persianScriptRatio: null, latinScriptRatio: null, finglishRatio: null, zwnjPerWord: null,
+    persianDigitShare: null, arabicVariantShare: null, latinUpperShare: null,
+    punctuationPer100: null, persianQuestionShare: null,
+    repeatedPunctuation: false, endsWithPunctuation: false, emojiCount: 0, emoticonCount: 0,
+    burstIndex: 1, edited: false, hourBucket: 0, voiceDurationBucket: null,
+  };
+}
+
+/**
+ * Content-free features of one message. Never throws: a throwing input getter
+ * (or any other failure) gives the zero feature set of the modality, as main's
+ * library did. Never returns or retains text.
+ */
 export function extractStyleFeatures(input: StyleObservationInput): StyleFeatures {
-  const kind: 'text' | 'voice' = input?.kind === 'voice' ? 'voice' : 'text';
+  let kind: 'text' | 'voice' = 'text';
+  try {
+    kind = input?.kind === 'voice' ? 'voice' : 'text';
+    return extractFor(input, kind);
+  } catch {
+    return zeroStyleFeatures(kind);
+  }
+}
+
+function extractFor(input: StyleObservationInput, kind: 'text' | 'voice'): StyleFeatures {
   const edited = input?.edited === true;
   const burstIndex = burstOf(input?.burstIndex);
   const hourBucket = hourBucketOf(input?.at, input?.utcOffsetMinutes);
@@ -232,7 +261,7 @@ export function extractStyleFeatures(input: StyleObservationInput): StyleFeature
     else if (code === 0x06cc || code === 0x06a9) variantBase++;
     if (LETTER.test(cp)) {
       letters++;
-      if (ARABIC.test(cp)) arabicLetters++;
+      if (isArabicScriptLetter(cp)) arabicLetters++;
       else if (LATIN.test(cp)) {
         latinLetters++;
         if (UPPER.test(cp)) latinUpper++;
@@ -250,7 +279,7 @@ export function extractStyleFeatures(input: StyleObservationInput): StyleFeature
     for (const cp of Array.from(word)) {
       if (LETTER.test(cp)) {
         wordLetters++;
-        if (ARABIC.test(cp)) wordArabic++;
+        if (isArabicScriptLetter(cp)) wordArabic++;
         else if (LATIN.test(cp)) wordLatin++;
       } else if (DIGIT.test(cp)) wordDigits++;
     }
