@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
 import type { RelationshipKey } from '../../relationships';
 import type { RelationshipPermit } from '../../adaptive/relationships/contracts';
@@ -14,6 +14,8 @@ const keyFor = (account = 300, space: 'work' | 'personal' = 'personal', agent = 
   scope: { schemaVersion: 1, accountId: `telegram-account:${account}`, personId: `person-${account}`, bindingId: `binding-${account}`, tenantId: `tenant-${account}`, space, spaceId: `${space}-${account}`, containerId: `container-${space}-${account}` } });
 const dirs: string[] = [];
 const globals = globalThis as unknown as { __voxStudio?: unknown };
+// F051: v1-pinned runtime wiring; the S09 flags would swap in the OpenAI SDK decider under jsdom.
+beforeEach(() => { vi.stubEnv('STUDIO_DECIDER', ''); vi.stubEnv('TRIAGE_QUESTION_SET', ''); });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.clearAllMocks(); delete globals.__voxStudio; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function configure(overrides: NodeJS.ProcessEnv = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'vox-scoped-runtime-')); dirs.push(dir);

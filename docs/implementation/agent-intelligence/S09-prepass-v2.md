@@ -57,3 +57,59 @@ Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df`.
 - v2-live thresholds (0.6, 0.5) are uncalibrated; v2-live waits for 200 EN + 200 FA labelled examples per question.
 - One row per triaged message, including group observe turns; `routeTaken` is the route a reply would take. The file log is single-process.
 - Calibration joins labels by store-generated row id: labels must come from a separately consented or synthetic evaluation run.
+
+## Hardening on main (H3, 26 Oct 2026)
+
+Changes after the merge onto main (`agent-intelligence-wave-a-main`), each behind the S09 flags; with every flag unset
+nothing here runs and `DecisionService` is main's.
+
+- **flags.ts hash (F248 part).** `flags.ts` changed again: `voiceShadow` is now `voiceRecognition &&
+  STUDIO_VOICE_SHADOW`, the header names the three recorded flags-unset exceptions (openai request headers, legacy
+  Telegram payments (a), the memory-request negation rule (i)) and says that erasure and retention sweeps run whatever
+  the flags are, and `vectorRetrieval` is documented as library only. The pins in `llm-blocks.test.ts` and
+  `llm-blocks.main-lineage.test.ts` move from `e398a121…ffd09` to `7adeaa35…06740`. The Files table above still quotes
+  `6b8edcd4…6630`, the contract this step was built against.
+- **`structuralTimeouts(provider)`** (`adaptive/decisions/index.ts`, F030 and duplicates). Rethrows a provider-side
+  timeout (constructor name `APIConnectionTimeoutError`, name `TimeoutError`, code `ETIMEDOUT` or `UND_ERR_*TIMEOUT`, a
+  "timed out" message) as an Error named `APIConnectionTimeoutError` with no provider message, forwards
+  `committedExportFence`, and passes every other error through by identity. No `instanceof`. The Step 9 runtime block
+  wraps the triage provider in it, so decision-log rows record provider timeouts as `timeout`. `DecisionService` itself
+  is unchanged, because it is also main's flags-unset `STUDIO_DECISIONS_ENABLED` path; a test pins that the bare service
+  still reports `provider_error`.
+- **Deadline (F177).** The runtime builds `new ServiceDecider(service, { deadlineMs: TRIAGE_TIMEOUT_MS, ... })`, main's
+  2 s cap, so a caller that passes a larger `timeoutMs` (skills route, sandbox checks) is capped again.
+- **Hashed `safety_identifier` (F070, F121).** `DeciderAuthority.subject?` (a person id the caller may name),
+  `ServiceDeciderOptions.safetyIdentifier?: (subject) => string | undefined`, `DecisionContext.safetyIdentifier?` and
+  `DecisionProviderOptions.safetyIdentifier?`. The runtime builds the mapping only under `STUDIO_DECIDER=service` and
+  only from `DECISIONS_SAFETY_ID_SALT` (at least 32 characters, not equal to `STUDIO_SECRET`): `'vox_' +
+  sha256(\`${salt}:${subject}\`).hex.slice(0, 32)`. The provider adds `safety_identifier` to the body only when one is
+  given and it matches `^[A-Za-z0-9_-]{1,64}$`; `requestSchema` is unchanged. Without a salt, or without a subject, the
+  body is byte-identical. The gateway does not name a subject yet (H2 wires it). That `/v1/decisions` accepts
+  `safety_identifier` is unverified: confirm it against the Decisions OpenAPI spec before setting the salt.
+- **Readiness** (`tireh/decisions/readiness.ts`, section 4.8's pre-production gates). `decisionsReadiness(env)` returns
+  content-free codes: `zdr_unconfirmed` (`DECISIONS_ZDR_APPROVED` is not `1`), `eu_endpoint_unconfirmed`
+  (`DECISIONS_EU_ENDPOINT_CONFIRMED` is not `1`), `safety_identifier_salt_missing`, and `safety_identifier_salt_invalid`
+  (a salt that is too short or equals `STUDIO_SECRET`, which is then ignored). The runtime logs
+  `[vox] decisions_readiness:<code>` for each, only when `STUDIO_DECIDER=service`. These variables are deployment
+  attestations and a secret, not feature flags, so they are read from `env` and not through `tirehFlags()`.
+- **Images without image triage (F130).** With `STUDIO_IMAGES=1` and no service decider (unset `STUDIO_DECIDER`, or no
+  `OPENAI_API_KEY`, or no base decider) the runtime logs `[vox] images_without_image_triage` once: every image turn then
+  has triage null and fails closed.
+- **v2-live group and confidential rule (F233).** Under `TRIAGE_QUESTION_SET=v2-live` the correction adjustment
+  (`memorable: true`) applies only when `askAddressed` is false, the new optional `readTriage(..., group)` argument is
+  not set, and `confidential` and `personal_life` are absent or below `V2_LIVE_SENSITIVE_PROBABILITY` (0.5). The
+  smalltalk effort adjustment is unchanged. An addressed group message has `askAddressed` false, so the gateway should
+  pass `chat.kind === 'group'` as `group` (gateway is H2's).
+- **Catalogue lint terms (F029).** `CATALOGUE_LINT_EXTENDED` adds anger, angry, upset, sad(ness), happy, happiness,
+  anxi\*, frustrat\*, sentiment\*, sick\*, illness, wellbeing, well-being, burnout, morale, productiv\*, mental\*,
+  depress\*, motivat\*, temper\*, "tone of the person/sender", and the Persian stems احساس, عاطف, روحیه, حال روحی,
+  استرس, اضطراب, نگران, عصبان, ناراحت, غمگین, افسرد, سلامت, بیمار, عملکرد, بهره‌وری, شخصیت, نگرش, خلق (Arabic yeh and a
+  ZWNJ or space accepted). `lintQuestions` checks it after `CATALOGUE_LINT`, which stays the contract regex byte for
+  byte. `confiden*` is not added: it would match the `confidential` question, which is about the message. The real
+  catalogue (v1 for every persona shape, the skill question, v2 and the image questions) passes with the same four
+  allowances.
+- **Catalogue-derived types (F259).** `TRIAGE_V2_ROUTES`, `TRIAGE_V2_CONTEXT_NEEDS`, `TRIAGE_V2_THREAD_STATUSES` and
+  `TRIAGE_V2_STYLE_REQUESTS` (`as const`) feed `CATALOGUE_CHOICE_VALUES`, the v2 question choices (bytes unchanged) and
+  the `TriageV2` field types.
+- **Question count (F037).** `MAX_DECISION_QUESTIONS` (24) is within the vendor's 200 (section 2.1), and every v2 list is
+  at most 7 + 7 = 14 questions; a test pins both. No split is needed.

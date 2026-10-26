@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { withAuth } from '@/lib/middleware/withAuth';
-import { TELEGRAM_PAYMENT_CURRENCY, TELEGRAM_PRICES, type TelegramPriceId } from '@/lib/telegram/prices';
+import { TELEGRAM_PAYMENT_CURRENCY, TELEGRAM_PRICES, isTelegramPriceId } from '@/lib/telegram/prices';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_PAYMENT_TOKEN = process.env.TELEGRAM_PAYMENT_TOKEN;
-
-const PRICES = TELEGRAM_PRICES;
-type PriceId = TelegramPriceId;
 
 /**
  * POST /api/telegram/payments
@@ -40,7 +37,8 @@ export const POST = withAuth(async (request) => {
       );
     }
 
-    if (!priceId || !PRICES[priceId as PriceId]) {
+    // An own-property check: 'constructor' or 'toString' must not reach the price lookup (F180).
+    if (!isTelegramPriceId(priceId)) {
       return NextResponse.json(
         { error: 'Invalid price ID' },
         { status: 400 }
@@ -54,7 +52,7 @@ export const POST = withAuth(async (request) => {
       );
     }
 
-    const price = PRICES[priceId as PriceId];
+    const price = TELEGRAM_PRICES[priceId];
 
     // Create invoice link using Telegram Bot API
     const invoiceResponse = await fetch(

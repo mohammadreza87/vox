@@ -3,11 +3,13 @@
  * agent → runtime persona with a skill set → triage with the `skill`
  * question → the reply prompt in routed or unrouted mode.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeLLM } from '../../tireh/__tests__/fixtures';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { NO_SKILL, SANDBOX_SKILL_TIMEOUT_MS, SKILL_QUESTION } from '../../tireh/skill-routing';
 import { MAX_TRIAGE_QUESTIONS, type DecisionAnswer, type DecisionQuestion } from '../../tireh/triage';
+import { MAX_DECISION_QUESTIONS } from '../../adaptive/decisions';
+import { V2_QUESTION_NAMES } from '../../tireh/decisions/catalog';
 import { personId } from '../org-bridge';
 import { renderSkill } from '../skills/render';
 import { FIXTURE_MODULES, fixtureCatalog, fixtureSkill } from '../skills/__tests__/fixtures';
@@ -31,10 +33,15 @@ let org: Awaited<ReturnType<typeof seedOrg>>;
 let updateId = 1;
 
 beforeEach(async () => {
+  // F052: the assertions below pin the v1 question set and the base decider; the v2 arm opts in itself.
+  vi.stubEnv('STUDIO_DECIDER', '');
+  vi.stubEnv('TRIAGE_QUESTION_SET', '');
   h = makeStudio();
   org = await seedOrg(h);
   h.studio.deps.catalog = catalog;
 });
+
+afterEach(() => { vi.unstubAllEnvs(); });
 
 const dm = (from: number, text: string): TelegramUpdate => ({
   update_id: updateId++,
@@ -258,6 +265,21 @@ describe('groups', () => {
     await handleAgentUpdate(h.studio, agent.id, inGroup(ID.alice, 'Bob, lunch?'));
     expect(decide).toHaveBeenCalledTimes(2);
     expect(decide.mock.calls[1][1].map((q) => q.name)).not.toContain(SKILL_QUESTION);
+  });
+});
+
+describe('TRIAGE_QUESTION_SET=v2 (F052)', () => {
+  it('keeps the v1 prefix unchanged, appends the v2 questions and stays within MAX_DECISION_QUESTIONS', async () => {
+    const { agent } = await growthAgent({ participation: 'active', remember: true });
+    const decide = decider(answers(pick('ua.creative-testing'), { addressed: { type: 'predicate', probability: 0.95 }, proactive: { type: 'predicate', probability: 0.1 } }));
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2');
+    await handleAgentUpdate(h.studio, agent.id, inGroup(ID.bob, 'Can someone tell me which ads to scale?'));
+    const names = decide.mock.calls[0][1].map((q) => q.name);
+    const v1 = ['effort', 'live_info', 'memorable', 'wants_voice', 'addressed', 'proactive', SKILL_QUESTION];
+    expect(names.slice(0, v1.length)).toEqual(v1);
+    expect(names.slice(v1.length)).toEqual([...V2_QUESTION_NAMES]);
+    expect(names.length).toBeLessThanOrEqual(MAX_DECISION_QUESTIONS);
+    expect(skillQuestionOf(decide)?.type).toBe('choice');
   });
 });
 

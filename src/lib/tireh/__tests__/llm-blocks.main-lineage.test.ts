@@ -101,6 +101,29 @@ describe('array system', () => {
     expect(systemText(blocks)).toBe('A identity\n\nB org\n\nC frame\n\nD unmarked');
   });
 
+  it('drops empty-text blocks and keeps only type and ttl in cache_control (F145: not an identity function)', async () => {
+    const extra = { type: 'ephemeral', ttl: '1h', scope: 'global', debug: 'PRIVATE_CANARY' } as unknown as SystemBlock['cache_control'];
+    const noisy: SystemBlock[] = [
+      { type: 'text', text: 'A identity', cache_control: extra },
+      { type: 'text', text: '', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      { type: 'text', text: 'B org', cache_control: { type: 'ephemeral', ttl: undefined } },
+      { type: 'text', text: 'C plain' },
+    ];
+    const expected = [
+      { type: 'text', text: 'A identity', cache_control: { type: 'ephemeral', ttl: '1h' } },
+      { type: 'text', text: 'B org', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'C plain' },
+    ];
+    expect(anthropicSystem(noisy)).toEqual(expected);
+    const sent = anthropicSystem(noisy) as unknown as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(3);
+    expect(Object.keys(sent[0].cache_control as object).sort()).toEqual(['ttl', 'type']);
+    expect(Object.keys(sent[1].cache_control as object)).toEqual(['type']);
+    await haiku().complete({ system: noisy, messages: [userTurn('hi')] });
+    expect(lastBody().system).toEqual(expected);
+    expect(JSON.stringify(lastBody().system)).not.toContain('PRIVATE_CANARY');
+  });
+
   it.each([['claude-haiku-5-5', true], ['claude-sonnet-5-5', true], ['claude-haiku-4-5', false]])('effort low for %s serializes as output_config: %s', async (model, sent) => {
     await new AnthropicLLM('fixture-key', model).complete({ system: blocks, messages: [userTurn('hi')], effort: 'low' });
     if (sent) expect(lastBody().output_config).toEqual({ effort: 'low' });
@@ -284,7 +307,7 @@ describe('content-free response metadata', () => {
 
 describe('shared contract files', () => {
   it.each([
-    ['flags.ts', 'e398a12197110ffe8c1965ddf89b95e87d898cab0c2561a9cd93dc660d3ffd09'],
+    ['flags.ts', '7adeaa35129d3ac610ef67940eff790b49417206ee4ccff3f7b88cc5db806740'],
     ['llm-content.ts', '4c83fe241a05bca3e61a0d2f4470398ccd07d0e20a22527f1537cdd3e548e663'],
   ])('%s is byte-identical to the contract', (file, sha) => {
     expect(createHash('sha256').update(readFileSync(join(__dirname, '..', file))).digest('hex')).toBe(sha);
