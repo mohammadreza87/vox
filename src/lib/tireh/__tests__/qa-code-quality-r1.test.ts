@@ -1,19 +1,20 @@
 /**
- * QA round 1, lens code-quality (wave A on main). Known gaps pinned as
- * `it.fails`: each case asserts the intended behaviour and is expected to fail
- * until the fix lands; when a fix lands, vitest reports the case as passing
- * unexpectedly, and `it.fails` must then become `it`.
+ * QA round 1, lens code-quality (wave A on main). Both gaps this file pinned
+ * were fixed in fixer round 1; every case is a plain `it` that asserts the
+ * fixed behaviour and fails if the fix is reverted.
  *
  *  - CQ1 (fixed, fixer r1): main's S12 lineage treated "never" and "keep" as
  *    negations (images/policy.ts NEGATED_REMEMBER); wave A's IMAGE_NO_MEMORY
- *    dropped them. Both now read memory/requests.ts NEGATED_MEMORY_REQUEST.
+ *    dropped them. Image retention and the gateway now call
+ *    memory/requests.ts negatedMemoryRequest / explicitMemoryRequest.
  *  - CQ2 (fixed, fixer r1): main's S12 lineage bounded each image download
  *    with AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS = 5000); wave A's
  *    ingestTelegramImage passed no signal. It now passes one again.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { explicitRememberRequest, ingestTelegramImage, suppressImageMemory, type ImageIngestDeps, type ImageTriage } from '../images';
+import { ingestTelegramImage, suppressImageMemory, type ImageIngestDeps, type ImageTriage } from '../images';
+import { explicitMemoryRequest } from '../memory/requests';
 import type { TelegramBotClient } from '../telegram/client';
 import type { ChatContext } from '../types';
 import { TG, testOrg } from './fixtures';
@@ -30,13 +31,13 @@ afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('CQ1: a negated caption is never an explicit remember request', () => {
   it('control: an explicit request and an explicit "don\'t save" still classify as before', () => {
-    expect(explicitRememberRequest('please remember this')).toBe(true);
-    expect(explicitRememberRequest("don't save this")).toBe(false);
+    expect(explicitMemoryRequest('please remember this')).toBe(true);
+    expect(explicitMemoryRequest("don't save this")).toBe(false);
   });
 
   for (const caption of ["don't keep this", 'never save this', 'dont save this', "please don't ever save this"]) {
     it(`"${caption}" is not an explicit remember request and suppresses image memory`, () => {
-      expect(explicitRememberRequest(caption)).toBe(false);
+      expect(explicitMemoryRequest(caption)).toBe(false);
       expect(suppressImageMemory(explainTriage, caption)).toBe(true);
     });
   }
