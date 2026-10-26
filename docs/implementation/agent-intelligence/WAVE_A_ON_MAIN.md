@@ -345,6 +345,20 @@ about 5), so the load-timeout set is smaller than in the cluster runs.
 Every row is at its recorded result or better. Passes are higher because the clusters added 38 `hardening-*` test
 files and extended existing suites.
 
+**After the hardening round 1 fixer (`024564b`, section 10).** The rows for the touched areas (memory requests, image
+language, audit and notice erasure), rerun with every other flag unset: `STUDIO_IMAGES=1` 2547/2547;
+`TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` 11 failed / 1671 passed (the same `guest-rights-http` 10 and
+`prepared-conversation-qualification` 1); `STUDIO_DECIDER=service TRIAGE_QUESTION_SET=v2 TIREH_DECISION_LOG=1`
+2592/2592; `TIREH_CACHED_PROMPT=1 src/lib/tireh` 2478/2478; every flag on, `src/lib/tireh`, 2478/2478; privacy gates
+695/695 flags unset (33 files) and 181/181 under the S08 flags. `npx tsc --noEmit -p tsconfig.json` and
+`tsconfig.test.json`: exit 0. Full `npx vitest run`, flags unset: 12 failed files, 93 failed tests, 8278 passed,
+14 skipped, 56 unhandled errors (listen EPERM), all environmental: the mkdtemp and listen EPERM files listed above
+(`self-service` 37, `guest-rights` 20, `guest-rights-http` 10, `foundation-broker-error-http` 10, `local-provider` 7,
+`rights-intake/storage` 2, `reminders` 2, `foundation-broker`, `integration-broker`, `tls`, `rollback` 1 each) and
+`prepared-conversation-qualification` 1 (load timeout). A first full run under heavier load also timed out
+`longterm-simulation`, `observation/service`, `voice-identity/service`, `simulation-gateway` and `group-runtime`
+(one case each); all six files pass alone (83/83).
+
 ## 7. Open issues
 
 1. **Commit trailer (product decision (o)).** The computed tasks ask for `Co-Authored-By: Claude Fable 5.1`; the
@@ -411,7 +425,8 @@ files and extended existing suites.
    closed for triage (F062: needs a re-encoding seam). A Mini App image turn has no image triage, so with the flag on
    it is always suppressed and its reply withheld from history. A Telegram image needs the person's
    `single_party_image` capability, so where no approval for it exists `STUDIO_IMAGES=1` answers captions only. Memory
-   requests are regex rules over raw and folded text: they lean towards refusal. With Circles on and
+   requests are regex rules over raw and folded text: they lean towards refusal, and a secrecy, style or format
+   phrase ("keep this between us", "keep it brief", "save it as text") is not a request (hardening round 1 fixer). With Circles on and
    `STUDIO_IMAGES=1`, "remember this" on any of the agent's own messages asks the person to type what to keep (no
    content-free mark records which bot messages came from an image). Inherited image marks have no hop limit
    (product decision (l)). With the flag on, every progressive JPEG goes through the new multi-scan validator (Mini
@@ -649,6 +664,36 @@ with `voiceRecognition` (a behaviour change of an existing field; `flags.ts` sha
   `requests.ts` call-site TODO and the `wireSharingAudit` comment are current; S12 spec row updated.
 - The commit that adds this section: this record, the S03 and S06 `flags.ts` hash notes, and the stale integrator
   TODO removed from `flags.test.ts`.
+
+### Hardening round 1 fixer (2026-10-26)
+
+The hardening round 1 QA ran on the merged tree (`00844d7` red-team guards, `f155d83` image-triage subject and
+folded-refusal pins) and left three medium findings open. All three were code defects with a local fix; none needed a
+product decision. Each commit has a test that fails without it (checked by reverting the source files).
+
+- `7404e01` **Secrecy, style and format captions no longer open image memory.** `MEMORY_REQUEST` read "Keep this
+  between us", "keep it private", "keep it confidential", "Explain this photo, keep it brief", "can you save it as
+  text?" and "این رو پیش خودت نگهش دار" as explicit requests, so a non-sensitive image turn's reply became a durable
+  memory. `explicitMemoryRequest` now also needs no secrecy signal (`secrecyRequest`, raw and folded: between us, to
+  yourself, private, secret, confidential, off the record, پیش خودت, بین خودمون/خودمان, محرمانه, خصوصی as a whole word,
+  به کسی نگو) and no style, format or secrecy qualifier after the verb. `suppressImageMemory` treats a secrecy signal
+  like a refusal, ahead of the decider's `remember` task. Only S12 retention reads these (flags-unset behaviour
+  unchanged; decision (i) is not widened). Tests: `redteam-wave-a-harden-r1.test.ts` (the six reported phrases and
+  more, positive controls, and the gateway repro with a canary).
+- `e799397` **Notice erasure is awaited to the end.** H1's 2 s bound also cut off `notices.deleteByMemoryIds` on
+  delete: a forget closure above about 25 ids logged `notice_erasure_failed` with nothing failed and left the erasure
+  running detached. The audit decorator and `noticeErasingMemoryStore` now await the erasure fully and log only a
+  rejection; `FirestoreSupersededNoticeStore.deleteByMemoryIds` runs `in` queries of at most 30 ids per field in
+  parallel and counts a notice once; a large closure's delete rows are appended in parallel (one timeout, not one per
+  200 ids). Audit appends and notice records keep the 2 s bound. Tests: `hardening-audit-signals.test.ts` (slow
+  erasure, parallel rows) and `audit-store.test.ts` (chunked `in` queries; the fake now models `in` and its 30-value
+  limit). `024564b` teaches the same `in` filter to the Firestore fake in `qa-tests-types-r3-main.test.ts`.
+- `10b711c` **Code-switched Persian captions and replies get the Persian texts.** `imageTurnLanguage` keeps a clearly
+  Persian or English caption as it is; a code-switched ('mixed') or letterless caption follows the Telegram
+  `language_code`, then the script with more letters (ties Persian). `textLanguage(text, turnLanguage?)` does the same
+  for the delivered reply and prefers Persian when the turn was; the gateway passes the turn's language on the
+  withheld-reply path (inside the `STUDIO_IMAGES` image branch only). `scriptLetterCounts` is exported from
+  `decisions/language.ts`; `scriptLanguage` is unchanged. Tests: `hardening-images-persian.test.ts`.
 
 ### Left open by the clusters
 
