@@ -17,6 +17,7 @@ import {
   privateVoice,
   TG,
 } from './fixtures';
+import { systemText } from '../llm-content';
 
 function extraction(...memories: Array<Record<string, unknown>>) {
   return { memories };
@@ -411,7 +412,7 @@ describe('resilience', () => {
 
     const original = llm.complete.bind(llm);
     llm.complete = async (req) => {
-      if (req.system.startsWith('You extract')) throw new Error('model down');
+      if (systemText(req.system).startsWith('You extract')) throw new Error('model down');
       return original(req);
     };
     expect(await gateway.handleUpdate('aria', privateText(TG.reza, 'hi again'))).toBe('replied');
@@ -520,7 +521,7 @@ describe('privacy mutation fences', () => {
     const generated = new Promise<string>((resolve) => { finish = resolve; });
     const original = llm.complete.bind(llm);
     llm.complete = async (request) => {
-      if (request.system.startsWith('You extract')) return original(request);
+      if (systemText(request.system).startsWith('You extract')) return original(request);
       started(); return generated;
     };
     const running = gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, can you remind me?') : privateText(TG.reza, 'Can you remind me?'));
@@ -529,7 +530,7 @@ describe('privacy mutation fences', () => {
     finish('REVOKED_OUTPUT_CANARY');
     await running;
     expect(bot.sent.some((m) => m.text?.includes('REVOKED_OUTPUT_CANARY'))).toBe(false);
-    expect(await history.recent('aria', 'private-reza', 10)).toEqual([]);
+    expect(await history.recent('aria', kind === 'group' ? 'group-gameend-team' : 'private-reza', 10)).toEqual([]);
   });
 
   it.each(['private', 'group'])('does not retain %s extraction that finishes after authorized forgetting', async (kind) => {
@@ -540,7 +541,7 @@ describe('privacy mutation fences', () => {
     const extracted = new Promise<string>((resolve) => { finish = resolve; });
     const original = llm.complete.bind(llm);
     llm.complete = async (request) => {
-      if (!request.system.startsWith('You extract')) return original(request);
+      if (!systemText(request.system).startsWith('You extract')) return original(request);
       started(); return extracted;
     };
     const running = gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, remember my appointment on Friday') : privateText(TG.reza, 'Remember my appointment on Friday'));

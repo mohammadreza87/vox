@@ -11,6 +11,8 @@
 import { readdirSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
+import type { LLMMessage, LLMRequest } from '../../tireh/llm';
+import { systemText } from '../../tireh/llm-content';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { memory } from '../../tireh/__tests__/fixtures';
 import { personId } from '../org-bridge';
@@ -22,6 +24,18 @@ let updateId = 920_000;
 function files(dir: string): string[] {
   return (readdirSync(dir, { recursive: true, withFileTypes: true }) as Array<{ isFile(): boolean; name: string; parentPath: string }>)
     .filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name).slice(dir.length)).sort();
+}
+/**
+ * Each reply request's messages as the conversation sent them: the server's
+ * per-turn block (trailingText under TIREH_CACHED_PROMPT=1) left out. It is
+ * still checked through replyPrompts and the JSON of the whole request.
+ */
+function sentMessages(requests: LLMRequest[]): LLMMessage[][] {
+  return requests.map((request) => request.messages.map((message) => {
+    const copy = { ...message };
+    delete copy.trailingText;
+    return copy;
+  }));
 }
 function callbacks(options: unknown): string[] {
   return ((options as { keyboard?: { inline_keyboard: Array<Array<{ callback_data?: string }>> } } | undefined)?.keyboard?.inline_keyboard ?? [])
@@ -58,7 +72,7 @@ describe('a Studio text turn with the adaptive service wired (production default
     expect(bot().sendMessage).toHaveBeenCalledTimes(2);
     // Loads: only the current message reaches the model; neither the seeded
     // turn nor the previous turn of this conversation is replayed.
-    expect(h.chatLLM.replyRequests.map((request) => request.messages)).toEqual([
+    expect(sentMessages(h.chatLLM.replyRequests)).toEqual([
       [{ role: 'user', content: 'First turn: I prefer short standups.' }],
       [{ role: 'user', content: 'Second turn: what do I prefer?' }],
     ]);
@@ -83,7 +97,7 @@ describe('a Studio text turn with the adaptive service wired (production default
     const chat = h.chatLLM;
     const decisions: string[] = [];
     h.studio.deps.chatLLM = { complete: async (request) => {
-      if (!request.system.includes('Decide, in character')) return chat.complete(request);
+      if (!systemText(request.system).includes('Decide, in character')) return chat.complete(request);
       decisions.push('reply');
       return JSON.stringify({ action: 'reply' });
     } };
@@ -135,14 +149,14 @@ describe('a Studio text turn with the adaptive service wired (production default
     expect((await h.studio.deps.choices!.listForUser(ID.stranger)).map((r) => r.join)).toEqual([expect.objectContaining({ choice: 'reply_only', telegramId: ID.stranger })]);
 
     const chat = h.chatLLM;
-    h.studio.deps.chatLLM = { complete: async (request) => request.system.includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : chat.complete(request) };
+    h.studio.deps.chatLLM = { complete: async (request) => systemText(request.system).includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : chat.complete(request) };
     const append = vi.spyOn(h.memory.history, 'append');
     const listActive = vi.spyOn(h.memory.memories, 'listActive');
     h.chatLLM.nextExtraction = { memories: [{ content: 'Stranger likes puzzles', type: 'preference', kind: 'work' }] };
     bot().sendMessage.mockClear();
     await handleAgentUpdate(h.studio, agent.id, dm(ID.stranger, 'Hello, what do you work on?'));
     expect(bot().sendMessage).toHaveBeenCalledWith(ID.stranger, 'Sure.', expect.anything());
-    expect(chat.replyRequests.map((request) => request.messages)).toEqual([[{ role: 'user', content: 'Hello, what do you work on?' }]]);
+    expect(sentMessages(chat.replyRequests)).toEqual([[{ role: 'user', content: 'Hello, what do you work on?' }]]);
     const [prompt] = chat.replyPrompts;
     expect(prompt).not.toContain('SEEDED_MEMORY_CANARY');
     expect(prompt).not.toContain('## Organization');

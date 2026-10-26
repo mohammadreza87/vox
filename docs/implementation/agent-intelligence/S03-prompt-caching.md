@@ -28,6 +28,7 @@ Nothing is unshifted as a first user message any more.
 ## Files
 
 - `src/lib/tireh/flags.ts`, `src/lib/tireh/llm-content.ts`: shared contract files, byte-identical (sha256 `6b8edcd4…` and `4c83fe24…`).
+  - Note for `flags.ts`: changed on `agent-intelligence-wave-a-main` by `97bf549` and `ebc18d9` (`voiceShadow`, `webhookFailClosed`), so it is now `e398a121…d09`; the pins live in `llm-blocks.test.ts` and `llm-blocks.main-lineage.test.ts`. `6b8edcd4…` stays the contract this step was built against. `llm-content.ts` is unchanged.
 - `src/lib/tireh/llm.ts`:
   - `LLMRequest.system: LLMSystem`, plus `systemTail` and `onMeta`. `LLMMessage extends LLMMessageExtras`.
   - `normalizeTurns` keeps a user turn that only has trailing text, concatenates user `trailingText` on merge and keeps the last `cacheControl`.
@@ -37,8 +38,9 @@ Nothing is unshifted as a first user message any more.
   - `AnthropicLLM` reports content-free `onMeta` once per response: from `complete`, from `stream` at the end, and from `completeWithWeb` for the final response.
   - `GeminiLLM` changes only the `systemInstruction` line and the outgoing text line.
 - `src/lib/tireh/conversation/prompt.ts`:
-  - `buildSystemPrompt` and all existing functions are untouched.
+  - S03 itself left `buildSystemPrompt` and all existing functions untouched (H7 below moved their sections into shared renderers, output unchanged).
   - Additive: `MIN_CACHE_BLOCK_TOKENS`, `MAX_PROMPT_MEMORY_CHARS`, `PromptHooks`, `PromptLayout`, `padToCacheFloor`, `personaBlock`, `orgSnapshotBlock`, `buildPromptLayout` and `placeTurn`.
+  - Hardening H7 (QA F088, F126, F139), on `agent-intelligence-wave-a-main`: both builders render every section through one set of pure renderers (`conversationView`, `conversationSection`, `personalConversationSection`, `guestSection`, `relationsSection`, `organizationSection`, `liveInfoSection`, `voiceSection`, `capabilitiesSection`, `replyFormatLine`, `contextMemoriesFor`, `memorySection`, `conflictsSection`). `buildSystemPrompt` joins them in the legacy order; `buildPromptLayout` spreads them over A, B, C and the per-turn block, so the privacy-bearing wording (guest rules, the hasGuests description, the every-reader memory filter, group-only memories, the group source-name redaction) exists once. Every legacy string and layout is byte-identical; no snapshot was regenerated. `clipMemory` keeps the `MAX_PROMPT_MEMORY_CHARS` code-point budget and cuts at a grapheme boundary (`Intl.Segmenter('fa', { granularity: 'grapheme' })`, feature-detected, code-point fallback); memories of at most 210 code points are unchanged.
 - `src/lib/tireh/gateway.ts`: the prompt import line, the flags import, the two prompt-assembly regions of `composeReply` and `liveTurn`, and one `...promptExtras` in the `composeReply` request. `boundary()`, `unchanged()`, the liveTurn recheck/stream loop, `handleMessage`, `triage()`, `transcribe()` and `extractMemories` are unchanged.
 - `src/lib/tireh/__tests__/fixtures.ts`: `FakeLLM.complete` only.
 - `src/lib/relationships/simulation/gateway-session.ts`, `src/lib/studio/scoped-relationship-drain.ts`: `systemText(request.system)`.
@@ -52,16 +54,22 @@ Nothing is unshifted as a first user message any more.
   - Block A/B stability, the cache floor, `cache_control` values and volatile-content exclusion.
   - Section parity and privacy parity, including an every-scope memory matrix.
   - Memory clipping, `placeTurn`, and flag independence.
+- `conversation/__tests__/prompt-layout-turn-context.test.ts` (`07dfb73`, on `agent-intelligence-wave-a-main`): blocks A/B/C and their hashes are byte-identical with and without `962e877`'s turn-context lines (what the turn can see, a quoted reply, the register) for private Work, private Personal and group chats; those lines appear only in the per-turn block.
+- `conversation/__tests__/hardening-prompt-sections.test.ts` (H7): each shared section renderer's output appears verbatim in both builders for a private, a group and a guest chat; a 300-grapheme Persian memory with ZWNJ and a combining mark is clipped without splitting a cluster; any memory of at most 210 code points is byte-identical to before.
 - `cached-prompt-gateway.test.ts`: FakeLLM gateway behaviour under the flag.
 - `cached-prompt-wire.test.ts`: real `AnthropicLLM` bodies. Nothing volatile appears before the last breakpoint, there are at most 4 markers, and 1 h markers come before 5 m ones.
-- `cached-prompt-ports.test.ts`: flag-on copies of the 10 existing tests that cannot run unmodified. They pass under both arms.
+- `cached-prompt-ports.test.ts`: flag-on copies of the 10 existing tests that could not run unmodified. They pass under both arms. Since H7 the originals run under the flag too (next section); the duplicate ports stay until a later cleanup retires them.
 - `cached-prompt-suite-*.test.ts`: 11 wrappers that re-run existing suites with the flag.
 - `cached-prompt-gateway-suite.test.ts` and `cached-prompt-gateway-suite-tail.test.ts` (main's lineage, kept on `agent-intelligence-wave-a-main`): re-run the whole of `gateway.test.ts` under `TIREH_CACHED_PROMPT=1`, with `TIREH_PROMPT_SYSTEM_TAIL` off and on (52 cases each), through a scoped `Array.prototype.startsWith` shim.
 - `prompt-layout.main-lineage.test.ts`, `cached-prompt-gateway.main-lineage.test.ts` and `llm-blocks.main-lineage.test.ts` (merge onto `agent-intelligence-wave-a-main`): the cases of main's earlier S03 lineage that pass against this layout. The cases not kept are listed in `WAVE_A_MAIN_INTEGRATION.md`.
 
 ## Expected flag-on failures in unmodified suites
 
-`TIREH_CACHED_PROMPT=1 npx vitest run src/lib/tireh` fails exactly 10 base tests. In each, the test's own fake calls `request.system.startsWith`, reads saved context at `messages[0]`, or compares the newest message exactly. Each one has a passing port.
+None since H7 (QA F142, F190, F002, F018, F111, F074, F101). The record below is historical.
+
+`TIREH_CACHED_PROMPT=1 npx vitest run src/lib/tireh` failed exactly 10 base tests. In each, the test's own fake called `request.system.startsWith`, read saved context at `messages[0]`, or compared the newest message exactly. Each one has a passing port. Under the same flag `src/lib/studio` failed five more for the same reasons: service 'in a group with unknown readers only the current exchange reaches the model', voice-call 'answers each turn in character…', visibility 'agents search by default…' and production-turn's two reply cases.
+
+H7 changed only how those tests read the request: their fakes read `systemText(request.system)`; where the assertion is about model-visible text they read the system text, the messages, their `trailingText` and the `systemTail`; exact message comparisons leave out the server's per-turn `trailingText` block. The expected values did not change. All of them now pass with the flag unset, with `TIREH_CACHED_PROMPT=1`, and with `TIREH_PROMPT_SYSTEM_TAIL=1` added. The group arm of the gateway history-reset fence now checks the group chat key (`group-gameend-team`, QA F008).
 
 | Suite | Tests |
 |---|---|
@@ -78,6 +86,10 @@ The spec's 8 or 9 omitted the voice-delivery caption test. That test compares th
 - **Personal turn.** It carries no reply-format line, matching the base: the base personal prompt never had one.
 - **`placeTurn` with no messages.** It pushes an empty-content user turn that carries the block. Callers never hit this.
 - **Flag-off golden rebased onto main (merge onto `agent-intelligence-wave-a-main`).** Main's 962e877 (group agents) changed the legacy prompt after base 6d00b80, so `cached-prompt-flag-off.base.json` was regenerated the same way against a `git archive` export of origin/main `7224f40d69cf816a49139a30092cbf92551d2a8e`. The merged tree reproduces main's flag-off bytes; the prompt-layout block A snapshot gained only 962e877's "Always answer in words" rules line.
+- **No `count_tokens` check (section 4.7: block A "padded to >=512 tokens and asserted with count_tokens").** Padding uses `approxTokens` (chars / 3.5). If a model's real count for block A is below its minimum cacheable length (Sonnet, Opus and Fable floors may exceed Haiku's 512; Persian-heavy personas tokenize differently), block A silently does not cache. Follow-up: a one-off `count_tokens` check per reply model (a script is enough) that asserts block A reaches the model's minimum. Owner: S03 follow-up before the staging gate.
+- **Block B is keyed by a content hash, not the studio state revision (section 4.7).** `orgSnapshotBlock` returns `shortHash(text)`; any org edit that changes the rendered section changes the key, and edits that do not change it keep the cache. Follow-up: decide whether the revision key is still wanted once the hash churn is measured. Owner: S03 follow-up before the staging gate.
+- **No audience-only org block above about 30 people (section 4.7).** Block B lists every non-guest member at any org size, exactly as the legacy `## Organization` section does. Follow-up: behind `TIREH_CACHED_PROMPT`, fall back to the audience (or omit B) above about 30 people. Owner: S03 follow-up before the staging gate.
+- **No cache monitoring or pre-warm yet (section 4.7).** `PromptLayout.hashes` and `onMeta` are not consumed, so nothing alerts when `cache_read_input_tokens` stays under 70% or when the A or B hashes change unexpectedly, and nothing pre-warms after persona or org edits. Follow-up: record the hashes and the cache-read ratio in the content-free stage timings, then build the alert. Owner: S03 follow-up before the staging gate.
 - **The flag-off golden is not the branch's first commit.** The earlier engineer's `cached-prompt-baseline` golden is that first commit. The spec-named `cached-prompt-flag-off.base.json` was generated by running the same test file against an export of the base. Both are single-add files.
 
 ## Risks

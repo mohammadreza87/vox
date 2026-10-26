@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PersonaGateway, type GatewayDeps } from '../gateway';
+import { systemText } from '../llm-content';
 import { InMemoryUpdateDeduper } from '../memory/store';
 import type { TelegramBotClient } from '../telegram/client';
 import { fakeVoice, groupText, LEADS_CHAT, makeGateway, privateText, privateVoice, TG } from './fixtures';
@@ -26,7 +27,7 @@ describe('real persona gateway diagnostic boundaries', () => {
     const h = setup();
     const original = h.llm.complete.bind(h.llm);
     vi.spyOn(h.llm, 'complete').mockImplementation(async (request) => {
-      const extracting = request.system.startsWith('You extract long-term memories');
+      const extracting = systemText(request.system).startsWith('You extract long-term memories');
       if ((stage === 'extraction') === extracting) throw telegramCanaryError();
       return original(request);
     });

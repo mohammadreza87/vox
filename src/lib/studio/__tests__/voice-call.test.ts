@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { personId } from '../org-bridge';
-import { voiceAgentBody } from '../media';
+import type { LLMMessage, LLMRequest } from '../../tireh/llm';
+import { systemText } from '../../tireh/llm-content';
+import { voiceAgentBody, type VoiceAgentConfig } from '../media';
 import { callToken, handleVoiceLlm, readCallToken, toTurns, voiceLlmKey } from '../voice-call';
 import { hire, ID, makeStudio, SECRET, seedOrg, T0, type Harness } from './helpers';
 import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
@@ -25,6 +27,28 @@ async function legacyHarness() {
 function llmRequest(body: unknown, key = voiceLlmKey(SECRET)) {
   return new Request('https://vox.example/api/studio/voice-llm/v1/chat/completions', {
     method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Everything the model reads in one request: the system prompt (a string, or the
+ * cached blocks under TIREH_CACHED_PROMPT=1), the messages, their trailing per-turn
+ * text and the system tail.
+ */
+function modelText(request: LLMRequest): string {
+  return [
+    systemText(request.system),
+    ...request.messages.flatMap((m) => [m.content, ...(m.trailingText ?? [])]),
+    ...(request.systemTail ? [request.systemTail] : []),
+  ].join('\n');
+}
+
+/** The messages as the conversation sent them: the server's per-turn block (trailingText under TIREH_CACHED_PROMPT=1) left out. */
+function withoutTurnBlocks(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map((message) => {
+    const copy = { ...message };
+    delete copy.trailingText;
+    return copy;
   });
 }
 
@@ -66,7 +90,7 @@ describe('live calls', () => {
     const call = await h.studio.startLiveCall(org.bob, agent.id);
     expect(call).toMatchObject({ live: true, signedUrl: expect.stringContaining('wss://'), voiceId: defaultVoice(agent), firstMessage: "Hey Bob, it's Nova." });
     expect(h.eleven.createSecret).toHaveBeenCalledWith(expect.stringMatching(/^vox-studio-llm-/), voiceLlmKey(SECRET));
-    const config = h.eleven.createAgent.mock.calls[0][0];
+    const config = (h.eleven.createAgent.mock.calls as unknown as Array<[VoiceAgentConfig]>)[0][0];
     expect(config).toMatchObject({ llmUrl: 'https://vox.example/api/studio/voice-llm', llmSecretId: 'secret-1' });
     expect(voiceAgentBody(config).platform_settings.overrides).toMatchObject({ custom_llm_extra_body: true });
     expect(h.eleven.signedUrl).toHaveBeenCalledWith('agent-xi-1');
@@ -95,7 +119,7 @@ describe('live calls', () => {
     let attempt = 0;
     const voice = {
       complete: vi.fn(),
-      stream: vi.fn(async function* () {
+      stream: vi.fn<(request: LLMRequest) => AsyncIterable<string>>(async function* () {
         if (attempt++ === 0) throw new Error('overloaded');
         yield 'Launch is '; yield 'on track.';
       }),
@@ -113,10 +137,10 @@ describe('live calls', () => {
     expect(response.headers.get('content-type')).toBe('text/event-stream');
     expect(await sse(response)).toEqual({ text: 'Launch is on track.', done: true });
     const request = voice.stream.mock.calls[1][0];
-    expect(request.system).toContain('## Live voice call');
-    expect(request.system).not.toContain('## Live information');
+    expect(systemText(request.system)).toContain('## Live voice call');
+    expect(modelText(request)).not.toContain('## Live information');
     // Platform-supplied assistant history cannot reintroduce revoked context.
-    expect(request.messages).toEqual(turns.filter((turn) => turn.role === 'user'));
+    expect(withoutTurnBlocks(request.messages)).toEqual(turns.filter((turn) => turn.role === 'user'));
 
     const history = await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 5);
     expect(history.map((m) => [m.role, m.text])).toEqual([['user', 'How is the launch?'], ['assistant', 'Launch is on track.']]);

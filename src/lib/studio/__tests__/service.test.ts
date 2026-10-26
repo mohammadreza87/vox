@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LLMMessage } from '../../tireh/llm';
 import type { MemoryRecord, MemoryScope } from '../../tireh/types';
 import { groupText } from '../../tireh/__tests__/fixtures';
 import { GROUND_COLOR, isCompatible } from '../character';
@@ -14,6 +15,20 @@ import { draftJson, fakeMember, hire, ID, makeStudio, personaSpec, SECRET, seedO
 type Org = Awaited<ReturnType<typeof seedOrg>>;
 
 const DAY = 86_400_000;
+
+/** The first argument of a harness mock's first call. The harness mocks are untyped `vi.fn()`s, so the caller names the type. */
+function firstArg<T>(fn: { mock: { calls: unknown[][] } }): T {
+  return fn.mock.calls[0]?.[0] as T;
+}
+
+/** The messages as the conversation sent them: the server's per-turn block (trailingText under TIREH_CACHED_PROMPT=1) left out. */
+function withoutTurnBlocks(messages: LLMMessage[] | undefined): LLMMessage[] | undefined {
+  return messages?.map((message) => {
+    const copy = { ...message };
+    delete copy.trailingText;
+    return copy;
+  });
+}
 
 async function expectStudioError(p: Promise<unknown>, status: number, message?: string | RegExp) {
   const error = await p.then(() => null, (e: unknown) => e);
@@ -517,10 +532,10 @@ describe('managed bot → hire', () => {
     const b = bot();
     expect(b.setMyName).toHaveBeenCalledWith('Leyla');
     expect(b.setMyShortDescription).toHaveBeenCalledWith('Producer at HOOR. Ships on time');
-    expect(b.setMyDescription.mock.calls[0][0]).toContain('Leyla works with a few people at HOOR.');
-    expect(b.setMyCommands.mock.calls[0][0].map((c: { command: string }) => c.command)).toEqual(['start', 'memories', 'forget', 'whoami']);
+    expect(firstArg<string>(b.setMyDescription)).toContain('Leyla works with a few people at HOOR.');
+    expect(firstArg<Array<{ command: string }>>(b.setMyCommands).map((c) => c.command)).toEqual(['start', 'memories', 'forget', 'whoami']);
     // No custom avatar: the cloud character is rendered as the photo.
-    const photo = String(b.setMyProfilePhoto.mock.calls[0][0]);
+    const photo = String(firstArg<unknown>(b.setMyProfilePhoto));
     expect(photo.startsWith('JPEG:<svg')).toBe(true);
     expect(h.manager.sendMessage).toHaveBeenCalledWith(ID.alice, expect.stringContaining('Leyla is alive: @hoor_leyla_bot'));
   });
@@ -531,7 +546,7 @@ describe('managed bot → hire', () => {
     const withAvatar = await h.studio.generateAvatars(org.alice, agent.id, 1);
     await h.studio.publish(org.alice, agent.id);
     await h.studio.onManagedBot({ user: { id: ID.alice, is_bot: false, first_name: 'A' }, bot: { id: 1, is_bot: true, first_name: 'N', username: 'hoor_nova_bot' } });
-    const photo = h.bots.get('token-1')!.setMyProfilePhoto.mock.calls[0][0] as unknown as Buffer;
+    const photo = firstArg<Buffer>(h.bots.get('token-1')!.setMyProfilePhoto);
     expect(photo.equals(readFileSync(join(h.store.mediaDir, withAvatar.look.avatar!)))).toBe(true);
   });
 
@@ -908,7 +923,7 @@ describe('groups', () => {
     const { gateway } = await h.studio.gateway();
     expect(await gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, what do we know?'))).toBe('replied');
     expect(h.chatLLM.lastPrompt).not.toContain('GROUPFACT');
-    expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Bob: Nova, what do we know?' }]);
+    expect(withoutTurnBlocks(h.chatLLM.replyRequests.at(-1)?.messages)).toEqual([{ role: 'user', content: 'Bob: Nova, what do we know?' }]);
     expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
 
     const roster = [ID.alice, ID.bob, botId];
