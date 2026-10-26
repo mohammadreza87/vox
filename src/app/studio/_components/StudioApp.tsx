@@ -570,6 +570,11 @@ const Page = forwardRef<HTMLDivElement, { ctx: NavCtx; layer: 'root' | 'page' | 
     const present = useIsPresent();
     const exit = useFrozenExit(screenVariants, ctx);
     const { context: presence, hung, release } = useExitWatch();
+    // Framer 12.43 remembers presence.initial=false on the visual element and
+    // suppresses its enter after a completed exit is reused. Keep first paint
+    // still with the node's own initial=false instead; descendants retain the
+    // original context so their initial animations and exit tracking are unchanged.
+    const pagePresence = useMemo(() => presence?.initial === false ? { ...presence, initial: undefined } : presence, [presence]);
     const el = useRef<HTMLDivElement>(null);
     useImperativeHandle(ref, () => el.current as HTMLDivElement);
     // The screen hosts its own sheets (ui.Sheet portals here), so nested sheets cover the screen.
@@ -620,12 +625,14 @@ const Page = forwardRef<HTMLDivElement, { ctx: NavCtx; layer: 'root' | 'page' | 
       return () => { clearTimeout(timer); cancelAnimationFrame(frame); off(); };
     }, [present, hung, release]);
     return (
-      <PresenceContext.Provider value={presence}>
+      <PresenceContext.Provider value={pagePresence}>
         <motion.div ref={attach} className="vx-screen" data-layer={layer} tabIndex={-1} custom={ctx} variants={screenVariants}
-          data-arrive={arrive.current} initial="initial" animate="enter" exit={exit} inert={!present} aria-hidden={present ? undefined : true}
+          data-arrive={arrive.current} initial={presence?.initial === false ? false : 'initial'} animate="enter" exit={exit} inert={!present} aria-hidden={present ? undefined : true}
           onAnimationComplete={(def) => { if (def === 'enter' && present && !heroArrival) onSettled(); }}
           onAnimationEnd={(e) => { if (e.target === el.current && e.animationName === 'vxArriveDone') arrived(); }}>
-          <SheetHostContext.Provider value={host}>{children}</SheetHostContext.Provider>
+          <PresenceContext.Provider value={presence}>
+            <SheetHostContext.Provider value={host}>{children}</SheetHostContext.Provider>
+          </PresenceContext.Provider>
         </motion.div>
       </PresenceContext.Provider>
     );

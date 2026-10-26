@@ -55,7 +55,7 @@ const KINDS: NavKind[] = ['push', 'pop', 'hero', 'hero-pop', 'cover', 'uncover',
 const GAPS = [60, 250, 420, 520, 650];
 
 describe('useFrozenExit', () => {
-  it('control: without it, a second navigation of another kind mid-exit leaves the first screen behind for good', async () => {
+  it('upstream control: exits finish without the hook when a second navigation changes kind', async () => {
     const same = render(<Stage frozen={false} />);
     await act(async () => go('push'));
     await wait(420);
@@ -69,7 +69,10 @@ describe('useFrozenExit', () => {
     await wait(420);
     await act(async () => go('cover'));
     await wait(2000);
-    expect(screens().length).toBeGreaterThan(1);   // if this starts passing with one screen, framer fixed it upstream
+    // Framer 12.43 no longer reprocesses an already-active exit. Keep a healthy
+    // upstream control alongside the frozen-target regression matrix below.
+    expect(screens()).toHaveLength(1);
+    expect(atRest(screens()[0])).toBe(true);
   });
 
   for (const first of KINDS) {
@@ -123,8 +126,8 @@ describe('useFrozenExit', () => {
       await wait(32);
       await act(async () => move('voice', -1));  // …and another move the other way while Brief still fades out
       await wait(1000);
-      // before: Brief's exit never ends and `mode="wait"` holds every later step back (a blank board)
-      if (frozen) expect(shown()).toEqual(['voice']); else expect(shown()).toEqual(['brief']);
+      // Both the upstream fix and our frozen target must let the latest step arrive.
+      expect(shown()).toEqual(['voice']);
       view.unmount();
     }
   });
