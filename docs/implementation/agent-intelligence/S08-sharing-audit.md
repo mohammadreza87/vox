@@ -77,14 +77,15 @@ sections above, it wins.
   as owner or recipient), plus `hasAny()`. `Studio.memoryNoticesFor` filters every listed notice by visibility before
   capping the output at 50, and reads each notice's old and replacement records concurrently, ten notices at a time (H6).
   `newMemoryId` is still returned when the replacement is not visible (product decision (e)).
-- **`wireSharingAudit()` (runtime.ts).** With a flag set it installs the auditing Proxies, wrapped as
-  `withAuditRetention(store, { onError })`. Whatever the flags are it keeps an erasure-only notice handle
-  (`Studio.forgetMemoryNotices` falls back to it; the rights-intake erasure in `rights-http.ts` calls
-  `eraseMemoryNotices`), installs the delete-only `noticeErasingMemoryStore` when notices are stored or the check fails,
-  and runs `startAuditRetentionSweep` now and then daily (unref'd). With the flags on it now also runs the startup sweep,
-  so `TIREH_SHARING_V2` alone, which appends nothing, still ages `vox_audit` rows out after 12 months (H1). This is the
-  **rollback sweep**: rows and notices written while a flag was on are still erased and aged out after the flag is unset.
-  Neither the handle nor the sweep creates a file or collection.
+- **`wireSharingAudit()` (runtime.ts).** Whatever the flags are it sets the erasure-only notice handle
+  (`studio.deps.noticeEraser`; `Studio.forgetMemoryNotices` falls back to it, and the rights-intake erasure in
+  `rights-http.ts` calls `eraseMemoryNotices`) and runs `startAuditRetentionSweep` now and then daily (unref'd), with
+  `onError`. With a flag set it installs the auditing Proxies over `withAuditRetention(store, { onError })`, whose deletes
+  also erase notices; running the startup sweep in this branch too is new (H1), so `TIREH_SHARING_V2` alone, which
+  appends nothing, still ages `vox_audit` rows out after 12 months. With both flags unset it installs the delete-only
+  `noticeErasingMemoryStore` when notices are stored or the existence check fails. This is the **rollback sweep**: rows
+  and notices written while a flag was on are still erased and aged out after the flag is unset. The flags-off path
+  creates no file or collection.
 - **Deletes.** `MemoryStore.delete` resolves to the ids it removed; a `delete` audit row lists every removed id of the
   forget closure, split into rows of `MAX_AUDIT_IDS` (200); a failed delete keeps the requested id (H1). Notice erasure
   follows the same closure.
