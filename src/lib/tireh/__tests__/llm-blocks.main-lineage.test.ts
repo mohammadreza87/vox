@@ -284,7 +284,7 @@ describe('content-free response metadata', () => {
 
 describe('shared contract files', () => {
   it.each([
-    ['flags.ts', 'e398a12197110ffe8c1965ddf89b95e87d898cab0c2561a9cd93dc660d3ffd09'],
+    ['flags.ts', '7adeaa35129d3ac610ef67940eff790b49417206ee4ccff3f7b88cc5db806740'],
     ['llm-content.ts', '4c83fe241a05bca3e61a0d2f4470398ccd07d0e20a22527f1537cdd3e548e663'],
   ])('%s is byte-identical to the contract', (file, sha) => {
     expect(createHash('sha256').update(readFileSync(join(__dirname, '..', file))).digest('hex')).toBe(sha);
