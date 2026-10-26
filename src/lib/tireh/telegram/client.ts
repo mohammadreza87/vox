@@ -96,6 +96,7 @@ const commandsTarget = (o: BotCommandsTarget) => ({ ...(o.scope ? { scope: o.sco
 type FetchFn = typeof fetch;
 
 const CONNECT_RETRY_DELAYS_MS = [250, 1000];
+const SNAPSHOT_DOCUMENT_FILENAME = /^vox-snapshot-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-(?:[0-9]|1[0-5]|manifest)\.json$/;
 
 function retryDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -219,7 +220,11 @@ export class TelegramBotClient {
   /** Immutable memory artifacts. Authority is checked again at the actual POST;
    * uncertain response failures are never automatically replayed. */
   sendDocument(chatId: number, bytes: Uint8Array, options: { filename: string; authorizeNow: () => boolean; signal?: AbortSignal }): Promise<TelegramMessage> {
-    if (bytes.byteLength > 128 * 1024 || !/^vox-(events|manifest)-[A-Za-z0-9-]+\.json$/.test(options.filename)) throw new Error('Invalid archive document');
+    // Snapshot operations use generated UUIDv4 IDs and at most sixteen chunks.
+    // Compare the full match so a trailing newline cannot pass the `$` anchor.
+    const snapshotMatch = SNAPSHOT_DOCUMENT_FILENAME.exec(options.filename);
+    const snapshotFilename = snapshotMatch !== null && snapshotMatch[0] === options.filename;
+    if (bytes.byteLength > 128 * 1024 || !(/^vox-(events|manifest)-[A-Za-z0-9-]+\.json$/.test(options.filename) || snapshotFilename)) throw new Error('Invalid archive document');
     const form = new FormData();
     form.append('chat_id', String(chatId));
     form.append('document', new Blob([new Uint8Array(bytes)], { type: 'application/json' }), options.filename);
