@@ -162,7 +162,8 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }
     }
     if (root === 'groups' && method === 'GET') return json({ groups: await studio.listGroups(me) });
-    if (root === 'groups' && id && action === 'resnapshot' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.resnapshotGroupMemory(me, Number(id), typeof b.telegramId === 'number' ? b.telegramId : NaN, b.apply === true)); }
+    if (root === 'groups' && id && action === 'resnapshot' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.resnapshotGroupMemory(me, Number(id), typeof b.telegramId === 'number' ? b.telegramId : NaN, b.apply === true, { detail: b.detail === true })); }
+    if (root === 'groups' && id && action === 'history-policy' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.setGroupHistoryPolicy(me, Number(id), b.policy)); }
     if (root === 'relationship-observations' && method === 'GET') return json(await studio.relationshipObservations(me));
     if (root === 'audit' && method === 'GET') return json({ audit: await studio.auditLog(me) });
     if (root === 'voices' && method === 'GET') {
