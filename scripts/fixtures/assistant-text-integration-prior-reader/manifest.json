@@ -1,0 +1,21 @@
+{
+  "base": "c42d65f33204378dd4d3e0d359ce3198950a93b7",
+  "purpose": "Independent unmodified actual installed c42 helper/runtime oracle. Synthetic tests only; not candidate code.",
+  "files": {
+    "studio-adaptive-compatibility.mjs": {
+      "source": "scripts/studio-adaptive-compatibility.mjs",
+      "sha256": "33a023c9aa630190abbbb1d76e63042cc4fe2548e2ded27559ae28a1232eb53e",
+      "bytes": 88802
+    },
+    "repository.ts.fixture": {
+      "source": "src/lib/adaptive/persistence/repository.ts",
+      "sha256": "a696a167d2528c88fff33d6bc782a09c99d4b094f2d9e04a13a4a850e9b07eb6",
+      "bytes": 24163
+    },
+    "assistant-delivery-control.ts.fixture": {
+      "source": "src/lib/adaptive/assistant-delivery-control.ts",
+      "sha256": "0fc3ef4f331d3d3a28057968d1c93e9f61036f7850915c00bc4d418e78ebc503",
+      "bytes": 14912
+    }
+  }
+}

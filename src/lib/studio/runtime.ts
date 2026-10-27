@@ -1,4 +1,5 @@
 import { StudioTelegramArchive } from './telegram-archive';
+import {StudioAssistantTextIntegration,parseAssistantTextKeys} from './assistant-text-integration';
 import { createStudioRequestedRoutines } from './requested-routines';
 import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
 import { lstatSync } from 'node:fs';
@@ -186,6 +187,10 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const storage = env.STUDIO_STORAGE?.trim() || 'file';
   if (storage !== 'file' && storage !== 'firestore') throw new Error('STUDIO_STORAGE must be file or firestore');
   const adaptiveFormat = parseAdaptiveStorageFormat(env.STUDIO_ADAPTIVE_FORMAT, storage, !(env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1' || env.STUDIO_PUBLIC_URL?.trim()));
+  if(env.STUDIO_ASSISTANT_TEXT_DELIVERY!==undefined&&!['','0','1'].includes(env.STUDIO_ASSISTANT_TEXT_DELIVERY))throw new Error('STUDIO_ASSISTANT_TEXT_DELIVERY must be 0 or 1');
+  const assistantTextEnabled=env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1';
+  const assistantTextKeys=parseAssistantTextKeys(env.STUDIO_ASSISTANT_TEXT_KEYS_JSON,Date.now());
+  if(assistantTextEnabled&&(storage!=='file'||adaptiveFormat!=='file'||env.STUDIO_BOTS!=='1'||env.STUDIO_PUBLIC_URL?.trim()||env.K_SERVICE||env.FUNCTION_TARGET||env.FUNCTION_NAME||env.VERCEL==='1'||!assistantTextKeys))throw new Error('Assistant text delivery requires keys and original FILE persistent singleton polling; production ownership qualification is separate');
   if (env.STUDIO_TELEGRAM_ARCHIVE !== undefined && !['', '0', '1'].includes(env.STUDIO_TELEGRAM_ARCHIVE)) throw new Error('STUDIO_TELEGRAM_ARCHIVE must be 0 or 1');
   if (env.STUDIO_TELEGRAM_ARCHIVE === '1' && (storage !== 'file' || adaptiveFormat !== 'file' || env.STUDIO_BOTS !== '1')) throw new Error('STUDIO_TELEGRAM_ARCHIVE=1 requires canonical FILE and persistent STUDIO_BOTS=1 polling');
   const mediaBucket = env.STUDIO_MEDIA_BUCKET?.trim() || env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET?.trim();
@@ -255,7 +260,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
     throw new Error('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1 and a configured manager bot');
   }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, requestedRoutinesEnabled, trustedImprovementKeys };
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, requestedRoutinesEnabled, trustedImprovementKeys,assistantTextEnabled,assistantTextKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -537,6 +542,11 @@ async function create(): Promise<Studio> {
     }
     // Keep protective clear/disable commands available when capture is switched off.
     if (config.storage === 'file' && config.adaptiveFormat === 'file') studio.deps.telegramArchive = new StudioTelegramArchive(studio, () => process.env.STUDIO_TELEGRAM_ARCHIVE === '1');
+    // Composed while off so retained enrollments cannot fall back to legacy and
+    // protective edits remain keyless. Never creates a marker/account on boot.
+    if(config.storage==='file'&&config.adaptiveFormat==='file')studio.deps.assistantText=new StudioAssistantTextIntegration(studio,{
+      enabled:()=>config.assistantTextEnabled&&env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1',keys:config.assistantTextKeys,
+    });
     studio.deps.maintenanceHealth = () => readMaintenanceHealth(storage.maintenanceStorage);
     if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
       storage.adaptive!.repository.storage, storage.maintenanceStorage, {

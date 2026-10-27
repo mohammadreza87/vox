@@ -403,3 +403,153 @@ describe('ARC1 independent actual FILE lifecycle and current-authority qualifica
     await expect(f.adapter.initialize(OWNER)).rejects.toThrow();
   });
 });
+
+// ATI1 protected v2 enrollment/CAS/lifecycle additions. Same actual FILE fixture;
+// no public enrollment flow, model request, transport or provider exists here.
+async function enrolledFixture() {
+  const f=await fixture(false),request={ownerId:OWNER,agentId:'qa-agent',botId:BOT,requestId:uuid(),expectedEnrollmentRevision:null,enabled:true} as const;
+  const enrollment=await f.adapter.setEnrollment(request);if(!enrollment)throw Error('QA expected explicit enrollment');
+  f.clock.now+=2000;return Object.assign(f,{request,enrollment});
+}
+
+describe('ATI1 independent ARC2 durable enrollment and control lifecycle',()=>{
+  it('status, edit invalidation and absent disable never initialize controls or markers',async()=>{
+    const f=await fixture(false),before=readFileSync(accountPath(f.directory));
+    expect(f.adapter.getEnrollment(OWNER,BOT)).toBeUndefined();
+    expect(f.adapter.preflightSource(OWNER,f.ingress()).controlsPresent).toBe(false);
+    await f.adapter.invalidateSource(OWNER,BOT,OWNER,1);
+    expect(await f.adapter.setEnrollment({ownerId:OWNER,agentId:'qa-agent',botId:BOT,requestId:uuid(),expectedEnrollmentRevision:null,enabled:false})).toBeUndefined();
+    expect(readFileSync(accountPath(f.directory))).toEqual(before);
+    expect(existsSync(join(f.directory,'assistant-delivery-control-v1.json'))).toBe(false);
+    expect(existsSync(join(f.directory,'assistant-delivery-control-v2.json'))).toBe(false);
+  });
+
+  it('explicit first enrollment persists both permanent strict markers and a fresh original-date barrier',async()=>{
+    const f=await enrolledFixture(),d=read(f.directory),c=d.assistantDeliveryControl!;
+    expect(c.version).toBe(2);expect(f.enrollment).toMatchObject({enabled:true,revision:1,space:'work',destinationChatId:OWNER});
+    expect(c.noReplayBefore).toBe(f.enrollment.enrolledAt);
+    for(const version of [1,2]){const path=join(f.directory,`assistant-delivery-control-v${version}.json`);
+      expect(readFileSync(path,'utf8')).toBe(`{"version":${version},"kind":"assistant-delivery-control"}\n`);expect(lstatSync(path).mode&0o777).toBe(0o600);}
+    expect(()=>f.prepare(f.ingress(1,BOT,Math.floor(f.enrollment.enrolledAt/1000)))).toThrow();
+    const c1=await f.claim();expect(c1.state.source.occurredAt).toBeGreaterThan(c.noReplayBefore);
+  });
+
+  it('enroll retry is exact/idempotent and delayed earlier enable cannot reverse a later disable',async()=>{
+    const f=await enrolledFixture(),before=readFileSync(accountPath(f.directory));
+    expect(await f.adapter.setEnrollment(f.request)).toEqual(f.enrollment);expect(readFileSync(accountPath(f.directory))).toEqual(before);
+    const disabled=await f.adapter.setEnrollment({...f.request,requestId:uuid(),expectedEnrollmentRevision:1,enabled:false});expect(disabled).toMatchObject({enabled:false,revision:2});
+    await expect(f.adapter.setEnrollment(f.request)).rejects.toMatchObject({code:'conflict'});
+    expect(f.adapter.getEnrollment(OWNER,BOT)).toEqual(disabled);
+    await expect(f.adapter.setEnrollment({...f.request,requestId:uuid(),expectedEnrollmentRevision:1})).rejects.toMatchObject({code:'conflict'});
+  });
+
+  it('system revocation invalidates stale idempotent enable and a positive grant cannot resume disabled enrollment',async()=>{
+    const f=await enrolledFixture(),view=await f.adaptive.read(OWNER,'work');
+    await f.adaptive.setAgentAccess(OWNER,'qa-agent',{space:'work',allowed:false,expectedRevision:view.revision,eventId:uuid()});
+    const disabled=f.adapter.getEnrollment(OWNER,BOT)!;expect(disabled.enabled).toBe(false);expect(disabled.revision).toBeGreaterThan(1);
+    await expect(f.adapter.setEnrollment(f.request)).rejects.toThrow();
+    const next=await f.adaptive.read(OWNER,'work');
+    await f.adaptive.setAgentAccess(OWNER,'qa-agent',{space:'work',allowed:true,expectedRevision:next.revision,eventId:uuid()});
+    expect(f.adapter.getEnrollment(OWNER,BOT)).toEqual(disabled);
+  });
+
+  it('correctMemory and its later shared enqueue both fence a pending claim while retaining enabled enrollment',async()=>{
+    const f=await enrolledFixture(),view=await f.adaptive.read(OWNER,'work');
+    await f.adaptive.createMemory(OWNER,{space:'work',text:'QA ordinary note before correction',expectedRevision:view.revision,eventId:uuid()});
+    const memory=read(f.directory).memories.find(m=>m.space==='work'&&m.status==='active')!;
+    const claim=await f.claim(),before=f.adapter.getEnrollment(OWNER,BOT)!;
+    await f.adaptive.correctMemory(OWNER,memory.id,{space:'work',text:'QA corrected ordinary note',expectedRevision:memory.revision,eventId:uuid()},{authorizeNow:()=>true});
+    expect(f.adapter.getEnrollment(OWNER,BOT)).toEqual(before);expect(f.row(claim.state.effectKey).contentEligible).toBe(false);
+    await expect(f.adapter.beginDispatch(claim.state,claim.prepared)).rejects.toThrow();
+    expect(read(f.directory).memories.find(m=>m.id===memory.id)?.text).toBe('QA corrected ordinary note');
+  });
+
+  it('actual memory forgetting disables enrollment and erases selected effect evidence without lowering floors',async()=>{
+    const f=await enrolledFixture(),view=await f.adaptive.read(OWNER,'work');
+    await f.adaptive.createMemory(OWNER,{space:'work',text:'QA note to forget',expectedRevision:view.revision,eventId:uuid()});
+    const memory=read(f.directory).memories.find(m=>m.space==='work'&&m.status==='active')!,claim=await f.claim(),before=read(f.directory).assistantDeliveryControl!;
+    await f.adaptive.deleteMemory(OWNER,memory.id,{space:'work',expectedRevision:memory.revision,eventId:uuid()});
+    const c=read(f.directory).assistantDeliveryControl!;expect(f.adapter.getEnrollment(OWNER,BOT)?.enabled).toBe(false);
+    expect(c.effects).toEqual([]);expect(c.noReplayBefore).toBeGreaterThanOrEqual(before.noReplayBefore);
+    expect(c.streams[0].messageFloor).toBeGreaterThanOrEqual(claim.state.source.messageId);
+    expect(()=>f.adapter.preflightSource(OWNER,claim.ingress)).toThrow();
+  });
+
+  it('ordinary Telegram source edit keeps enabled enrollment but invalidates every old claim',async()=>{
+    const f=await enrolledFixture(),claim=await f.claim(),before=f.adapter.getEnrollment(OWNER,BOT);
+    await f.adapter.invalidateSource(OWNER,BOT,OWNER,claim.state.source.messageId);
+    expect(f.adapter.getEnrollment(OWNER,BOT)).toEqual(before);expect(f.row().contentEligible).toBe(false);
+    expect(()=>f.adapter.preflightSource(OWNER,claim.ingress)).toThrow();
+  });
+
+  it('keyless disable works after purpose withdrawal and cannot recreate the old detailed effect',async()=>{
+    const f=await enrolledFixture(),claim=await f.claim();await f.withdraw();f.keyring.clear();
+    const current=f.adapter.getEnrollment(OWNER,BOT)!;
+    const disabled=await f.adapter.setEnrollment({...f.request,requestId:uuid(),expectedEnrollmentRevision:current.revision,enabled:false});
+    expect(disabled?.enabled).toBe(false);expect(read(f.directory).assistantDeliveryControl!.effects).toEqual([]);
+    expect(()=>f.adapter.preflightSource(OWNER,claim.ingress)).toThrow();
+  });
+
+  it('expired identity/core loss disables exactly once and ordinary identity renewal never reenrolls',async()=>{
+    const f=await enrolledFixture();
+    await f.adaptive.withAccountDocument(OWNER,d=>{d.binding!.expiresAt=f.clock.now-1;d.revision++;});
+    const disabled=f.adapter.getEnrollment(OWNER,BOT)!;expect(disabled.enabled).toBe(false);
+    await f.adaptive.read(OWNER,'work');expect(f.adapter.getEnrollment(OWNER,BOT)).toEqual(disabled);
+    await f.adaptive.confirm(OWNER,{confirm:true,adultConfirmed:true});expect(f.adapter.getEnrollment(OWNER,BOT)?.enabled).toBe(false);
+  });
+
+  it('result transaction stamps its own later time without disabling enrollment or inventing a new attempt',async()=>{
+    const f=await enrolledFixture(),claim=await f.claim(),sending=await f.adapter.beginDispatch(claim.state,claim.prepared),transport=f.transport(sending);
+    f.clock.now+=19;const sent=await f.adapter.recordResponse(sending,claim.prepared,transport,f.response(sending,claim.prepared));
+    expect(sent.phase).toBe('sent');expect(sent.outcome?.observedAt).toBe(f.clock.now);
+    expect(f.adapter.getEnrollment(OWNER,BOT)?.enabled).toBe(true);expect(sent.attemptId).toBe(sending.attemptId);
+  });
+
+  it('restart preserves scoped enrollment while abandoned sending becomes unknown and cannot resume',async()=>{
+    const f=await enrolledFixture(),claim=await f.claim(),sending=await f.adapter.beginDispatch(claim.state,claim.prepared),before=f.adapter.getEnrollment(OWNER,BOT);
+    f.restart();await f.adapter.recover(OWNER);expect(f.adapter.getEnrollment(OWNER,BOT)).toEqual(before);
+    expect(f.row().phase).toBe('unknown');expect(f.adapter.isDispatchCurrent(sending,claim.prepared)).toBe(false);
+    expect(()=>f.adapter.preflightSource(OWNER,{...claim.ingress,updateId:1})).toThrow();
+  });
+
+  it('four relationship-life enrollment rows refuse a fifth and disabled rows cannot be capacity evicted',async()=>{
+    const f=await fixture(false);
+    for(const binding of f.bindings.values())binding.scope.space='work';
+    for(let n=0;n<4;n++)await f.adapter.setEnrollment({ownerId:OWNER,agentId:'qa-agent',botId:BOT+n,requestId:uuid(),expectedEnrollmentRevision:null,enabled:true});
+    const first=f.adapter.getEnrollment(OWNER,BOT)!;
+    await f.adapter.setEnrollment({ownerId:OWNER,agentId:'qa-agent',botId:BOT,requestId:uuid(),expectedEnrollmentRevision:first.revision,enabled:false});
+    await expect(f.adapter.setEnrollment({ownerId:OWNER,agentId:'qa-agent',botId:BOT+4,requestId:uuid(),expectedEnrollmentRevision:null,enabled:true})).rejects.toMatchObject({code:'capacity'});
+    expect(f.adapter.getEnrollment(OWNER,BOT)?.enabled).toBe(false);
+  });
+
+  it('selected-space lifecycle export includes only the owner Work enrollment and no secret/content',async()=>{
+    const f=await enrolledFixture(),lifecycle=new AdaptiveLifecycleService(f.adaptive),work=await lifecycle.prepareAccountExport(OWNER,'work'),personal=await lifecycle.prepareAccountExport(OWNER,'personal');
+    const projection=JSON.stringify(work.data),other=JSON.stringify(personal.data);
+    expect(projection).toContain(f.request.requestId);expect(other).not.toContain(f.request.requestId);
+    for(const canary of [PRIVATE_GENERATED,PRIVATE_WIRE,Buffer.from(f.keyring.get('qa-key-v1')!).toString('hex')])expect(projection).not.toContain(canary);
+  });
+});
+
+
+describe('ATI1 protected generic-writer and exhaustion invariants',()=>{
+  it('a generic account writer cannot mint, remove, reroute or reenable an enrollment',async()=>{
+    const f=await enrolledFixture(),initial=f.adapter.getEnrollment(OWNER,BOT)!;
+    await f.adapter.setEnrollment({...f.request,requestId:uuid(),expectedEnrollmentRevision:initial.revision,enabled:false});
+    const before=readFileSync(accountPath(f.directory));
+    for(const mutate of [
+      (d:AdaptiveDocument)=>{if(d.assistantDeliveryControl?.version===2){d.assistantDeliveryControl.enrollments[0].enabled=true;d.assistantDeliveryControl.enrollments[0].revision++;}},
+      (d:AdaptiveDocument)=>{if(d.assistantDeliveryControl?.version===2)d.assistantDeliveryControl.enrollments=[];},
+      (d:AdaptiveDocument)=>{if(d.assistantDeliveryControl?.version===2)d.assistantDeliveryControl.enrollments[0].agentId='qa-other-agent';},
+    ]){
+      await expect(f.adaptive.withAccountDocument(OWNER,d=>{mutate(d);d.assistantDeliveryControl!.revision++;d.revision++;})).rejects.toThrow();
+      expect(readFileSync(accountPath(f.directory))).toEqual(before);
+    }
+  });
+
+  it('an exhausted enabled enrollment revision refuses preparation and is never reset',async()=>{
+    const f=await enrolledFixture(),d=read(f.directory);if(d.assistantDeliveryControl?.version!==2)throw Error('QA expected v2');
+    d.assistantDeliveryControl.enrollments[0].revision=Number.MAX_SAFE_INTEGER-64;
+    writeFileSync(accountPath(f.directory),JSON.stringify(d));
+    expect(()=>f.prepare()).toThrow();expect(read(f.directory).assistantDeliveryControl).toEqual(d.assistantDeliveryControl);
+  });
+});

@@ -1,0 +1,6 @@
+{
+  "sourceCommit": "ca41f0841c99a00ef769fdd227b33d4ba8736dee",
+  "sourcePath": "scripts/studio-adaptive-compatibility.mjs",
+  "sha256": "8cbdf815a4d1527fb105fc619132032c07117448b7b6012c3d2e91a223b6c6aa",
+  "provenance": "Verbatim actual merged ARC1 helper; no runtime git dependency or oracle edits."
+}

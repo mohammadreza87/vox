@@ -209,26 +209,29 @@ export class AdaptiveService {
           priorPermissions.get(p.id) !== p.revision) {
         voiceInvalidations.push({ telegramId, space: p.spaceId === spaceIdFor(d.accountId, 'work') ? 'work' : 'personal', reason: 'voice_consent_changed' });
       }
-      const enqueue = (space: SpaceKind, reason: string, agentId?: string, sourceIds?: string[]) => {
+      if(d.assistantDeliveryControl?.version===2&&d.assistantDeliveryControl.enrollments.some(r=>r.enabled)&&!this.isCoreAllowed(d,now)){
+        invalidateAssistantDeliveryScope(d,now);d.revision++;d.updatedAt=now;
+      }
+      const enqueue = (space: SpaceKind, reason: string, agentId?: string, sourceIds?: string[],disableEnrollment=true) => {
         for (const source of d.relationships.sources) if (source.key.scope.space === space && (!agentId || source.key.personaId === agentId) && (!sourceIds || sourceIds.includes(source.id))) {
           if (source.status !== 'deleted') { source.status = 'deleted'; source.revision++; }
         }
         for (const item of d.relationships.inbox) if (item.key.scope.space === space && (!agentId || item.key.personaId === agentId) && (!sourceIds || item.sourceIds.some(id => sourceIds.includes(id)))) {
           item.status = 'cancelled'; item.text = '';
         }
-        if(invalidateAssistantDeliveryScope(d,now,space,agentId)) { d.revision++; d.updatedAt=now; }
+        if(invalidateAssistantDeliveryScope(d,now,space,agentId,false,disableEnrollment)) { d.revision++; d.updatedAt=now; }
         invalidations.push({ telegramId, space, reason, ...(agentId ? { agentId } : {}), ...(sourceIds ? { sourceIds } : {}) });
       };
       {
         for (const p of d.permissions) if (priorPermissions.get(p.id) !== p.revision && ['optional.auto_memory', 'optional.personalization', 'optional.proactive_suggestions'].includes(p.purpose)) {
           const space = p.spaceId === spaceIdFor(d.accountId, 'work') ? 'work' : 'personal';
           if (p.purpose === 'optional.auto_memory' && p.state !== 'granted') for (const binding of d.relationships.bindings) if (binding.space === space && binding.status === 'active') { binding.status = 'revoked'; binding.revision++; }
-          enqueue(space, 'consent_changed');
+          enqueue(space, 'consent_changed',undefined,undefined,p.purpose!=='optional.proactive_suggestions'&&p.state!=='granted');
         }
-        for (const g of d.agentGrants) if (priorGrants.has(`${g.space}:${g.agentId}`) && priorGrants.get(`${g.space}:${g.agentId}`) !== g.revision) enqueue(g.space, 'agent_grant_changed', g.agentId);
+        for (const g of d.agentGrants) if (priorGrants.has(`${g.space}:${g.agentId}`) && priorGrants.get(`${g.space}:${g.agentId}`) !== g.revision) enqueue(g.space, 'agent_grant_changed', g.agentId,undefined,!g.allowed);
         for (const m of d.memories) if (priorMemories.get(m.id)?.status === 'active') {
           if (m.status === 'deleted' && !invalidations.some(i => i.space === m.space && i.reason === 'source_memory_deleted' && !i.agentId && !i.sourceIds)) enqueue(m.space, 'source_memory_deleted');
-          else if (m.status === 'active' && priorMemories.get(m.id)!.revision !== m.revision && !invalidations.some(i => i.space === m.space && i.reason === 'source_memory_corrected' && !i.agentId && !i.sourceIds)) enqueue(m.space, 'source_memory_corrected');
+          else if (m.status === 'active' && priorMemories.get(m.id)!.revision !== m.revision && !invalidations.some(i => i.space === m.space && i.reason === 'source_memory_corrected' && !i.agentId && !i.sourceIds)) enqueue(m.space, 'source_memory_corrected',undefined,undefined,false);
         }
         const removed = new Map<string, { space: SpaceKind; agentId: string; ids: string[] }>();
         for (const source of priorSources) if (source.status === 'active' && !d.relationships.sources.some(s => s.id === source.id && digest(s.key) === digest(source.key) && s.status === 'active')) {
@@ -789,7 +792,7 @@ export class AdaptiveService {
       if (memory.text === input.text) return fail(409, 'memory_unchanged');
       this.requireCapacity(d);
       resetTelegramArchives(d, now, input.space);
-      invalidateAssistantDeliveryScope(d,now,input.space);
+      invalidateAssistantDeliveryScope(d,now,input.space,undefined,false,false);
       memory.text = input.text; memory.revision++; memory.revocationEpoch++; memory.updatedAt = now;
       this.bump(d, now);
       purgeInvalidDerivedMemory(d, now, descendant => {

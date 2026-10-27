@@ -1,4 +1,5 @@
 import { ArchiveCapturePendingError } from './telegram-archive';
+import {SourceFencePendingError,type AssistantTextPoller} from './assistant-text-integration';
 /**
  * Runs every Telegram bot from one process with long polling:
  *  - @VoxxBot (the manager): /start, opens the Mini App, receives managed_bot
@@ -46,14 +47,16 @@ export function pollLoop(
     while (running) {
       try {
         const updates = await bot.getUpdates(offset, 25, allowed);
+        if(!running)break;
         watch.succeeded();
         for (const update of updates) {
+          if(!running)break;
           try { await handle(update); }
           catch (error) {
             logTelegramDiagnostic(log, 'update_failed');
             // A failed eligible capture has no durable receipt. Keep this and
             // later updates unacknowledged; unrelated send failures never retry.
-            if (error instanceof ArchiveCapturePendingError) throw error;
+            if (error instanceof ArchiveCapturePendingError||error instanceof SourceFencePendingError) throw error;
           }
           offset = update.update_id + 1;
         }
@@ -105,7 +108,10 @@ export function startBots(studio: Studio): { stop: () => void } {
         if (current) { current.stop(); loops.delete(agent.id); }
         if (!token) continue;
         const bot = studio.deps.botFor(token);
-        loops.set(agent.id, { ...pollLoop(bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token)), log, integrity(agent.id)), token });
+        let active=true;
+        const assistantPoller:AssistantTextPoller|undefined=agent.bot?.id?studio.deps.assistantText?.poller(agent.id,agent.bot.id,token,()=>active&&!stopped):undefined;
+        const loop=pollLoop(bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token),assistantPoller), log, integrity(agent.id));
+        loops.set(agent.id,{token,stop:()=>{active=false;loop.stop();}});
         logTelegramDiagnostic(log, 'bot_online');
       }
       // Repairs legacy photos without delaying new/fired bot polling changes.
@@ -193,6 +199,7 @@ export function startBots(studio: Studio): { stop: () => void } {
       maintenanceAbort.abort();
       if (routineTimer) clearInterval(routineTimer);
       studio.deps.requestedRoutines?.close();
+      studio.deps.assistantText?.stop();
       for (const loop of loops.values()) loop.stop();
       loops.clear();
       return studio.deps.preferenceLearning?.tasks.close();

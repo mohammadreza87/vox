@@ -16,11 +16,14 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedGuestRightsLedgerSchemas: Object.freeze([1]),
   supportedImprovementWorkflowSchemas: Object.freeze([1, 2]),
   supportedPetCareSchemas: Object.freeze([1]),
+  supportedPetPlaySchemas: Object.freeze([1]),
+  supportedPetGrowthSchemas: Object.freeze([1]),
+  supportedPetCheckinSchemas: Object.freeze([1]),
   supportedConnectionRecordSchemas: Object.freeze([1, 2]),
   supportedSelfServiceMcpSchemas: Object.freeze([1]),
   supportedReplyUseSchemas: Object.freeze([1]),
   supportedProviderTemplateSchemas: Object.freeze([1]),
-  supportedAssistantDeliveryControlVersions: Object.freeze([1]),
+  supportedAssistantDeliveryControlVersions: Object.freeze([1,2]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
   supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
@@ -399,6 +402,8 @@ function scanArchivePublication(row, doc, required) {
 }
 const ARC_MARKER = 'assistant-delivery-control-v1.json';
 const ARC_MARKER_BYTES = '{"version":1,"kind":"assistant-delivery-control"}\n';
+const ARC_V2_MARKER = 'assistant-delivery-control-v2.json';
+const ARC_V2_MARKER_BYTES = '{"version":2,"kind":"assistant-delivery-control"}\n';
 const arcNumber = n => integer(n) && !Object.is(n, -0);
 const arcPositive = n => arcNumber(n) && n > 0;
 const arcId = s => typeof s === 'string' && /^[A-Za-z0-9:_-]{1,128}(?![\s\S])/.test(s);
@@ -407,9 +412,9 @@ const arcUuid = s => typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f
 const arcBytes = value => Buffer.byteLength(JSON.stringify(value));
 function scanAssistantControl(doc, required) {
   if (!Object.hasOwn(doc, 'assistantDeliveryControl')) return;
-  if (doc.schemaVersion !== 1 || required.assistantDeliveryControlVersion !== 1) fail();
+  if (doc.schemaVersion !== 1 || ![1,2].includes(required.assistantDeliveryControlVersion)) fail();
   const c = doc.assistantDeliveryControl;
-  if (!keys(c, ['version','policyVersion','revision','observedAt','noReplayBefore','sourceFenceSequence','historyEpoch','deletionEpoch','streams','effects']) || c.version !== 1 || c.policyVersion !== 'arc1-control-7d-v1' ||
+  if (!keys(c, ['version','policyVersion','revision','observedAt','noReplayBefore','sourceFenceSequence','historyEpoch','deletionEpoch','streams','effects',...(c?.version===2?['enrollments']:[])]) || ![1,2].includes(c.version) || c.version>required.assistantDeliveryControlVersion || c.policyVersion !== (c.version===2?'arc2-control-7d-v1':'arc1-control-7d-v1') ||
       !['revision','observedAt','noReplayBefore','sourceFenceSequence','historyEpoch','deletionEpoch'].every(k => arcNumber(c[k])) || c.noReplayBefore > c.observedAt || c.observedAt > doc.updatedAt ||
       !Array.isArray(c.streams) || c.streams.length > 4 || !Array.isArray(c.effects) || c.effects.length > 32 || arcBytes({assistantDeliveryControl:c}) > 163840) fail();
   const streamKeys = new Set(), effectKeys = new Set();
@@ -420,6 +425,16 @@ function scanAssistantControl(doc, required) {
         t.containerId !== `private-tenant:${hashValue(doc.accountId).slice(0,24)}:${t.space}:private` || !arcNumber(t.messageFloor) || !arcNumber(t.highMessageId) || t.messageFloor > t.highMessageId ||
         !arcNumber(t.lastAcceptedAt) || t.lastAcceptedAt > c.observedAt || streamKeys.has(streamKey)) fail();
     streamKeys.add(streamKey);
+  }
+  if(c.version===2){
+    if(!Array.isArray(c.enrollments)||c.enrollments.length>4)fail();
+    const seen=new Set();
+    for(const r of c.enrollments){const k=`${r?.botId}:${r?.destinationChatId}`;
+      if(!keys(r,['botId','destinationChatId','agentId','space','containerId','enabled','enrolledAt','changedAt','revision','requestId'])||!arcPositive(r.botId)||!arcPositive(r.destinationChatId)||doc.accountId!==`telegram-account:${r.destinationChatId}`||
+        !arcId(r.agentId)||r.space!=='work'||r.containerId!==`private-tenant:${hashValue(doc.accountId).slice(0,24)}:work:private`||typeof r.enabled!=='boolean'||!arcNumber(r.enrolledAt)||!arcNumber(r.changedAt)||r.enrolledAt>r.changedAt||r.changedAt>c.observedAt||!arcPositive(r.revision)||!arcUuid(r.requestId)||seen.has(k))fail();
+      const stream=c.streams.find(t=>t.botId===r.botId&&t.destinationChatId===r.destinationChatId);
+      if(stream&&(stream.agentId!==r.agentId||stream.space!==r.space||stream.containerId!==r.containerId))fail();seen.add(k);
+    }
   }
   for (const row of c.effects) {
     if (!keys(row,['state','retainUntil']) || !arcNumber(row.retainUntil)) fail();
@@ -441,7 +456,8 @@ function scanAssistantControl(doc, required) {
     if (!stream || stream.agentId!==scope.agentId || stream.space!==scope.space || stream.containerId!==scope.containerId ||
         s.effectKey!==JSON.stringify(['adp1','telegram',b.botId,b.destinationChatId,source.messageId,'initial','primary-text']) || effectKeys.has(s.effectKey)) fail();
     effectKeys.add(s.effectKey);
-    if (s.contentEligible && (source.messageId<=stream.messageFloor || source.occurredAt<=c.noReplayBefore || a.sourceFenceSequence!==c.sourceFenceSequence || a.historyEpoch!==c.historyEpoch || a.deletionEpoch!==c.deletionEpoch)) fail();
+    const enrollment=c.version===2?c.enrollments.find(r=>r.botId===b.botId&&r.destinationChatId===b.destinationChatId):undefined;
+    if (s.contentEligible && (c.version===2&&(!enrollment?.enabled||enrollment.agentId!==scope.agentId||enrollment.space!==scope.space||enrollment.containerId!==scope.containerId)||source.messageId<=stream.messageFloor || source.occurredAt<=c.noReplayBefore || a.sourceFenceSequence!==c.sourceFenceSequence || a.historyEpoch!==c.historyEpoch || a.deletionEpoch!==c.deletionEpoch)) fail();
     if (Object.hasOwn(s,'invalidatedAtFenceSequence') && (!arcNumber(s.invalidatedAtFenceSequence) || s.invalidatedAtFenceSequence<=a.sourceFenceSequence || s.contentEligible)) fail();
     const o=s.outcome;
     if (['generated','sending'].includes(s.phase)) {if (o!==undefined || s.revision!==(s.phase==='generated'?0:1)) fail();}
@@ -531,7 +547,8 @@ function scanAdaptive(env, required, budget) {
   if (format === 'file') {
     const names=entries(root);
     if(names.includes(ARC_MARKER)){if(readBounded(join(root,ARC_MARKER),128,budget)!==ARC_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=1;}
-    for(const name of names){if(name===ARC_MARKER)continue;if(!/^[a-f0-9]{64}\.json$/.test(name))fail();scanCanonical(readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget),name.slice(0,-5),1,required);}
+    if(names.includes(ARC_V2_MARKER)){if(!names.includes(ARC_MARKER)||readBounded(join(root,ARC_V2_MARKER),128,budget)!==ARC_V2_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=2;}
+    for(const name of names){if(name===ARC_MARKER||name===ARC_V2_MARKER)continue;if(!/^[a-f0-9]{64}\.json$/.test(name))fail();scanCanonical(readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget),name.slice(0,-5),1,required);}
     return;
   }
   const managed = `${resolve(root)}.managed`, marker = readPlainJson(join(managed, 'format.json'));
@@ -645,42 +662,151 @@ function scanImprovement(env, required, budget) {
       canonical(entries(audit, 5001).sort()) !== canonical(names)) fail();
   if (names.length) required.improvementWorkflowSchema = version;
 }
-/** Bounded structural metadata admission; this does not replace runtime validation. */
-// Pet care is a separate rights-controlled store. Old code may serve only after
-// candidate care rows are cleared; durable erasure epochs must remain in place.
+/** Frozen persisted v1 vocabularies, matching the existing FILE writer normal forms.
+ * This copied standalone reader neither imports permissive app sanitizers nor changes records. */
+const PET_AGENT_FILE = /^[A-Za-z0-9_-]{1,128}\.json(?![\s\S])/;
+const PET_AGENT = /^[A-Za-z0-9_-]{1,128}(?![\s\S])/;
+const PET_DAY = /^\d{4}-\d{2}-\d{2}(?![\s\S])/;
+const PET_SLUG = /^[a-z0-9][a-z0-9_-]{0,47}(?![\s\S])/;
+const PET_NOTE_REF = /^[a-f0-9]{16,64}(?![\s\S])/;
+const PET_SEASONS = ['yalda', 'suri', 'nowruz'];
+const PET_KEEPSAKES = ['pomegranateCrown', 'sparkScarf', 'sabzehSprout', 'starPin', 'bloomPin'];
+const PET_WEARABLES = [...PET_KEEPSAKES, 'glasses', 'specs', 'beret', 'cap', 'beanie', 'headphones', 'headset', 'bow', 'flower', 'star', 'bowtie'];
+const PET_BOOK = ['met', 'stage2', 'stage3', 'stage4', 'formed', 'bond1', 'bond2', 'bond3', 'bond4', 'bond5', 'bond6',
+  'bloom', 'yalda', 'suri', 'nowruz', 'bestBop', 'bestStarfall', 'bestHum', 'bestGuess'];
+const PET_GAMES = ['bop', 'starfall', 'hum', 'guess'];
+const PET_TIPS = Array.from({length: 14}, (_, i) => `T${i + 1}`);
+const PET_ASKS = ['P1', 'P2', 'P3', 'P3b', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
+const PET_CHECKIN_TYPES = ['growingUp', 'seasons', 'garden', 'hellos', 'careNudges'];
+const petFinite = n => typeof n === 'number' && Number.isFinite(n);
+const petBoolean = v => typeof v === 'boolean';
+const petPattern = (v, pattern) => typeof v === 'string' && pattern.test(v);
+const petCount = (n, max, min = 0) => integer(n) && n >= min && n <= max;
+const petShape = (v, required, optional = []) => object(v) && keys(v, [...required, ...optional.filter(k => Object.hasOwn(v, k))]);
+const petOptional = (v, k, validate) => !Object.hasOwn(v, k) || validate(v[k]);
+const petMap = (v, names, validate) => object(v) && Object.keys(v).every(k => names.includes(k) && validate(v[k]));
+function petArray(v, max, validate, uniqueKey) {
+  return Array.isArray(v) && v.length <= max && v.every(validate) &&
+    (uniqueKey === undefined || new Set(v.map(row => row[uniqueKey])).size === v.length);
+}
+function petUserKey(v) {
+  return petPattern(v, /^[1-9]\d{0,15}(?![\s\S])/) && positive(Number(v)) && String(Number(v)) === v;
+}
+function scanPetPlay(record, agent, user) {
+  if (!petShape(record, ['v','agentId','userId','createdAt','updatedAt','seenAt','items','wearing','garden','book','games','tips','asks','seasons','litMine'], ['visitsOpen']) ||
+      record.v !== 1 || record.agentId !== agent || record.userId !== user || ![record.createdAt,record.updatedAt,record.seenAt].every(petFinite) ||
+      !petOptional(record,'visitsOpen',v => v === true)) fail();
+  if (!petArray(record.items,32,v => petShape(v,['id','earnedAt']) && PET_KEEPSAKES.includes(v.id) && petFinite(v.earnedAt),'id') ||
+      !petMap(record.wearing,['head','neck','hand'],v => PET_WEARABLES.includes(v)) ||
+      !petArray(record.book,64,v => petShape(v,['id','at']) && PET_BOOK.includes(v.id) && petFinite(v.at),'id')) fail();
+  const g = record.garden;
+  if (g !== null && (!petShape(g,['seed','plantedAt','waterings'],['wateredDay','bloomedAt']) || !['flower','sabzeh'].includes(g.seed) ||
+      !petFinite(g.plantedAt) || !petCount(g.waterings,3) || !petOptional(g,'wateredDay',v => petPattern(v,PET_DAY)) || !petOptional(g,'bloomedAt',petFinite))) fail();
+  if (!petMap(record.games,PET_GAMES,v => petShape(v,['rounds','best','zen','day','today'],['lastRound']) && petCount(v.rounds,20) &&
+      petBoolean(v.best) && petBoolean(v.zen) && petPattern(v.day,PET_DAY) && petCount(v.today,60) && petOptional(v,'lastRound',r => petPattern(r,/^[a-f0-9]{8}(?![\s\S])/))) ||
+      !petMap(record.tips,PET_TIPS,v => petShape(v,['shown','dismissed'],['lastShownAt','lastDay']) && petCount(v.shown,2) && petBoolean(v.dismissed) &&
+        petOptional(v,'lastShownAt',petFinite) && petOptional(v,'lastDay',d => petPattern(d,PET_DAY))) ||
+      !petMap(record.asks,PET_ASKS,v => petShape(v,['lastAskedAt','declined'],['lastDeclinedAt','lastDay','acceptedAt']) && petFinite(v.lastAskedAt) && petCount(v.declined,2) &&
+        petOptional(v,'lastDeclinedAt',petFinite) && petOptional(v,'lastDay',d => petPattern(d,PET_DAY)) && petOptional(v,'acceptedAt',petFinite)) ||
+      !petMap(record.seasons,PET_SEASONS,v => petCount(v,1699,1301)) ||
+      !petArray(record.litMine,64,v => petShape(v,['id','litAt'],['ref']) && petPattern(v.id,PET_SLUG) && petFinite(v.litAt) && petOptional(v,'ref',r => petPattern(r,PET_NOTE_REF)),'id')) fail();
+}
+function scanPetGrowth(record, agent) {
+  if (!petShape(record,['agentId','lit']) || record.agentId !== agent ||
+      !petArray(record.lit,64,v => petShape(v,['id','kind','at'],['ref','dimmedAt']) && petPattern(v.id,PET_SLUG) &&
+        ['taught','task','access','room','season'].includes(v.kind) && petFinite(v.at) && petOptional(v,'ref',r => petPattern(r,PET_NOTE_REF)) && petOptional(v,'dimmedAt',petFinite),'id')) fail();
+}
+function petCheckinEvidence(v) {
+  return petShape(v,['eventId','noticeId','noticeVersion','copyHash','locale','presentedAt','decidedAt','surface','affirmative']) &&
+    petPattern(v.eventId,/^[A-Za-z0-9_-]{8,40}(?![\s\S])/) && ['perm.P1','perm.P1.forming'].includes(v.noticeId) && v.noticeVersion === 'pet-checkins-v1' &&
+    petPattern(v.copyHash,/^[a-f0-9]{64}(?![\s\S])/) && ['en','fa'].includes(v.locale) && integer(v.presentedAt) && integer(v.decidedAt) && v.surface === 'mini_app' && v.affirmative === true;
+}
+function petCheckinConsent(v) {
+  return petShape(v,['purpose','state','revision','effectiveAt','evidence'],['withdrawnAt','withdrawnVia']) && v.purpose === 'optional.pet_checkins' &&
+    ['granted','withdrawn'].includes(v.state) && petCount(v.revision,1000000,1) && integer(v.effectiveAt) && petCheckinEvidence(v.evidence) &&
+    petOptional(v,'withdrawnAt',integer) && petOptional(v,'withdrawnVia',s => ['settings','stop_all'].includes(s));
+}
+function petCheckinAgent(v) {
+  return petShape(v,['enabled','types','week'],['consent','lastSentAt']) && petBoolean(v.enabled) && keys(v.types,PET_CHECKIN_TYPES) &&
+    Object.values(v.types).every(petBoolean) && petArray(v.week,6,integer) && petOptional(v,'consent',petCheckinConsent) && petOptional(v,'lastSentAt',integer);
+}
+function petCheckinSent(v) {
+  return petShape(v,['ref','agentId','moment','occurrence','day','personHash','at','state','lang','variant'],['openedAt','openedVia','whyAt','stoppedAt','by']) &&
+    petPattern(v.ref,/^[A-Za-z0-9_-]{16,32}(?![\s\S])/) && petPattern(v.agentId,PET_AGENT) && petPattern(v.moment,/^C(?:[1-9]|10|11)(?![\s\S])/) &&
+    petPattern(v.occurrence,/^[a-z0-9:_-]{1,48}(?![\s\S])/) && petPattern(v.day,PET_DAY) && petPattern(v.personHash,PET_NOTE_REF) && integer(v.at) &&
+    ['reserved','accepted','unknown','failed','cancelled'].includes(v.state) && ['en','fa'].includes(v.lang) && petCount(v.variant,15) &&
+    petOptional(v,'openedAt',integer) && petOptional(v,'openedVia',s => ['ref','app'].includes(s)) && petOptional(v,'whyAt',integer) &&
+    petOptional(v,'stoppedAt',integer) && petOptional(v,'by',s => ['local','decisions'].includes(s));
+}
+function scanPetCheckins(record, user) {
+  if (!petShape(record,['v','userId','createdAt','updatedAt','lang','sound','unopenedStreak','agents','seasons','sent'],['tz','pausedAt','pausedNoteAt','resumedAt']) ||
+      record.v !== 1 || record.userId !== user || !integer(record.createdAt) || !integer(record.updatedAt) || !['en','fa'].includes(record.lang) ||
+      !petBoolean(record.sound) || !petCount(record.unopenedStreak,100) ||
+      !petOptional(record,'tz',v => typeof v === 'string' && v.length <= 64 && /^(UTC|[A-Za-z_]+\/[A-Za-z_+\-/0-9]+)(?![\s\S])/.test(v)) ||
+      !['pausedAt','pausedNoteAt','resumedAt'].every(k => petOptional(record,k,integer)) || !object(record.agents) || Object.keys(record.agents).length > 64 ||
+      !Object.entries(record.agents).every(([id,v]) => petPattern(id,PET_AGENT) && petCheckinAgent(v)) ||
+      !petMap(record.seasons,PET_SEASONS,v => petCount(v,1600,1300)) || !petArray(record.sent,60,petCheckinSent)) fail();
+}
+/** Bounded read-only admission; all pet writers share this root lock and epoch store. */
 function scanPetCare(env, required, budget) {
   const root = join(env.STUDIO_DATA_DIR, 'pets');
   if (!safePath(root, 'directory', true)) return;
   if (stat(join(root, '.writer.lock'))) fail();
-  const dir = opendirSync(root);
+  const watched = [];
+  const watch = path => {
+    safePath(path,'directory');
+    const info = stat(path);
+    watched.push({path,dev:info.dev,ino:info.ino,mtimeMs:info.mtimeMs,ctimeMs:info.ctimeMs});
+  };
   let rows = 0;
-  try {
-    let entry;
-    while ((entry = dir.readSync())) {
-      if (++rows > MAX_ACCOUNTS) fail();
-      if (entry.name === '.epochs') {
-        const epochs = safePath(join(root, entry.name), 'directory');
-        const epochDir = opendirSync(epochs);
-        try {
-          let epoch;
-          while ((epoch = epochDir.readSync())) {
-            if (++rows > MAX_ACCOUNTS || !/^[1-9]\d*\.json$/.test(epoch.name)) fail();
-            const value = readPlainJson(join(epochs, epoch.name), 256, budget);
-            if (!keys(value, ['v', 'epoch']) || value.v !== 1 || !uuid(value.epoch)) fail();
-          }
-        } finally { epochDir.closeSync(); }
-        continue;
-      }
-      if (!/^[A-Za-z0-9_-]{1,128}\.json$/.test(entry.name)) fail();
-      const records = readPlainJson(join(root, entry.name), MAX_ACCOUNT_BYTES, budget);
-      if (!object(records)) fail();
-      const agent = entry.name.slice(0, -5);
-      for (const [user, record] of Object.entries(records)) {
-        if (!/^[1-9]\d*$/.test(user) || !object(record) || record.v !== 1 || record.agentId !== agent || record.userId !== Number(user)) fail();
-        required.petCareSchema = 1;
-      }
+  const visit = (path, consume) => {
+    watch(path);
+    const dir = opendirSync(path);
+    try {let entry;while ((entry = dir.readSync())) {if (++rows > MAX_ACCOUNTS) fail();consume(entry.name);}}
+    finally {dir.closeSync();}
+  };
+  visit(root,name => {
+    if (name === '.epochs') {
+      visit(join(root,name),epoch => {
+        if (!/^[1-9]\d*\.json$/.test(epoch)) fail();
+        const value = readPlainJson(join(root,name,epoch),256,budget);
+        if (!keys(value,['v','epoch']) || value.v !== 1 || !uuid(value.epoch)) fail();
+      });
+      return;
     }
-  } finally { dir.closeSync(); }
+    if (['play','growth','checkins'].includes(name)) {
+      required[{play:'petPlaySchema',growth:'petGrowthSchema',checkins:'petCheckinSchema'}[name]] = 1;
+      visit(join(root,name),file => {
+        if (name === 'checkins') {
+          if (!file.endsWith('.json') || !petUserKey(file.slice(0,-5))) fail();
+          scanPetCheckins(readPlainJson(join(root,name,file),MAX_ACCOUNT_BYTES,budget),Number(file.slice(0,-5)));
+        } else {
+          if (!PET_AGENT_FILE.test(file)) fail();
+          const agent = file.slice(0,-5), value = readPlainJson(join(root,name,file),MAX_ACCOUNT_BYTES,budget);
+          if (name === 'growth') scanPetGrowth(value,agent);
+          else {
+            if (!object(value)) fail();
+            for (const [user,record] of Object.entries(value)) {if (!petUserKey(user)) fail();scanPetPlay(record,agent,Number(user));}
+          }
+        }
+      });
+      return;
+    }
+    if (!PET_AGENT_FILE.test(name)) fail();
+    const records = readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget);
+    if (!object(records)) fail();
+    const agent = name.slice(0,-5);
+    for (const [user,record] of Object.entries(records)) {
+      if (!/^[1-9]\d*$/.test(user) || !object(record) || record.v !== 1 || record.agentId !== agent || record.userId !== Number(user)) fail();
+      required.petCareSchema = 1;
+    }
+  });
+  if (stat(join(root,'.writer.lock'))) fail();
+  for (const before of watched) {
+    safePath(before.path,'directory');
+    const after = stat(before.path);
+    if (after.dev !== before.dev || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) fail();
+  }
 }
 
 /** Destinations that let a connected app's answer reach a chat (Settings Part 2b); they live on grants only. */
@@ -842,11 +968,14 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedGuestRightsLedgerSchemas', 'guestRightsLedgerSchema', [1]],
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
     ['supportedPetCareSchemas', 'petCareSchema', [1]],
+    ['supportedPetPlaySchemas', 'petPlaySchema', [1]],
+    ['supportedPetGrowthSchemas', 'petGrowthSchema', [1]],
+    ['supportedPetCheckinSchemas', 'petCheckinSchema', [1]],
     ['supportedSelfServiceMcpSchemas', 'selfServiceMcpSchema', [1]],
     // Fail closed: a release that does not declare these cannot admit reply rows or template connections.
     ['supportedReplyUseSchemas', 'replyUseSchema', [1]],
     ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
-    ['supportedAssistantDeliveryControlVersions', 'assistantDeliveryControlVersion', [1]],
+    ['supportedAssistantDeliveryControlVersions', 'assistantDeliveryControlVersion', [1,2]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
     ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],
