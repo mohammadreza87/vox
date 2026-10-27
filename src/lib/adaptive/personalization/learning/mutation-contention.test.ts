@@ -1,5 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { promises as fs } from 'node:fs';
+import { resetFileRuntimeIoHooks, setFileRuntimeIoHooks } from '@/test/fro1-io-fixture';
+vi.mock('@/lib/studio/file-runtime-owner', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/studio/file-runtime-owner')>();
+  const { instrumentFileRuntime } = await import('@/test/fro1-io-fixture');
+  return instrumentFileRuntime(actual);
+});
 import { randomUUID } from 'node:crypto';
 import { learningFixture } from './fixtures';
 import { ID } from '../../../studio/__tests__/helpers';
@@ -7,34 +12,33 @@ import { NOW } from '../__tests__/fixtures';
 
 type Fixture = Awaited<ReturnType<typeof learningFixture>>;
 const fixtures: Fixture[] = [];
-afterEach(async () => { vi.restoreAllMocks(); await Promise.all(fixtures.splice(0).map(x => x.close())); });
+afterEach(async () => { vi.restoreAllMocks(); resetFileRuntimeIoHooks(); await Promise.all(fixtures.splice(0).map(x => x.close())); });
 async function setup() {
   const x = await learningFixture(); fixtures.push(x); await x.f.grant(); await x.f.agent(); return x;
 }
-/** A real FILE read transaction holds rename while the command tries to acquire
+/** A real FILE read transaction holds its lease after staging fsync while the command tries to acquire
  * its own lock. No timer guess or mocked committed authority is involved. */
 async function behindWriter(x: Fixture, command: () => Promise<unknown>, queued?: () => Promise<void> | void) {
-  const rename = fs.rename.bind(fs), mkdir = fs.mkdir.bind(fs);
   let release!: () => void, reached!: () => void, waiting!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const held = new Promise<void>(resolve => { reached = resolve; });
   const attempted = new Promise<void>(resolve => { waiting = resolve; });
   let armed = true;
-  vi.spyOn(fs, 'rename').mockImplementation(async (...args) => {
-    if (armed && String(args[1]).startsWith(x.f.directory!)) { armed = false; reached(); await gate; }
-    return rename(...args);
+  setFileRuntimeIoHooks({
+    afterTemporarySync: async path => {
+      if (armed && path.startsWith(x.f.directory!)) { armed = false; reached(); await gate; }
+    },
+    transientDirectory: (path, error) => {
+      if (path.startsWith(x.f.directory!) && path.endsWith('.lock') && (error as NodeJS.ErrnoException)?.code === 'EEXIST') waiting();
+    },
   });
   const writer = x.view();
   await held;
-  vi.spyOn(fs, 'mkdir').mockImplementation(async (...args) => {
-    if (String(args[0]).startsWith(x.f.directory!) && String(args[0]).endsWith('.lock')) waiting();
-    return mkdir(...args);
-  });
   const result = command().then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
   try {
     expect(await Promise.race([attempted.then(() => 'queued'), result.then(() => 'settled-before-lock')])).toBe('queued');
     await queued?.(); release(); await writer; return await result;
-  } finally { release(); await writer; await result; vi.restoreAllMocks(); }
+  } finally { release(); await writer; await result; resetFileRuntimeIoHooks(); vi.restoreAllMocks(); }
 }
 
 it('serializes a deliberate presentation behind an unrelated FILE writer without retries or an unavailable error', async () => {

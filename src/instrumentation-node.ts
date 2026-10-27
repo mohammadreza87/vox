@@ -1,4 +1,11 @@
 /** Node-only half of instrumentation.ts (kept separate so the edge bundle never sees it). */
+let runtimeForStartupCleanup: typeof import('./lib/studio/runtime') | undefined;
+
+/** Stop only an already loaded runtime; fatal cleanup must never bootstrap one. */
+export function stopStudioBotsAfterStartupFailure(): Promise<{ pending: number }> {
+  return runtimeForStartupCleanup?.stopStudioRuntime() ?? Promise.resolve({ pending: 0 });
+}
+
 export async function startStudioBots() {
   // Build/prerender is never a live runtime bootstrap. Pure imports/config remain usable.
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
@@ -12,13 +19,14 @@ export async function startStudioBots() {
   if (g.__voxBots) return;
   g.__voxBots = true;
   try {
-    const { getStudio, registerStudioBotRuntime } = await import('./lib/studio/runtime');
+    const runtime = await import('./lib/studio/runtime');
+    runtimeForStartupCleanup = runtime;
     const { startBots } = await import('./lib/studio/bots');
-    registerStudioBotRuntime(startBots(await getStudio()));
+    runtime.registerStudioBotRuntime(startBots(await runtime.getStudio()));
     console.log('[studio] bots started');
   } catch (error) {
     g.__voxBots = false;
-    // Next must fail startup so a supervisor can restart an unavailable service.
+    // Direct callers retain rejection/retry; register owns terminal startup.
     throw error;
   }
 }

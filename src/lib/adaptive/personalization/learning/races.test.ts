@@ -1,11 +1,17 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { resetFileRuntimeIoHooks, setFileRuntimeIoHooks } from '@/test/fro1-io-fixture';
+vi.mock('@/lib/studio/file-runtime-owner', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/studio/file-runtime-owner')>();
+  const { instrumentFileRuntime } = await import('@/test/fro1-io-fixture');
+  return instrumentFileRuntime(actual);
+});
 import { randomUUID } from 'node:crypto';
 import { learningFixture } from './fixtures';
 import { ID } from '../../../studio/__tests__/helpers';
 import { NOW } from '../__tests__/fixtures';
 const fixtures: Awaited<ReturnType<typeof learningFixture>>[] = [];
 async function setup() { const f = await learningFixture(); fixtures.push(f); await f.enable(); return f; }
-afterEach(async () => { vi.restoreAllMocks(); await Promise.all(fixtures.splice(0).map(f => f.close())); });
+afterEach(async () => { vi.restoreAllMocks(); resetFileRuntimeIoHooks(); await Promise.all(fixtures.splice(0).map(f => f.close())); });
 async function pending(x: Awaited<ReturnType<typeof setup>>) {
   const original = x.provider.evaluate.getMockImplementation()!;
   let release!: () => void, signal!: AbortSignal;
@@ -68,15 +74,7 @@ it('rechecks the clock after final synchronous Studio snapshot immediately befor
   x.setNow(deadline - 1); const p = await pending(x);
   expect(p.signal().aborted).toBe(false);
   const read = x.h.store.readCommittedForEffect.bind(x.h.store); let armed = false, crossed = false;
-  const { promises: fs } = await import('node:fs'); const open = fs.open.bind(fs);
-  vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    if (String(args[0]).endsWith('.tmp')) {
-      const sync = handle.sync.bind(handle);
-      vi.spyOn(handle, 'sync').mockImplementationOnce(async () => { await sync(); armed = true; });
-    }
-    return handle;
-  });
+  setFileRuntimeIoHooks({ afterTemporarySync: () => { armed = true; } });
   vi.spyOn(x.h.store, 'readCommittedForEffect').mockImplementation(() => {
     const result = read();
     if (armed && !crossed) { expect(p.signal().aborted).toBe(false); crossed = true; x.setNow(deadline + 1); }
@@ -98,16 +96,13 @@ it('scope separation, conflicting event IDs and stale CAS never change a prefere
 });
 it('the real FILE final-rename fence denies a Studio block during asynchronous temporary-file fsync', async () => {
   const x = await setup(); x.enqueue(); await x.learning.tasks.settle(); const view = await x.view();
-  const { promises: fs } = await import('node:fs'); const open = fs.open.bind(fs); let armed = true;
-  vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    if (armed && String(args[0]).endsWith('.tmp')) {
-      armed = false; const sync = handle.sync.bind(handle);
-      vi.spyOn(handle, 'sync').mockImplementationOnce(async () => { await sync(); await x.h.store.update(s => { s.agents.find(a => a.id === x.agent.id)!.blocked = [ID.alice]; }); });
-    }
-    return handle;
-  });
+  let synced = false;
+  setFileRuntimeIoHooks({ afterTemporarySync: async () => {
+    if (synced) return; synced = true;
+    await x.h.store.update(s => { s.agents.find(a => a.id === x.agent.id)!.blocked = [ID.alice]; });
+  } });
   await expect(x.learning.review(ID.alice, { ...x.scope, expectedRevision: view.revision, eventId: randomUUID(), candidateId: view.candidates[0].id, action: 'use' })).rejects.toBeDefined();
+  expect(synced).toBe(true);
   expect(await x.f.adaptive.withAccountDocument(ID.alice, d => d.experience.preferences)).toEqual([]);
   expect(await x.f.adaptive.withAccountDocument(ID.alice, d => d.experience.preferenceLearning!.candidates)).toEqual([]);
   expect(await x.f.adaptive.withAccountDocument(ID.alice, d => d.experience.preferenceLearning!.suppressions.length)).toBeGreaterThan(0);

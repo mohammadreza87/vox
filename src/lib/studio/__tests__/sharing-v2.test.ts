@@ -5,13 +5,14 @@
  * (base behaviour) and on.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { types } from 'util';
 import { signInitData } from '../auth';
 import { getStudio } from '../runtime';
+import { registerFileRuntimeFixture } from '../file-runtime-owner';
 import { handleStudioRequest, type RouterOptions } from '../http';
 import { groupId, personId, studioToOrgConfig } from '../org-bridge';
 import type { StudioState } from '../types';
@@ -364,8 +365,12 @@ describe('(i) runtime wiring', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
   const configure = (flags: NodeJS.ProcessEnv) => {
-    const dir = mkdtempSync(join(tmpdir(), 'vox-sharing-v2-runtime-'));
-    dirs.push(dir);
+    const parent=realpathSync(mkdtempSync('/tmp/vox-sharing-v2-runtime-')),dir=join(parent,'data'),artifact=join(parent,'synthetic-artifact');
+    mkdirSync(dir,{mode:0o700});mkdirSync(artifact,{mode:0o700});mkdirSync(join(artifact,'.next'),{mode:0o700});
+    const release={revision:'c4405f4c70f93b5b064ff64bb2815967d64e5785',sourceTree:'93556bf8ad66e87d7bccaa0d7b3a15f5c5dc1759',buildId:'synthetic-sharing-runtime-unit'};
+    // Explicit unit provenance, never an actual Next/installed artifact claim.
+    writeFileSync(join(artifact,'server.js'),'// synthetic unit; never executed\n',{mode:0o600});writeFileSync(join(artifact,'.next','BUILD_ID'),release.buildId,{mode:0o600});
+    registerFileRuntimeFixture({dataRoot:dir,artifactRoot:artifact,release});dirs.push(parent);
     const env: NodeJS.ProcessEnv = {
       NODE_ENV: 'production', STUDIO_SECRET: 'a-test-encryption-secret-with-32-characters', ANTHROPIC_API_KEY: 'test-anthropic-key',
       VOXX_BOT_TOKEN: '123456789:abcdefghijklmnopqrstuvwxyz0123456789', VOXX_BOT_USERNAME: 'VoxxBot', STUDIO_SUPERADMIN_IDS: '123, 456',
