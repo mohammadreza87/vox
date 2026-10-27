@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
-import { startBots } from '../bots';
+import { pollLoop, startBots } from '../bots';
+import {SourceFencePendingError} from '../assistant-text-integration';
 import { parseIds } from '../runtime';
 import { draftJson, fakeTelegram, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
 import { TelegramApiError } from '../../tireh/telegram/client';
@@ -379,5 +380,24 @@ describe('redirected updates (bot integrity): detect and alert, never act', () =
     expect(h.manager.getWebhookInfo).toHaveBeenCalled();
     expect(integrityLogs()).toEqual([]);
     expectContentFreeTelegramLogs([...h.logger.warn.mock.calls, ...h.logger.error.mock.calls]);
+  });
+});
+
+
+describe('ATI1 protected polling acknowledgement fence',()=>{
+  it('holds this and later update offsets only for required source-fence persistence, then replays safely',async()=>{
+    vi.useFakeTimers();const bot=fakeTelegram(),updates:TelegramUpdate[]=[{update_id:81},{update_id:82}],seen:number[]=[];let failed=false;
+    bot.getUpdates.mockResolvedValueOnce(updates).mockResolvedValueOnce(updates);
+    const handler=vi.fn(async(u:TelegramUpdate)=>{seen.push(u.update_id);if(!failed){failed=true;throw new SourceFencePendingError();}});
+    const loop=pollLoop(bot as unknown as import('../../tireh/telegram/client').TelegramBotClient,[],handler,h.logger);
+    await vi.advanceTimersByTimeAsync(0);expect(seen).toEqual([81]);expect(bot.getUpdates).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3000);expect(seen).toEqual([81,81,82]);
+    expect((bot.getUpdates.mock.calls as unknown as Array<[number|undefined]>).map(c=>c[0])).toEqual([undefined,undefined,83]);loop.stop();
+  });
+  it('ordinary send/result uncertainty never holds the polling offset or replays its effect',async()=>{
+    vi.useFakeTimers();const bot=fakeTelegram();bot.getUpdates.mockResolvedValueOnce([{update_id:91},{update_id:92}]);
+    const handler=vi.fn(async()=>{throw new Error('QA_PRIVATE_SEND_UNCERTAINTY');});
+    const loop=pollLoop(bot as unknown as import('../../tireh/telegram/client').TelegramBotClient,[],handler,h.logger);
+    await vi.advanceTimersByTimeAsync(0);expect(handler).toHaveBeenCalledTimes(2);expect((bot.getUpdates.mock.calls as unknown as Array<[number|undefined]>).map(c=>c[0])).toEqual([undefined,93]);loop.stop();
   });
 });

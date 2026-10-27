@@ -153,3 +153,5 @@ Provisional efficacy target: at least a 20% improvement in p95 useful-response l
 Runtime snapshot publication follows the reviewed [bounded contract](../agents/AGENT_MEMORY_SNAPSHOT_PUBLICATION.md); activation and full recall remain separate gates.
 
 Release prerequisite for AM-05/AM-12: [Pet FILE admission contract](../agents/PET_STORAGE_ADMISSION_CONTRACT.md). Strictly recognize the existing deployed pet namespaces without changing data, rights or runtime behavior.
+
+Next AM-05/AM-12 slice: [Owner Work-DM text integration](../agents/AGENT_MEMORY_ASSISTANT_TEXT_INTEGRATION.md). Freeze explicit scoped enrollment and actual nonretrying delivery before implementation, then qualify synthetic FILE/injected-HTTP paths independently. Production activation remains separate from a default-off code release.

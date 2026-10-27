@@ -4,17 +4,18 @@ import { FileAdaptiveStorage } from '../adaptive/persistence/storage';
 import { accountIdFor, containerIdFor, digest, type AdaptiveDocument, type SpaceKind } from '../adaptive/persistence/repository';
 import type { AdaptiveService } from '../adaptive/persistence/service';
 import { advanceAssistantControl, assistantExpected, assistantFutureStateBytes, AssistantControlError, ASSISTANT_CONTROL_STATE_BYTES, ASSISTANT_CONTROL_TTL_MS,
-  emptyAssistantDeliveryControl, exportAssistantDeliveryControl, invalidateAssistantDeliveryScope, invalidateAssistantDeliverySource, pruneAssistantDeliveryControl } from '../adaptive/assistant-delivery-control';
+  emptyAssistantDeliveryControl, exportAssistantDeliveryControl, invalidateAssistantDeliveryScope, invalidateAssistantDeliverySource, pruneAssistantDeliveryControl, type AssistantDeliveryEnrollment } from '../adaptive/assistant-delivery-control';
 import { assertPreparedIntegrity, prepareAssistantText, reduceDelivery, type DeliveryAuthority, type DeliveryBinding, type DeliveryState, type PreparedAssistantText, type ResponseProjection, type TransportEvidence } from '../tireh/delivery/assistant-text-protocol';
 export interface AssistantDeliveryIngress {botId:number;chatId:number;fromId:number;isBot:false;chatType:'private';kind:'initial-text';messageId:number;updateId:number;dateSeconds:number}
 export interface AssistantDeliveryBinding {scope:{agentId:string;space:SpaceKind};binding:DeliveryBinding;stamp:string}
 export interface AssistantDeliveryControlOptions {
   now:()=>number;
   /** Trusted committed Studio projection; null on busy, ambiguity, or denial. Not client/model input. */
-  bindingFor:(botId:number,ownerId:number)=>AssistantDeliveryBinding|null;
+  bindingFor:(botId:number,ownerId:number,enrollment?:AssistantDeliveryEnrollment)=>AssistantDeliveryBinding|null;
   keys:{current():{keyId:string;key:Uint8Array};resolve(keyId:string):Uint8Array|undefined};
 }
 export interface AssistantDeliveryPrepareInput {ownerId:number;ingress:AssistantDeliveryIngress;generatedText:string;decoratedText:string;generationId:string;attemptId:string}
+export interface AssistantDeliveryEnrollmentInput {ownerId:number;agentId:string;botId:number;requestId:string;expectedEnrollmentRevision:number|null;enabled:boolean}
 const MAX=Number.MAX_SAFE_INTEGER;
 const equal=(a:unknown,b:unknown)=>digest(a)===digest(b);
 /** Detached ordinary data only, without invoking accessors/toJSON/proxy traps. */
@@ -55,6 +56,26 @@ export class AssistantDeliveryControlAdapter {
     if(!read.document?.assistantDeliveryControl)throw new AssistantControlError('authority');
     if(read.document.schemaVersion!==1)throw new AssistantControlError('unsupported');return read.document;
   }
+  private existing(owner:number):AdaptiveDocument|null {
+    const read=this.adaptive.repository.readCommittedForEffect(this.owner(owner),()=>this.now());
+    if(read.status!=='ready')throw new AssistantControlError(read.status==='busy'?'busy':'unsupported');
+    if(read.document&&read.document.schemaVersion!==1)throw new AssistantControlError('unsupported');
+    return read.document;
+  }
+  getEnrollment(ownerId:number,botId:number):AssistantDeliveryEnrollment|undefined {
+    if(!Number.isSafeInteger(botId)||botId<=0)throw new AssistantControlError('scope');
+    const c=this.existing(ownerId)?.assistantDeliveryControl;
+    return c?.version===2?structuredClone(c.enrollments.find(r=>r.botId===botId&&r.destinationChatId===ownerId)):undefined;
+  }
+  preflightSource(ownerId:number,ingress:AssistantDeliveryIngress):{controlsPresent:boolean;enrollment?:AssistantDeliveryEnrollment}{
+    ingress=snapshot(ingress);const now=this.now(),occurredAt=this.ingress(ownerId,ingress,now),c=this.existing(ownerId)?.assistantDeliveryControl;
+    if(!c)return {controlsPresent:false};
+    const stream=c.streams.find(s=>s.botId===ingress.botId&&s.destinationChatId===ownerId);
+    const effectKey=JSON.stringify(['adp1','telegram',ingress.botId,ownerId,ingress.messageId,'initial','primary-text']);
+    if(occurredAt<=c.noReplayBefore||ingress.messageId<=(stream?.messageFloor??0)||c.effects.some(r=>r.state.effectKey===effectKey))throw new AssistantControlError('replay_fenced');
+    const enrollment=c.version===2?c.enrollments.find(r=>r.botId===ingress.botId&&r.destinationChatId===ownerId):undefined;
+    return {controlsPresent:true,...(enrollment?{enrollment:structuredClone(enrollment)}:{})};
+  }
   private key(id:string):Uint8Array {const key=this.options.keys.resolve(id);if(!types.isUint8Array(key)||types.isProxy(key)||byteLengthGetter.call(key)!==32)throw new AssistantControlError('key_unavailable');return copyBytes(key,32);}
   private ingress(owner:number,i:AssistantDeliveryIngress,now:number):number {
     if(!i||i.kind!=='initial-text'||i.chatType!=='private'||i.isBot!==false||i.chatId!==owner||i.fromId!==owner||
@@ -62,10 +83,13 @@ export class AssistantDeliveryControlAdapter {
       !Number.isSafeInteger(i.dateSeconds)||i.dateSeconds<0||Object.is(i.dateSeconds,-0)||!Number.isSafeInteger(i.dateSeconds*1000)||i.dateSeconds*1000>now)throw new AssistantControlError('scope');
     return i.dateSeconds*1000;
   }
-  private projection(d:AdaptiveDocument,botId:number,owner:number,now:number){
+  private projection(d:AdaptiveDocument,botId:number,owner:number,now:number,requireEnrollment=true){
     const c=d.assistantDeliveryControl;if(!c||now<c.observedAt||[d.revision,c.revision,c.sourceFenceSequence,c.historyEpoch,c.deletionEpoch].some(n=>n>=MAX-64))throw new AssistantControlError('revision');
-    const projected=this.options.bindingFor(botId,owner),bound=projected?snapshot(projected):null;if(!bound||bound.binding.botId!==botId||bound.binding.destinationChatId!==owner)throw new AssistantControlError('authority');
+    const enrollment=c.version===2?c.enrollments.find(r=>r.botId===botId&&r.destinationChatId===owner):undefined;
+    if(requireEnrollment&&enrollment&&enrollment.revision>=MAX-64)throw new AssistantControlError('revision');
+    const projected=this.options.bindingFor(botId,owner,enrollment?structuredClone(enrollment):undefined),bound=projected?snapshot(projected):null;if(!bound||bound.binding.botId!==botId||bound.binding.destinationChatId!==owner)throw new AssistantControlError('authority');
     const {agentId,space}=bound.scope;
+    if(requireEnrollment&&c.version===2&&(!enrollment?.enabled||enrollment.agentId!==agentId||enrollment.space!==space||enrollment.containerId!==containerIdFor(d.accountId,space)))throw new AssistantControlError('authority');
     if(!['work','personal'].includes(space)||!this.adaptive.isCoreAllowed(d,now)||!['optional.personalization','optional.auto_memory'].every(p=>this.adaptive.isPurposeAllowed(d,space,p as 'optional.personalization'|'optional.auto_memory',now,agentId)))throw new AssistantControlError('authority');
     const grants=d.agentGrants.filter(g=>g.agentId===agentId&&g.space===space).sort((a,b)=>a.revision-b.revision);
     if(!grants.some(g=>g.allowed))throw new AssistantControlError('authority');
@@ -77,7 +101,7 @@ export class AssistantDeliveryControlAdapter {
     const expiresAt=Math.min(d.binding?.expiresAt??now,this.adaptive.capabilityStatus(d,'core_text',now).validUntil??now,
       ...permissions.map(p=>p.expiresAt),...purposes.map(p=>this.adaptive.capabilityStatus(d,p==='optional.auto_memory'?'auto_memory':'personalization',now).validUntil??MAX));
     if(expiresAt<=now)throw new AssistantControlError('authority');
-    const authority:DeliveryAuthority={authorityRevision:digest(['arc1-authority',d.accountId,d.personId,d.binding,this.adaptive.coreFingerprint(d,now),purposes.map(p=>this.adaptive.purposeFingerprint(d,space,p,now,agentId)),bound]),
+    const authority:DeliveryAuthority={authorityRevision:digest(['arc1-authority',d.accountId,d.personId,d.binding,this.adaptive.coreFingerprint(d,now),purposes.map(p=>this.adaptive.purposeFingerprint(d,space,p,now,agentId)),bound,...(c.version===2?[enrollment]:[])]),
       grantRevision:digest(['arc1-grant',grants,permissions.map(p=>[p.epoch,p.revision])]),sourceFenceRevision:digest(['arc1-source',d.accountId,c.sourceFenceSequence,c.noReplayBefore,stream?.messageFloor??0]),
       sourceFenceSequence:c.sourceFenceSequence,historyEpoch:c.historyEpoch,deletionEpoch:c.deletionEpoch,expiresAt};
     return {scope,binding:bound.binding,authority,stream};
@@ -105,6 +129,48 @@ export class AssistantDeliveryControlAdapter {
       if(d.schemaVersion!==1||!this.adaptive.isProfileConfirmed(d,now))throw new AssistantControlError('authority');
       if(d.assistantDeliveryControl)return;
       d.assistantDeliveryControl=emptyAssistantDeliveryControl(now);if(d.revision>=MAX)throw new AssistantControlError('revision');d.revision++;d.updatedAt=now;
+    });
+  }
+  async setEnrollment(input:AssistantDeliveryEnrollmentInput):Promise<AssistantDeliveryEnrollment|undefined>{
+    input=snapshot(input);this.owner(input.ownerId);
+    if(Object.keys(input).sort().join(',')!=='agentId,botId,enabled,expectedEnrollmentRevision,ownerId,requestId'||
+      !Number.isSafeInteger(input.botId)||input.botId<=0||typeof input.agentId!=='string'||!/^[A-Za-z0-9:_-]{1,128}(?![\s\S])/.test(input.agentId)||
+      typeof input.requestId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])/.test(input.requestId)||typeof input.enabled!=='boolean'||
+      input.expectedEnrollmentRevision!==null&&(!Number.isSafeInteger(input.expectedEnrollmentRevision)||input.expectedEnrollmentRevision<1||input.expectedEnrollmentRevision>=MAX-64))throw new AssistantControlError('shape');
+    const before=this.existing(input.ownerId),old=before?.assistantDeliveryControl;
+    const existing=old?.version===2?old.enrollments.find(r=>r.botId===input.botId&&r.destinationChatId===input.ownerId):undefined;
+    if(!input.enabled&&!existing){if(input.expectedEnrollmentRevision!==null)throw new AssistantControlError('conflict');return undefined;}
+    if(input.enabled){
+      if(!before||!this.adaptive.isProfileConfirmed(before,this.now()))throw new AssistantControlError('authority');
+      const key=this.options.keys.current();if(!types.isUint8Array(key.key)||types.isProxy(key.key)||byteLengthGetter.call(key.key)!==32)throw new AssistantControlError('key_unavailable');
+      await this.storage.ensureAssistantDeliveryControlMarker(2);
+      if(!old)await this.initialize(input.ownerId);
+    }
+    return this.write(input.ownerId,(d,now)=>{
+      let c=d.assistantDeliveryControl!;
+      const row=c.version===2?c.enrollments.find(r=>r.botId===input.botId&&r.destinationChatId===input.ownerId):undefined;
+      if(row&&(row.agentId!==input.agentId||row.space!=='work'||row.containerId!==containerIdFor(d.accountId,'work')))throw new AssistantControlError('route_conflict');
+      if(row?.requestId===input.requestId){
+        if(row.enabled===input.enabled&&row.revision===(input.expectedEnrollmentRevision??0)+1)return structuredClone(row);
+        throw new AssistantControlError('conflict');
+      }
+      if((row?.revision??null)!==input.expectedEnrollmentRevision)throw new AssistantControlError('conflict');
+      if(!input.enabled&&!row)return undefined;
+      if(input.enabled){
+        if(row&&row.revision>=MAX-65)throw new AssistantControlError('revision');
+        // Enrollment is the explicit operation under review; all other current authority still applies.
+        const p=this.projection(d,input.botId,input.ownerId,now,false);
+        if(p.scope.agentId!==input.agentId||p.scope.space!=='work')throw new AssistantControlError('authority');
+        if(c.version===1){c={...c,version:2,policyVersion:'arc2-control-7d-v1',enrollments:[]};d.assistantDeliveryControl=c;}
+        if(!row&&c.enrollments.length>=4)throw new AssistantControlError('capacity');
+      }
+      invalidateAssistantDeliveryScope(d,now,'work',input.agentId,!input.enabled,false);
+      c=d.assistantDeliveryControl!;c.noReplayBefore=Math.max(c.noReplayBefore,now);
+      if(c.version!==2)throw new AssistantControlError('conflict');
+      const next:AssistantDeliveryEnrollment={botId:input.botId,destinationChatId:input.ownerId,agentId:input.agentId,space:'work',containerId:containerIdFor(d.accountId,'work'),enabled:input.enabled,
+        enrolledAt:input.enabled?now:row!.enrolledAt,changedAt:now,revision:(row?.revision??0)+1,requestId:input.requestId};
+      if(row)c.enrollments[c.enrollments.indexOf(row)]=next;else c.enrollments.push(next);
+      return structuredClone(next);
     });
   }
   prepare(input:AssistantDeliveryPrepareInput):PreparedAssistantText {
@@ -168,8 +234,8 @@ export class AssistantDeliveryControlAdapter {
     try {transportEvidence=snapshot(transportEvidence);response=snapshot(response);}catch{transportEvidence={} as TransportEvidence;response={httpStatus:200,body:null};}
     return this.write(expected.binding.destinationChatId,(d,now)=>{
       const row=this.resultRow(d,expected,now),c=d.assistantDeliveryControl!;advanceAssistantControl(c,now);
-      if(!this.current(d,row.state,now)&&row.state.contentEligible)invalidateAssistantDeliveryScope(d,now);
-      row.state=reduceDelivery(row.state,{type:'record_response',prepared,evidenceKey:key,transportEvidence,response},assistantExpected(row.state,now));return row.state;
+      if(!this.current(d,row.state,now)&&row.state.contentEligible)invalidateAssistantDeliveryScope(d,now,undefined,undefined,false,false);
+      row.state=reduceDelivery(row.state,{type:'record_response',prepared,evidenceKey:key,transportEvidence:{...transportEvidence,observedAt:now},response},assistantExpected(row.state,now));return row.state;
     });
   }
   recordUncertainty(expected:DeliveryState,reason:'transport_error'|'invalid_response'|'receipt_commit_unconfirmed'='receipt_commit_unconfirmed'):Promise<DeliveryState>{
@@ -180,7 +246,7 @@ export class AssistantDeliveryControlAdapter {
     const c=d.assistantDeliveryControl!;pruneAssistantDeliveryControl(d,now);
     for(const row of c.effects)if(row.state.phase==='sending'||row.state.phase==='generated'&&row.state.expiresAt<=now){advanceAssistantControl(c,now);row.state=reduceDelivery(row.state,{type:row.state.phase==='sending'?'recover_interrupted':'pre_dispatch_denied'},assistantExpected(row.state,now));}
   });}
-  async invalidateSource(owner:number,botId:number,chatId:number,messageId:number):Promise<void>{await this.write(owner,(d,now)=>invalidateAssistantDeliverySource(d,now,botId,chatId,messageId));}
+  async invalidateSource(owner:number,botId:number,chatId:number,messageId:number):Promise<void>{if(!this.existing(owner)?.assistantDeliveryControl)return;await this.write(owner,(d,now)=>invalidateAssistantDeliverySource(d,now,botId,chatId,messageId));}
   async eraseScope(owner:number,space:SpaceKind,agentId?:string):Promise<void>{if(!['work','personal'].includes(space))throw new AssistantControlError('scope');await this.write(owner,(d,now)=>{invalidateAssistantDeliveryScope(d,now,space,agentId,true);});}
   async prune(owner:number):Promise<void>{await this.write(owner,(d,now)=>{pruneAssistantDeliveryControl(d,now);});}
   async exportOwner(owner:number,space:SpaceKind){if(!['work','personal'].includes(space))throw new AssistantControlError('scope');return this.write(owner,(d,now)=>{if(!this.adaptive.isProfileConfirmed(d,now))throw new AssistantControlError('authority');pruneAssistantDeliveryControl(d,now);return exportAssistantDeliveryControl(d,space);});}

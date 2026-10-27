@@ -4,6 +4,7 @@ import { join } from 'path';
 import { createPublicKey } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
+import {parseAssistantTextKeys} from '../assistant-text-integration';
 import { FirestoreStudioStore } from '../firestore-store';
 import { FilePetStore, petStoreFor } from '../pet-store';
 import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
@@ -346,5 +347,36 @@ describe('Studio production configuration', () => {
 
   it('rejects unknown storage modes instead of silently falling back to local disk', () => {
     expect(() => validateStudioConfig({ ...production(), STUDIO_STORAGE: 'firestor' })).toThrow('STUDIO_STORAGE');
+  });
+});
+
+
+describe('ATI1 protected default-off runtime/key composition',()=>{
+  const now=Date.parse('2026-10-27T12:00:00Z'),keyBase64=Buffer.alloc(32,219).toString('base64');
+  const keys=()=>JSON.stringify({currentKeyId:'qa-current',keys:[{keyId:'qa-current',keyBase64}]});
+  it('default off has no key requirement and rejects every noncanonical enable value',()=>{
+    for(const value of [undefined,'','0'])expect(validateStudioConfig({...production(),STUDIO_ASSISTANT_TEXT_DELIVERY:value}).assistantTextEnabled).toBe(false);
+    for(const value of ['true','off','on',' 1','2','-1'])expect(()=>validateStudioConfig({...production(),STUDIO_ASSISTANT_TEXT_DELIVERY:value})).toThrow();
+  });
+  it('on requires actual original FILE polling configuration and keys',()=>{
+    const env={...production(),STUDIO_BOTS:'1',STUDIO_ASSISTANT_TEXT_DELIVERY:'1',STUDIO_ASSISTANT_TEXT_KEYS_JSON:keys()};
+    expect(validateStudioConfig(env).assistantTextEnabled).toBe(true);
+    for(const delta of [{STUDIO_BOTS:'0'},{STUDIO_PUBLIC_URL:'https://synthetic.invalid'},{K_SERVICE:'synthetic'},{VERCEL:'1'},
+      {STUDIO_ADAPTIVE_FORMAT:'file-v2'},{STUDIO_ADAPTIVE_FORMAT:'sqlite-v1'},{STUDIO_ASSISTANT_TEXT_KEYS_JSON:''}])expect(()=>validateStudioConfig({...env,...delta})).toThrow();
+  });
+  it('strict32byte canonical keys copy bytes, expire retired keys and never refresh absolute expiry',()=>{
+    let clock=now;const keyring=parseAssistantTextKeys(JSON.stringify({currentKeyId:'qa-current',keys:[{keyId:'qa-current',keyBase64},
+      {keyId:'qa-expired',keyBase64,notAfter:now-1},{keyId:'qa-retired',keyBase64,notAfter:now+1000}]}),now,()=>clock)!;
+    expect(keyring.resolve('qa-expired')).toBeUndefined();expect(keyring.resolve('qa-retired')?.byteLength).toBe(32);
+    const first=keyring.current();first.key.fill(0);expect(Array.from(keyring.current().key)).toEqual(Array(32).fill(219));
+    clock=now+1000;expect(keyring.resolve('qa-retired')).toBeUndefined();expect(keyring.resolve('unknown')).toBeUndefined();
+  });
+  it('malformed key configurations fail with a content-free fixed error',()=>{
+    const valid={currentKeyId:'qa-current',keys:[{keyId:'qa-current',keyBase64}]};
+    for(const bad of [{...valid,secret:'QA_PRIVATE_KEY_CONFIG'}, {...valid,keys:[{keyId:'qa-current',keyBase64:Buffer.alloc(31).toString('base64')}]},
+      {...valid,keys:[{keyId:'qa-current',keyBase64,notAfter:now+1000}]}, {...valid,keys:[...valid.keys,...valid.keys]},
+      {...valid,keys:[...valid.keys,{keyId:'qa-retired',keyBase64,notAfter:now+7*86400000+1}]}]){
+      expect(()=>parseAssistantTextKeys(JSON.stringify(bad),now,()=>now)).toThrow('assistant_text_keys_invalid');
+    }
   });
 });

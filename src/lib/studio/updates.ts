@@ -22,6 +22,7 @@ import { settingsV2 } from './flags';
 import { BOT_SETTINGS_COMMANDS, commandNames } from './settings-commands';
 import { MY_DATA_CODE, MY_DATA_PAGE } from './my-data-contract';
 import { onCheckinCallback, parseCheckinCallback } from './pet-checkins/deliver';
+import type {AssistantTextPoller} from './assistant-text-integration';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 /** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
@@ -92,17 +93,31 @@ function myDataPageUrl(webAppUrl: string | undefined): string | undefined {
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.
  */
-export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string): Promise<void> {
+export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string,assistantPoller?:AssistantTextPoller): Promise<void> {
+  const assistant=studio.deps.assistantText;
+  if(assistant)update=assistant.snapshotUpdate(update);
+  // Protective controls precede inactive/blocked/member reply eligibility and
+  // remain independent of received-user archive composition/enrollment.
+  await assistant?.invalidateEdit(agentId,update,assistantPoller);
+  if(update.edited_message){
+    // Both protective adapters finish before acknowledgement. Neither removed
+    // membership nor a public/private greeting path can turn an edit into send.
+    await studio.deps.telegramArchive?.invalidateEditedMessage(agentId,update.edited_message);
+    return;
+  }
+  const deliveryIngress=assistant?.ingress(agentId,update,assistantPoller);
+  const deliverySelection=update.message?await assistant?.preflight(agentId,update.message,deliveryIngress):undefined;
   // Circles S5: a channel admin bot hears every subscriber join and leave; channels are no audience, so nothing is built, deduped or kept for them.
   if (update.chat_member?.chat.type === 'channel' && studio.circlesMode() === 'circles') return;
   const endpoint = endpointId ? { personaId: agentId, id: endpointId } : undefined;
-  const initial = await studio.gateway(endpoint);
+  const compactScope=deliverySelection==='qualified'&&update.message?assistant!.compactScope(agentId,update.message,deliveryIngress):undefined;
+  const initial = await studio.gateway(endpoint,compactScope);
   const state = initial.state;
   let gateway = initial.gateway;
   const live = state.agents.find((a) => a.id === agentId);
   if (!live || live.status !== 'active') return;
   // Webhook deployments have no reconcile loop: traffic reaching the bot repairs a stale profile.
-  studio.nudgeBotProfile(live);
+  if(deliverySelection===undefined||deliverySelection==='legacy')studio.nudgeBotProfile(live);
   if (update.my_chat_member) {
     await studio.onBotChatMember(live, update.my_chat_member);
     return;
@@ -141,7 +156,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   }
   const msg = update.message ?? update.edited_message;
   if (!msg) {
-    await gateway.handleUpdate(agentId, update);
+    await gateway.handleUpdate(agentId, update,deliveryIngress);
     return;
   }
   if (!msg.from || msg.from.is_bot || (live.blocked ?? []).includes(msg.from.id)) return;
@@ -163,7 +178,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     await studio.noteGroupSpeaker(msg.chat.id, msg.from);
     ({ gateway } = await studio.gateway(endpoint));
-    await gateway.handleUpdate(agentId, update);
+    await gateway.handleUpdate(agentId, update,deliveryIngress);
     return;
   }
   if (msg.chat.type !== 'private') return;
@@ -219,10 +234,13 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     }
     noteRequestedRoutineActivity(studio, agentId, msg);
     if (await handleRequestedRoutineMessage(studio, agentId, msg, endpointId)) return;
+    // Existing explicit controls/notes/routines retain their own paths. An
+    // ordinary selected refusal cannot reach generation or stranger fallback.
+    if(deliverySelection==='refused'&&!studio.circleNotes.wants(live,msg.text??''))return;
     const turnId = createHash('sha256').update(JSON.stringify([agentId, endpointId ?? '', update.update_id])).digest('hex');
     const observe = await beginObservation(studio, member.telegramId, agentId, 'work', 'telegram', turnId);
     try {
-      const result = await observe.run(() => gateway.handleUpdate(agentId, update));
+      const result = await observe.run(() => gateway.handleUpdate(agentId, update,deliveryIngress));
       // Duplicate and command updates are not new conversation measurements.
       if (result === 'replied') await observe('responded');
       else if (result === 'ignored') await observe('unknown');
@@ -230,6 +248,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     return;
   }
 
+  if(deliverySelection==='refused')return;
   const token = studio.botToken(live);
   if (!token) return;
   const bot = studio.deps.botFor(token);
@@ -258,7 +277,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   const text = msg.text ?? msg.caption ?? '';
   if (text.startsWith('/')) {
     // Commands (/start, /memories…) go straight through; the gateway handles them.
-    await gateway.handleUpdate(agentId, update);
+    await gateway.handleUpdate(agentId, update,deliveryIngress);
     return;
   }
   // A voice note is decided like text, on a fixed content-free placeholder. A
@@ -267,7 +286,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   // for an audience that includes a guest (PRIV-023).
   const decision = await studio.decideOnStranger(live, text || (msg.voice ? STRANGER_VOICE_PLACEHOLDER : ''));
   if (decision.action === 'reply') {
-    await gateway.handleUpdate(agentId, update);
+    await gateway.handleUpdate(agentId, update,deliveryIngress);
   } else if (decision.action === 'decline') {
     await bot.sendMessage(msg.chat.id, decision.message!);
   } else if (decision.action === 'block') {

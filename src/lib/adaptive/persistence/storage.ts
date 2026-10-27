@@ -98,25 +98,36 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
   constructor(readonly directory: string) {}
   static readonly assistantControlMarker = 'assistant-delivery-control-v1.json';
   static readonly assistantControlMarkerBytes = '{"version":1,"kind":"assistant-delivery-control"}\n';
-  assertAssistantDeliveryControlMarker(): void {
+  static readonly assistantControlV2Marker = 'assistant-delivery-control-v2.json';
+  static readonly assistantControlV2MarkerBytes = '{"version":2,"kind":"assistant-delivery-control"}\n';
+  assertAssistantDeliveryControlMarker(version:1|2=1): void {
+    this.assertAssistantMarker(FileAdaptiveStorage.assistantControlMarker,FileAdaptiveStorage.assistantControlMarkerBytes);
+    if(version===2||lstatSync(join(this.directory,FileAdaptiveStorage.assistantControlV2Marker),{throwIfNoEntry:false}))this.assertAssistantMarker(FileAdaptiveStorage.assistantControlV2Marker,FileAdaptiveStorage.assistantControlV2MarkerBytes);
+  }
+  private assertAssistantMarker(name:string,bytes:string):void {
     const directory=lstatSync(this.directory);
     if(!directory.isDirectory()||directory.isSymbolicLink())throw new Error('Assistant control format unavailable');
-    const path=join(this.directory,FileAdaptiveStorage.assistantControlMarker), before=lstatSync(path);
+    const path=join(this.directory,name), before=lstatSync(path);
     if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.size>128)throw new Error('Assistant control format unavailable');
     const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
-    try {const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||stat.ino!==before.ino||stat.dev!==before.dev||stat.size>128||readFileSync(fd,'utf8')!==FileAdaptiveStorage.assistantControlMarkerBytes)throw new Error('Assistant control format unavailable');}
+    try {const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||stat.ino!==before.ino||stat.dev!==before.dev||stat.size>128||readFileSync(fd,'utf8')!==bytes)throw new Error('Assistant control format unavailable');}
     finally{closeSync(fd);}
   }
-  async ensureAssistantDeliveryControlMarker(): Promise<void> {
+  async ensureAssistantDeliveryControlMarker(version:1|2=1): Promise<void> {
+    await this.ensureAssistantMarker(FileAdaptiveStorage.assistantControlMarker,FileAdaptiveStorage.assistantControlMarkerBytes);
+    if(version===2)await this.ensureAssistantMarker(FileAdaptiveStorage.assistantControlV2Marker,FileAdaptiveStorage.assistantControlV2MarkerBytes);
+    this.assertAssistantDeliveryControlMarker(version);
+  }
+  private async ensureAssistantMarker(name:string,bytes:string):Promise<void>{
     await fs.mkdir(this.directory,{recursive:true,mode:0o700});
     const directory=await fs.lstat(this.directory);if(!directory.isDirectory()||directory.isSymbolicLink())throw new Error('Assistant control format unavailable');
     let file;
-    try {file=await fs.open(join(this.directory,FileAdaptiveStorage.assistantControlMarker),'wx',0o600);}
-    catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;this.assertAssistantDeliveryControlMarker();}
-    if(file){try{await file.writeFile(FileAdaptiveStorage.assistantControlMarkerBytes);await file.sync();}finally{await file.close();}}
-    else{const existing=await fs.open(join(this.directory,FileAdaptiveStorage.assistantControlMarker),constants.O_RDONLY|constants.O_NOFOLLOW);try{await existing.sync();}finally{await existing.close();}}
+    try {file=await fs.open(join(this.directory,name),'wx',0o600);}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;this.assertAssistantMarker(name,bytes);}
+    if(file){try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}}
+    else{const existing=await fs.open(join(this.directory,name),constants.O_RDONLY|constants.O_NOFOLLOW);try{await existing.sync();}finally{await existing.close();}}
     const handle=await fs.open(this.directory,'r');try{await handle.sync();}finally{await handle.close();}
-    this.assertAssistantDeliveryControlMarker();
+    this.assertAssistantMarker(name,bytes);
   }
   private committedRevision(accountId: string): number {
     const file = join(this.directory, `${key(accountId)}.json`);
@@ -136,13 +147,14 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     return { key: probe.key, value, local: () => this.committedRevision(accountId) };
   }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
+    if(lstatSync(join(this.directory,FileAdaptiveStorage.assistantControlMarker),{throwIfNoEntry:false})||lstatSync(join(this.directory,FileAdaptiveStorage.assistantControlV2Marker),{throwIfNoEntry:false}))this.assertAssistantDeliveryControlMarker();
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) return { status: 'busy' };
     let raw:string;
     try { raw=readFileSync(file,'utf8'); }
     catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {status:'ready',document:null};throw error;}
     const document=JSON.parse(raw);
-    if(document?.assistantDeliveryControl!==undefined){try{this.assertAssistantDeliveryControlMarker();}catch{throw new Error('Assistant control format unavailable');}}
+    if(document?.assistantDeliveryControl!==undefined){try{this.assertAssistantDeliveryControlMarker(document.assistantDeliveryControl?.version===2?2:1);}catch{throw new Error('Assistant control format unavailable');}}
     if(existsSync(`${file}.lock`))return {status:'busy'};
     return {status:'ready',document};
   }
@@ -194,7 +206,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
       }
       const before=current===null?undefined:structuredClone(current) as AdaptiveDocument;
       const { document, result } = mutate(current);
-      if(before?.assistantDeliveryControl || (document as AdaptiveDocument)?.assistantDeliveryControl)this.assertAssistantDeliveryControlMarker();
+      if(before?.assistantDeliveryControl || (document as AdaptiveDocument)?.assistantDeliveryControl)this.assertAssistantDeliveryControlMarker((document as AdaptiveDocument)?.assistantDeliveryControl?.version===2||before?.assistantDeliveryControl?.version===2?2:1);
       if((document as AdaptiveDocument)?.assistantDeliveryControl!==undefined){const d=document as AdaptiveDocument;if(d.schemaVersion!==1)throw new Error('Assistant control format unavailable');parseAssistantDeliveryControl(d.assistantDeliveryControl,accountId,d.personId,d.updatedAt);}
       assertAssistantDeliveryTransition(before,document as AdaptiveDocument,this.assistantWriters.has(mutate));
       const json = encode(document);
