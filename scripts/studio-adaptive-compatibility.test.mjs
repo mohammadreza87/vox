@@ -945,7 +945,7 @@ test('ARC1 actual baseline803 scanner refuses permanent marker before any person
     assert.throws(() => prior.assertReleaseAdaptiveCompatibility(f.env, prior.ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
     assert.equal(requiredAdaptiveCapabilities(f.env).assistantDeliveryControlVersion, 1);
     const { supportedAssistantDeliveryControlVersions, ...old } = ADAPTIVE_RELEASE_CAPABILITIES;
-    assert.deepEqual(supportedAssistantDeliveryControlVersions, [1]);
+    assert.deepEqual(supportedAssistantDeliveryControlVersions, [1, 2]);
     assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
     assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).assistantDeliveryControlVersion, 1);
     assert.deepEqual(readFileSync(marker), before);
@@ -987,7 +987,7 @@ test('ARC1 marker symlink and hardlink cannot establish compatible storage', () 
 test('ARC1 empty and safety-only controls require reader while flags off; malformed controls never disappear', () => fixture(f => {
   legacy(f); arcMarker(f); f.env.STUDIO_TELEGRAM_ARCHIVE = '0'; f.env.STUDIO_TELEGRAM_ARCHIVE_SNAPSHOTS = '0';
   const { supportedAssistantDeliveryControlVersions: omitted, ...priorCapabilities } = ADAPTIVE_RELEASE_CAPABILITIES;
-  assert.deepEqual(omitted, [1]);
+  assert.deepEqual(omitted, [1, 2]);
   for (const value of [arcEmpty(), { ...arcEmpty(), revision: 8, observedAt: 900, noReplayBefore: 800,
     sourceFenceSequence: 7, historyEpoch: 2, deletionEpoch: 2 }]) {
     putCanonical(f, { ...document(), updatedAt: value.observedAt, assistantDeliveryControl: value });
@@ -1005,8 +1005,74 @@ test('ARC1 empty and safety-only controls require reader while flags off; malfor
 
 test('ARC1 unsupported reader capability values cannot bypass marker or canonical requirements', () => fixture(f => {
   legacy(f); arcMarker(f); putCanonical(f, { ...document(), assistantDeliveryControl: arcEmpty() });
-  for (const value of [null, [], [0], [2], [1, 1], [1, 2], '1', true]) {
+  for (const value of [null, [], [0], [2], [1, 1], [1, 2, 2], [1, 3], '1', true]) {
     assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES,
       supportedAssistantDeliveryControlVersions: value }), /incompatible/);
+  }
+}));
+
+
+// ATI1 protected actual c42 downgrade oracle. Its marker-only refusal survives
+// full personal account removal; these tests never operate on installed data.
+const ATI_PREVIOUS_SCANNER_SHA = '33a023c9aa630190abbbb1d76e63042cc4fe2548e2ded27559ae28a1232eb53e';
+const ATI_MARKER_NAME = 'assistant-delivery-control-v2.json';
+const ATI_MARKER_BYTES = '{"version":2,"kind":"assistant-delivery-control"}\n';
+async function previousAtiScanner() {
+  const bytes = readFileSync(new URL('./fixtures/assistant-text-integration-prior-reader/studio-adaptive-compatibility.mjs', import.meta.url));
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), ATI_PREVIOUS_SCANNER_SHA);
+  return import('./fixtures/assistant-text-integration-prior-reader/studio-adaptive-compatibility.mjs');
+}
+function atiMarker(f, bytes = ATI_MARKER_BYTES) {
+  arcMarker(f); const path = join(f.env.STUDIO_DATA_DIR, 'adaptive', ATI_MARKER_NAME);
+  writeFileSync(path, bytes, {mode:0o600}); return path;
+}
+const atiEmpty = () => ({...arcEmpty(),version:2,policyVersion:'arc2-control-7d-v1',enrollments:[]});
+
+test('ATI1 actual c42 scanner refuses permanent v2 marker-only including after personal account erasure', async () => {
+  const prior = await previousAtiScanner();
+  fixture(f => {
+    legacy(f); arcMarker(f);
+    assert.doesNotThrow(() => prior.assertReleaseAdaptiveCompatibility(f.env,prior.ADAPTIVE_RELEASE_CAPABILITIES));
+    const marker=atiMarker(f), before=readFileSync(marker);
+    assert.throws(() => prior.assertReleaseAdaptiveCompatibility(f.env,prior.ADAPTIVE_RELEASE_CAPABILITIES),/incompatible/);
+    assert.equal(requiredAdaptiveCapabilities(f.env).assistantDeliveryControlVersion,2);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env,ADAPTIVE_RELEASE_CAPABILITIES).assistantDeliveryControlVersion,2);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env,{...ADAPTIVE_RELEASE_CAPABILITIES,supportedAssistantDeliveryControlVersions:[1]}),/incompatible/);
+    putCanonical(f,{...document(),assistantDeliveryControl:atiEmpty()});
+    assert.equal(requiredAdaptiveCapabilities(f.env).assistantDeliveryControlVersion,2);
+    rmSync(join(f.env.STUDIO_DATA_DIR,'adaptive',`${accountKey}.json`));
+    assert.throws(() => prior.assertReleaseAdaptiveCompatibility(f.env,prior.ADAPTIVE_RELEASE_CAPABILITIES),/incompatible/);
+    assert.deepEqual(readFileSync(marker),before);
+  });
+});
+
+test('ATI1 v2 canonical state requires both permanent markers even empty or disabled', () => fixture(f => {
+  legacy(f); atiMarker(f); f.env.STUDIO_ASSISTANT_TEXT_DELIVERY='0';
+  putCanonical(f,{...document(),assistantDeliveryControl:atiEmpty()});
+  assert.equal(requiredAdaptiveCapabilities(f.env).assistantDeliveryControlVersion,2);
+  const v2=join(f.env.STUDIO_DATA_DIR,'adaptive',ATI_MARKER_NAME),v1=join(f.env.STUDIO_DATA_DIR,'adaptive',ARC_MARKER_NAME);
+  rmSync(v2); assert.throws(() => requiredAdaptiveCapabilities(f.env),/incompatible/);
+  atiMarker(f); rmSync(v1); assert.throws(() => requiredAdaptiveCapabilities(f.env),/incompatible/);
+}));
+
+test('ATI1 v2 marker strictly rejects malformed/newer/private bytes and linked files', () => fixture(f => {
+  legacy(f);
+  for(const value of ['', '{}', ATI_MARKER_BYTES.trimEnd(), ATI_MARKER_BYTES+'\n',
+    '{"version":3,"kind":"assistant-delivery-control"}\n',
+    '{"version":2,"kind":"assistant-delivery-control","owner":300}\n']) {
+    atiMarker(f,value); assert.throws(() => requiredAdaptiveCapabilities(f.env),/incompatible/);
+  }
+  const marker=atiMarker(f),target=join(f.dir,'ati2-qa-marker-target');writeFileSync(target,ATI_MARKER_BYTES,{mode:0o600});
+  rmSync(marker);symlinkSync(target,marker);assert.throws(() => requiredAdaptiveCapabilities(f.env),/incompatible/);
+  rmSync(marker);linkSync(target,marker);assert.throws(() => requiredAdaptiveCapabilities(f.env),/incompatible/);
+}));
+
+test('ATI1 exact v2 fields retain existing reservation and reject unlisted enrollment state', () => fixture(f => {
+  legacy(f);atiMarker(f);
+  for(const value of [{...atiEmpty(),payload:'QA_ATI_PRIVATE_FORBIDDEN'},
+    {...atiEmpty(),enrollments:[{enabled:true}]},
+    {...atiEmpty(),enrollments:Array.from({length:5},()=>({}))},
+    {...atiEmpty(),version:3}, {...atiEmpty(),policyVersion:'arc2-unapproved'}]) {
+    putCanonical(f,{...document(),assistantDeliveryControl:value});assert.throws(() => requiredAdaptiveCapabilities(f.env),/incompatible/);
   }
 }));

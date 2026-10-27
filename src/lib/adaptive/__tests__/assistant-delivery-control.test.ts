@@ -21,7 +21,8 @@ import * as observation from '../observation/contracts';
 import { AdaptiveRepository, accountIdFor, containerIdFor, type AdaptiveDocument } from '../persistence/repository';
 import { FileAdaptiveStorage } from '../persistence/storage';
 import { prepareAssistantText, type DeliveryState } from '../../tireh/delivery/assistant-text-protocol';
-import { assistantCapacityProjection, assistantFutureStateBytes, assertAssistantDeliveryTransition,
+import * as deliveryProtocol from '../../tireh/delivery/assistant-text-protocol';
+import { assistantCapacityProjection, assistantControlReservedFutureBytes, assistantFutureStateBytes, assertAssistantDeliveryTransition,
   emptyAssistantDeliveryControl, exportAssistantDeliveryControl, invalidateAssistantDeliveryScope,
   invalidateAssistantDeliverySource, parseAssistantDeliveryControl, pruneAssistantDeliveryControl,
   ASSISTANT_CONTROL_IDLE_MS, ASSISTANT_CONTROL_RESERVED_BYTES, ASSISTANT_CONTROL_STATE_BYTES,
@@ -212,5 +213,45 @@ describe('ARC1 independent canonical, retention and exact prior reader boundarie
     const { document } = await canonical(), doc = controlled(document), before = copy(doc);
     const result = stripTelegramArchiveForRollback({ ...doc, telegramArchives: [] }, ACCOUNT);
     expect(result.document.assistantDeliveryControl).toEqual(before.assistantDeliveryControl); expect(doc).toEqual(before);
+  });
+});
+
+
+/** Frozen installed c42 schema, including its actual v1 control parser. */
+function installedC42Repository() {
+  const directory='scripts/fixtures/assistant-text-integration-prior-reader/';
+  const load=(name:string,sha:string,modules:Record<string,unknown>)=>{
+    const bytes=readFileSync(directory+name);expect(createHash('sha256').update(bytes).digest('hex')).toBe(sha);
+    const exports:Record<string,unknown>={};
+    const js=transpileModule(bytes.toString('utf8'),{compilerOptions:{module:ModuleKind.CommonJS}}).outputText;
+    new Function('require','exports',js)((id:string)=>{if(!(id in modules))throw Error(`Unexpected frozen c42 import ${id}`);return modules[id];},exports);
+    return exports;
+  };
+  const oldControl=load('assistant-delivery-control.ts.fixture','0fc3ef4f331d3d3a28057968d1c93e9f61036f7850915c00bc4d418e78ebc503',{
+    crypto,zod,'../tireh/delivery/assistant-text-protocol':deliveryProtocol});
+  return load('repository.ts.fixture','a696a167d2528c88fff33d6bc782a09c99d4b094f2d9e04a13a4a850e9b07eb6',{
+    crypto,zod,'../assistant-delivery-control':oldControl,'../telegram-archive-state':archives,
+    '../rights-use-holds/contracts':rightsContracts,'../rights-use-holds/state':rightsState,
+    '../product-pause/contracts':pauseContracts,'../product-pause/state':pauseState,
+    '../../tireh/privacy/read-scope':readScope,'./storage':storageModule,
+    '../runtime/contracts':runtime,'../relationships/contracts':relationships,'../observation/contracts':observation,
+  }) as unknown as {validateAdaptiveDocument:typeof import('../persistence/repository').validateAdaptiveDocument};
+}
+
+describe('ATI1 protected installed c42 schema refusal',()=>{
+  it('actual frozen c42 accepts original v1 but refuses strict v2 without rewriting any source bytes',async()=>{
+    const f=await canonical(),old=installedC42Repository(),original=controlled(f.document,0);
+    expect(old.validateAdaptiveDocument(original,ACCOUNT,NOW).assistantDeliveryControl?.version).toBe(1);
+    const v2={...original,assistantDeliveryControl:{...original.assistantDeliveryControl,version:2,policyVersion:'arc2-control-7d-v1',enrollments:[]}};
+    const before=JSON.stringify(v2);expect(()=>old.validateAdaptiveDocument(v2,ACCOUNT,NOW)).toThrow();expect(JSON.stringify(v2)).toBe(before);
+  });
+});
+
+
+describe('ATI1 protected unchanged capacity reservation',()=>{
+  it('complete future32effect/fourstream/fourenrollment witness remains below the existing160KiB reservation',()=>{
+    const v1=assistantControlReservedFutureBytes(1),v2=assistantControlReservedFutureBytes(2);
+    expect(v2).toBeGreaterThan(v1);expect(v1).toBeGreaterThanOrEqual(32*4096);expect(v2).toBeLessThanOrEqual(163840);
+    expect(ASSISTANT_CONTROL_RESERVED_BYTES).toBe(163840);expect(ASSISTANT_CONTROL_STATE_BYTES).toBe(4096);expect(ASSISTANT_CONTROL_TTL_MS).toBe(7*86400000);
   });
 });

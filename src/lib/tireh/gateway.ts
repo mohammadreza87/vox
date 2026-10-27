@@ -142,6 +142,8 @@ interface TurnBoundary {
 }
 
 export interface GatewayDeps {
+  /** ATI1's actually composed owner Work text seam. Undefined preserves legacy. */
+  assistantText?:AssistantTextGatewayHook;
   runtimePrivacy?: RuntimePrivacy;
   org: OrgDirectory;
   llm: LLM;
@@ -187,6 +189,20 @@ export interface GatewayDeps {
   notes?: { intercept(personaId: string, chat: ChatContext, message: TelegramMessage, text: string, addressed: boolean): Promise<boolean> };
   /** Studio settings: a button under a command's private reply (e.g. "Open Memory settings"); undefined = none. */
   commandKeyboard?(personaId: string, command: string, from: TelegramUser): Promise<InlineKeyboard | undefined>;
+}
+
+export type AssistantTextDeliveryResult =
+  | {kind:'sent';effectKey:string;messageId:number;contentEligible:boolean;submittedText?:string}
+  | {kind:'unknown';reason:'uncertain'}
+  | {kind:'refused';reason:'authority'|'duplicate'};
+export interface AssistantTextDeliveryInput {
+  agentId:string;message:TelegramMessage;ingress?:unknown;generatedText:string;decoratedText:string;
+  checkCurrent:(dispatchFence:()=>boolean)=>boolean;
+}
+export interface AssistantTextGatewayHook {
+  preflight(agentId:string,message:TelegramMessage,ingress?:unknown):Promise<'legacy'|'qualified'|'refused'>;
+  legacyCurrent(agentId:string,message:TelegramMessage,ingress?:unknown):boolean;
+  deliver(input:AssistantTextDeliveryInput):Promise<AssistantTextDeliveryResult>;
 }
 
 /** /whoami in a group answers by a private message: a person's details are never posted in a group. */
@@ -391,22 +407,22 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return this.deps.now?.() ?? new Date();
   }
 
-  async handleUpdate(personaId: string, update: TelegramUpdate): Promise<HandleResult> {
+  async handleUpdate(personaId: string, update: TelegramUpdate, deliveryIngress?:unknown): Promise<HandleResult> {
     const message = update.message;
-    if (!this.deps.stageTimings || !message || currentStageTimer()) return this.handleUpdateUntimed(personaId, update);
+    if (!this.deps.stageTimings || !message || currentStageTimer()) return this.handleUpdateUntimed(personaId, update, deliveryIngress);
     const timer = new StageTimer(message.voice ? 'voice_note' : message.chat.type === 'private' ? 'private_text' : 'group_text');
-    try { return await timer.run(() => this.handleUpdateUntimed(personaId, update)); }
+    try { return await timer.run(() => this.handleUpdateUntimed(personaId, update, deliveryIngress)); }
     finally { timer.emit(this.log); }
   }
 
-  private async handleUpdateUntimed(personaId: string, update: TelegramUpdate): Promise<HandleResult> {
+  private async handleUpdateUntimed(personaId: string, update: TelegramUpdate, deliveryIngress?:unknown): Promise<HandleResult> {
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) return 'unknown-persona';
 
     if (!(await this.deps.deduper.firstSeen(`${personaId}__${update.update_id}`))) return 'duplicate';
 
     if (update.callback_query) return this.handleCallback(persona, update.callback_query);
-    if (update.message) return this.handleMessage(persona, update.message);
+    if (update.message) return this.handleMessage(persona, update.message, deliveryIngress);
     return 'ignored';
   }
 
@@ -414,7 +430,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   // MESSAGES
   // ============================================
 
-  private async handleMessage(persona: Persona, message: TelegramMessage): Promise<HandleResult> {
+  private async handleMessage(persona: Persona, message: TelegramMessage, deliveryIngress?:unknown): Promise<HandleResult> {
     const { org } = this.deps;
     const bot = this.deps.botFor(persona.id);
     if (!message.from || message.from.is_bot) return 'ignored';
@@ -464,6 +480,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const handled = await this.handleCommand(persona, chat, speaker.id, message, rawText);
       if (handled) return 'command';
     }
+    const delivery=await this.deps.assistantText?.preflight(persona.id,message,deliveryIngress)??'legacy';
+    if(delivery==='refused')return 'ignored';
 
     const targeting = groupAddressing(persona, message);
     // Content-free attention: the person this agent just answered keeps it while nobody else, person or
@@ -578,8 +596,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (shouldReply && await this.groupAllowed(persona, chat, speaker.id, action)) {
       const format = await this.replyFormat(persona, chat, speaker.id, message, text, boundary);
       const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
+      if(delivery==='qualified'&&(!boundary.compact||chat.kind!=='private'||boundary.space!=='work'||voiceWanted))return 'ignored';
       const canSpeak = this.canSpeak(persona, boundary);
-      await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
+      if(delivery!=='qualified')await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: { text: string; sources: WebSource[] };
       try {
         generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images, undefined, undefined, undefined, extras);
@@ -591,8 +610,18 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const voided = () => { if (chat.kind === 'group') logTelegramDiagnostic(this.log, 'group_reply_voided'); return 'ignored' as const; };
       if (!reply) return voided();
       if (!(await this.groupAllowed(persona, chat, speaker.id, action))) return voided();
+      if(delivery==='qualified'){
+        if(!await this.unchanged(persona,chat,speaker.id,boundary))return voided();
+        const result=await this.deps.assistantText!.deliver({agentId:persona.id,message,ingress:deliveryIngress,generatedText:reply,decoratedText:withSources(reply,sources),
+          checkCurrent:check=>this.exportAuthorizedNow(persona,chat,speaker.id,boundary,check)});
+        // Exact submitted text/outbound ID are transient only. Compact history
+        // and assistant extraction intentionally remain absent for this slice.
+        if(result.kind!=='sent')return 'ignored';
+        currentStageTimer()?.markOnce('total');
+      }else{
+      const legacyFence=()=>!this.deps.assistantText||this.deps.assistantText.legacyCurrent(persona.id,message,deliveryIngress);
       const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, action, privacyEpoch, async () => this.unchanged(persona, chat, speaker.id, boundary),
-        boundary.compact ? () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) : undefined,
+        boundary.compact ? () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary,legacyFence) : this.deps.assistantText?legacyFence:undefined,
         boundary.notesRevision !== undefined ? () => this.notesCurrent(persona, chat, boundary) : undefined);
       if (delivered === null) return voided();
       // A proactive contribution never opens a follow-up: the throttle governs that person's next line.
@@ -604,6 +633,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
       };
       await this.retain(persona, chat, speaker.id, assistantMessage, boundary);
+      }
     } else {
       shouldReply = false;
     }
