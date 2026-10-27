@@ -127,6 +127,22 @@ export class StudioAssistantTextIntegration implements AssistantTextGatewayHook 
     const p=this.pollers.get(capability);if(!p||p.agentId!==agentId||!p.active()||this.stopped||!message.from||message.from.is_bot||message.chat.type!=='private'||message.chat.id!==message.from.id)return;
     try {if(this.route(agentId,p.botId,message.from.id,send).token===p.token)return p;}catch{/* Refuse stale/ambiguous route. */}
   }
+  /** ER1 supports original private text commands as well as ordinary text. */
+  memoryAccountSourceCurrent(agentId:string,message:TelegramMessage,poller?:AssistantTextPoller):boolean {
+    try{this.studio.deps.fileRuntimeOwner?.assertCurrent();return !!this.authentic(agentId,message,poller,true);}catch{return false;}
+  }
+  /** Suppression authenticates the same original DM/credential, independently of reply eligibility. */
+  memoryAccountEditSourceCurrent(agentId:string,message:TelegramMessage,poller?:AssistantTextPoller):boolean {
+    try{this.studio.deps.fileRuntimeOwner?.assertCurrent();return Number.isSafeInteger(message.message_id)&&message.message_id>0&&!!this.authentic(agentId,message,poller,false);}catch{return false;}
+  }
+  memoryAccountStatelessSourceCurrent(agentId:string,message:TelegramMessage,poller?:AssistantTextPoller):boolean {
+    try{
+      this.studio.deps.fileRuntimeOwner?.assertCurrent();
+      if(!poller||!message.from||message.from.is_bot)return false;
+      const p=this.pollers.get(poller);if(!p||p.agentId!==agentId||!p.active()||this.stopped)return false;
+      return this.route(agentId,p.botId,message.from.id,false).token===p.token;
+    }catch{return false;}
+  }
   ingress(agentId:string,update:TelegramUpdate,poller?:AssistantTextPoller):unknown {
     const message=update.message;if(!message||!this.plain(message))return;
     const p=this.authentic(agentId,message,poller,true);if(!p)return;
@@ -153,12 +169,15 @@ export class StudioAssistantTextIntegration implements AssistantTextGatewayHook 
   }
   async invalidateEdit(agentId:string,update:TelegramUpdate,poller?:AssistantTextPoller):Promise<void>{
     const message=update.edited_message;if(!message)return;
-    const p=this.authentic(agentId,message,poller,false);if(!p)return;
+    const protective=this.studio.deps.memoryAccount?.protectiveEdit()===true;
+    if(protective)this.studio.deps.memoryAccount!.assertProtectiveEditCurrent();
+    const p=this.authentic(agentId,message,poller,false);if(!p){if(protective)throw new SourceFencePendingError();return;}
     try {
       const read=this.studio.deps.adaptive!.repository.readCommittedForEffect(accountIdFor(message.from!.id),()=>this.now());
       if(read.status!=='ready')throw new AssistantControlError('busy');
       if(!read.document?.assistantDeliveryControl)return;
       await this.control.invalidateSource(message.from!.id,p.botId,message.chat.id,message.message_id);
+      if(protective)this.studio.deps.memoryAccount!.assertProtectiveEditCurrent();
     }catch{throw new SourceFencePendingError();}
   }
   async preflight(agentId:string,message:TelegramMessage,ingress?:unknown):Promise<'legacy'|'qualified'|'refused'>{

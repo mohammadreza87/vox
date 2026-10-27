@@ -26,6 +26,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedProviderTemplateSchemas: Object.freeze([1]),
   supportedAssistantDeliveryControlVersions: Object.freeze([1,2]),
   supportedFileRuntimeOwnerVersions: Object.freeze([1]),
+  supportedMemoryAccountLifecycleVersions: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
   supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
@@ -412,6 +413,92 @@ const arcId = s => typeof s === 'string' && /^[A-Za-z0-9:_-]{1,128}(?![\s\S])/.t
 const arcHash = s => typeof s === 'string' && /^[a-f0-9]{64}(?![\s\S])/.test(s);
 const arcUuid = s => typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])/.test(s);
 const arcBytes = value => Buffer.byteLength(JSON.stringify(value));
+const MEMORY_ACCOUNT_MARKER = 'memory-account-lifecycle-v1.json';
+const MEMORY_ACCOUNT_MARKER_BYTES = '{"version":1,"kind":"memory-account-lifecycle"}\n';
+const MEMORY_ACCOUNT_TIME = 'memory-account-time-v1.json';
+// Root format observations only; no owner identity, erased membership or payload.
+const memoryAccountRootsSlot = Symbol.for('vox.memory-account-release-admission.v1');
+const memoryAccountRoots = () => globalThis[memoryAccountRootsSlot] ??= new Map();
+const memoryAccountCutoff = at => Math.ceil((at + 3000) / 1000) * 1000;
+const memoryAccountId = id => typeof id === 'string' && /^telegram-account:[1-9]\d{0,15}(?![\s\S])/.test(id) && Number.isSafeInteger(Number(id.slice(17)));
+function readMemoryAccountPrivate(path, maximum, budget) {
+  safePath(path, 'file');
+  const before = stat(path), uid = process.getuid?.();
+  const privateFile = info => info?.isFile() && info.nlink === 1 && info.uid === uid && (info.mode & 0o777) === 0o600 && info.size <= maximum;
+  const same = (a, b) => privateFile(a) && privateFile(b) && ['dev','ino','size','mtimeMs','ctimeMs'].every(k => a[k] === b[k]);
+  if (!privateFile(before) || budget && (budget.bytes += before.size) > MAX_SCAN_BYTES) fail();
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const held = fstatSync(fd);
+    if (!same(before, held)) fail();
+    const bytes = Buffer.alloc(maximum + 1); let length = 0, got;
+    do { got = readSync(fd, bytes, length, bytes.length - length, null); length += got; } while (got && length < bytes.length);
+    safePath(path, 'file');
+    if (length > maximum || length !== held.size || !same(held, fstatSync(fd)) || !same(held, stat(path))) fail();
+    const encoded = bytes.subarray(0, length), text = new TextDecoder('utf-8', { fatal: true }).decode(encoded);
+    if (!Buffer.from(text, 'utf8').equals(encoded)) fail();
+    return text;
+  } finally { closeSync(fd); }
+}
+function scanMemoryLifecycle(doc, required) {
+  const present = Object.hasOwn(doc, 'memoryLifecycle');
+  if (required.memoryAccountLifecycleVersion !== 1) { if (present) fail(); return; }
+  const c = doc.memoryLifecycle;
+  if (!present || !object(c) || !['legacy-current','fresh-confirmed'].includes(c.mode) ||
+      !keys(c, ['version','mode','incarnation','revision', ...(c.mode === 'fresh-confirmed' ? ['confirmedAt','sourceCutoffMs'] : [])]) ||
+      c.version !== 1 || !arcHash(c.incarnation) || !arcPositive(c.revision) || !memoryAccountId(doc.accountId)) fail();
+  if (c.mode === 'fresh-confirmed' && (!arcNumber(c.confirmedAt) || !arcNumber(c.sourceCutoffMs) ||
+      !arcNumber(memoryAccountCutoff(c.confirmedAt)) || c.sourceCutoffMs !== memoryAccountCutoff(c.confirmedAt))) fail();
+}
+/** Strict payload-free ER1/ADP1 projection. Structural admission makes no UTC,
+ * expiry-pruning or physical-erasure claim. The existing ADP1 invalidation
+ * reducer converts dispatched sending to unknown before closure. */
+function scanMemoryAccountErasing(doc, key, required) {
+  if (required.memoryAccountLifecycleVersion !== 1 ||
+      !keys(doc, ['version','kind','accountId','incarnation','revision','operationId','scopeManifestDigest','closedAt','sourceCutoffMs',
+        'attemptCount','lastAttemptAt','attemptDeadline','nextAttemptAt','metadataRetainUntil','dispatchedOutcomes']) ||
+      doc.version !== 1 || doc.kind !== 'memory-account-erasing' || !memoryAccountId(doc.accountId) || hash(doc.accountId) !== key ||
+      !arcHash(doc.incarnation) || !arcPositive(doc.revision) || !arcUuid(doc.operationId) || !arcHash(doc.scopeManifestDigest) ||
+      !['closedAt','sourceCutoffMs','attemptCount','lastAttemptAt','attemptDeadline','metadataRetainUntil'].every(k => arcNumber(doc[k])) ||
+      doc.attemptCount > 3 || !arcNumber(memoryAccountCutoff(doc.closedAt)) || doc.sourceCutoffMs < memoryAccountCutoff(doc.closedAt) ||
+      !arcNumber(doc.closedAt + 86400_000) || doc.metadataRetainUntil !== doc.closedAt + 86400_000 ||
+      doc.attemptDeadline > doc.metadataRetainUntil || doc.nextAttemptAt !== null && (!arcNumber(doc.nextAttemptAt) || doc.nextAttemptAt > doc.metadataRetainUntil) ||
+      doc.attemptCount === 3 && doc.nextAttemptAt !== null || !Array.isArray(doc.dispatchedOutcomes) || doc.dispatchedOutcomes.length > 32 || arcBytes(doc) > 163840) fail();
+  const seen = new Set();
+  for (const row of doc.dispatchedOutcomes) {
+    if (!keys(row, ['state','retainUntil']) || !arcNumber(row.retainUntil)) fail();
+    const s = row.state;
+    if (!object(s) || !keys(s, ['schemaVersion','kind','effectKey','scope','binding','source','authority','generationId','attemptId','evidence',
+      'createdAt','lastTransitionAt','expiresAt','revision','phase','contentEligible','invalidatedAtFenceSequence','outcome']) ||
+      s.schemaVersion !== 1 || s.kind !== 'assistant-text-delivery' || !['sent','unknown'].includes(s.phase) || s.contentEligible !== false ||
+      !arcUuid(s.generationId) || !arcUuid(s.attemptId) || !['createdAt','lastTransitionAt','expiresAt','revision','invalidatedAtFenceSequence'].every(k => arcNumber(s[k])) ||
+      !arcNumber(s.createdAt + 60000) || s.createdAt > doc.closedAt || s.lastTransitionAt < s.createdAt || s.expiresAt <= s.createdAt ||
+      s.expiresAt - s.createdAt > 60000 || s.revision < 2 || row.retainUntil > s.expiresAt || row.retainUntil > doc.metadataRetainUntil || arcBytes(s) > 4096) fail();
+    const scope = s.scope, b = s.binding, source = s.source, a = s.authority, e = s.evidence, o = s.outcome;
+    if (!keys(scope, ['accountId','personId','agentId','space','containerId','kind']) || !Object.values(scope).every(arcId) ||
+        scope.accountId !== doc.accountId || !['work','personal'].includes(scope.space) || scope.kind !== 'private' ||
+        !keys(b, ['botId','destinationChatId','endpointBindingId','credentialBindingId','bindingRevision']) || !arcPositive(b.botId) || !arcPositive(b.destinationChatId) ||
+        ![b.endpointBindingId,b.credentialBindingId,b.bindingRevision].every(arcId) ||
+        !keys(source, ['messageId','updateId','revision','occurredAt','acceptedAt']) || !Object.values(source).every(arcNumber) || !arcPositive(source.messageId) ||
+        source.occurredAt > source.acceptedAt || source.acceptedAt > s.createdAt ||
+        !keys(a, ['authorityRevision','grantRevision','sourceFenceRevision','sourceFenceSequence','historyEpoch','deletionEpoch','expiresAt']) ||
+        ![a.authorityRevision,a.grantRevision,a.sourceFenceRevision].every(arcId) || ![a.sourceFenceSequence,a.historyEpoch,a.deletionEpoch,a.expiresAt].every(arcNumber) ||
+        s.expiresAt > a.expiresAt || s.invalidatedAtFenceSequence <= a.sourceFenceSequence ||
+        !keys(e, ['keyId','generatedHmac','generatedUtf16Length','submittedTextHmac','submittedUtf16Length','bodyHmac','bodyBytes']) || !arcId(e.keyId) ||
+        ![e.generatedHmac,e.submittedTextHmac,e.bodyHmac].every(arcHash) || !arcPositive(e.generatedUtf16Length) || e.generatedUtf16Length > 65536 ||
+        !arcPositive(e.submittedUtf16Length) || e.submittedUtf16Length > 4096 || !arcPositive(e.bodyBytes) || e.bodyBytes > 32768 ||
+        s.effectKey !== JSON.stringify(['adp1','telegram',b.botId,b.destinationChatId,source.messageId,'initial','primary-text']) || seen.has(s.effectKey) ||
+        !object(o) || !arcNumber(o.observedAt) || o.observedAt < s.createdAt || o.observedAt > s.lastTransitionAt) fail();
+    if (s.phase === 'sent') {
+      const r = o.receipt;
+      if (!keys(o, ['reason','observedAt','receipt']) || o.reason !== 'provider_accepted' ||
+          !keys(r, ['messageId','botId','destinationChatId','providerDateSeconds','textEvidence']) || !arcPositive(r.messageId) ||
+          r.botId !== b.botId || r.destinationChatId !== b.destinationChatId || !arcNumber(r.providerDateSeconds) ||
+          !Number.isSafeInteger(r.providerDateSeconds * 1000) || !['matches-submitted','different','unavailable'].includes(r.textEvidence)) fail();
+    } else if (!keys(o, ['reason','observedAt']) || !['dispatch_interrupted','transport_error','http_or_provider_rejection','invalid_response','invalid_receipt','receipt_commit_unconfirmed'].includes(o.reason)) fail();
+    seen.add(s.effectKey);
+  }
+}
 function scanAssistantControl(doc, required) {
   if (!Object.hasOwn(doc, 'assistantDeliveryControl')) return;
   if (doc.schemaVersion !== 1 || ![1,2].includes(required.assistantDeliveryControlVersion)) fail();
@@ -476,8 +563,10 @@ function scanAssistantControl(doc, required) {
   if (arcBytes({...payload,revision:Number.MAX_SAFE_INTEGER,updatedAt:Number.MAX_SAFE_INTEGER})+163839>700000)fail();
 }
 function scanCanonical(doc, key, version, required) {
+  if (object(doc) && doc.kind === 'memory-account-erasing') return scanMemoryAccountErasing(doc, key, required);
   if (!object(doc) || doc.schemaVersion !== version || !account(doc.accountId) || hash(doc.accountId) !== key ||
       doc.personId !== `account-profile:${hashValue(doc.accountId).slice(0, 32)}` || !positive(doc.revision) || !integer(doc.createdAt) || !integer(doc.updatedAt) || doc.updatedAt < doc.createdAt) fail();
+  scanMemoryLifecycle(doc, required);
   scanAssistantControl(doc,required);
   scanObserver(doc.observer, required, version);
   // Even an empty optional extension is rejected by older strict readers.
@@ -567,10 +656,40 @@ function scanAdaptive(env, required, budget) {
   }
   if (format === 'file') {
     const names=entries(root);
+    const rootBefore = rootInfo?.isDirectory() ? stat(root) : null;
+    const rootKey = resolve(root), priorMemoryAccount = memoryAccountRoots().get(rootKey);
+    const hasMemoryMarker = names.includes(MEMORY_ACCOUNT_MARKER), hasMemoryTime = names.includes(MEMORY_ACCOUNT_TIME);
+    let memoryMarker, memoryTime;
+    if (hasMemoryMarker !== hasMemoryTime || priorMemoryAccount && !hasMemoryMarker) fail();
+    if (hasMemoryMarker) {
+      if (!markerInfo) fail(); // ER1 relies on the already managed FRO1 lifetime owner.
+      memoryMarker = readMemoryAccountPrivate(join(root,MEMORY_ACCOUNT_MARKER),128,budget);
+      memoryTime = readMemoryAccountPrivate(join(root,MEMORY_ACCOUNT_TIME),256,budget);
+      if (memoryMarker !== MEMORY_ACCOUNT_MARKER_BYTES) fail();
+      const time = JSON.parse(memoryTime);
+      if (!keys(time,['version','highWaterMs']) || time.version !== 1 || !arcNumber(time.highWaterMs) ||
+          memoryTime !== `${JSON.stringify({version:1,highWaterMs:time.highWaterMs})}\n` ||
+          priorMemoryAccount && time.highWaterMs < priorMemoryAccount.highWaterMs) fail();
+      memoryAccountRoots().set(rootKey,{highWaterMs:time.highWaterMs});
+      required.memoryAccountLifecycleVersion = 1;
+    }
     if(names.includes(FILE_RUNTIME_OWNER_MARKER)&&!markerInfo)fail();
     if(names.includes(ARC_MARKER)){if(readBounded(join(root,ARC_MARKER),128,budget)!==ARC_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=1;}
     if(names.includes(ARC_V2_MARKER)){if(!names.includes(ARC_MARKER)||readBounded(join(root,ARC_V2_MARKER),128,budget)!==ARC_V2_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=2;}
-    for(const name of names){if(name===ARC_MARKER||name===ARC_V2_MARKER||name===FILE_RUNTIME_OWNER_MARKER)continue;if(!/^[a-f0-9]{64}\.json$/.test(name))fail();scanCanonical(readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget),name.slice(0,-5),1,required);}
+    for(const name of names){
+      if([ARC_MARKER,ARC_V2_MARKER,FILE_RUNTIME_OWNER_MARKER,MEMORY_ACCOUNT_MARKER,MEMORY_ACCOUNT_TIME].includes(name))continue;
+      if(!/^[a-f0-9]{64}\.json$/.test(name))fail();
+      const path=join(root,name);
+      const text=hasMemoryMarker?readMemoryAccountPrivate(path,MAX_ACCOUNT_BYTES,budget):readBounded(path,MAX_ACCOUNT_BYTES,budget);
+      scanCanonical(JSON.parse(text),name.slice(0,-5),1,required);
+    }
+    if (hasMemoryMarker) {
+      const after=stat(root);
+      if (!after?.isDirectory() || !['dev','ino','mtimeMs','ctimeMs'].every(k=>after[k]===rootBefore[k]) ||
+          canonical(entries(root).sort())!==canonical([...names].sort()) ||
+          readMemoryAccountPrivate(join(root,MEMORY_ACCOUNT_MARKER),128,budget)!==memoryMarker ||
+          readMemoryAccountPrivate(join(root,MEMORY_ACCOUNT_TIME),256,budget)!==memoryTime) fail();
+    }
     return;
   }
   const managed = `${resolve(root)}.managed`, marker = readPlainJson(join(managed, 'format.json'));
@@ -999,6 +1118,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
     ['supportedAssistantDeliveryControlVersions', 'assistantDeliveryControlVersion', [1,2]],
     ['supportedFileRuntimeOwnerVersions', 'fileRuntimeOwnerVersion', [1]],
+    ['supportedMemoryAccountLifecycleVersions', 'memoryAccountLifecycleVersion', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
     ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],

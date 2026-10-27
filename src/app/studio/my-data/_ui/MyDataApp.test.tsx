@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { MyDataResponse } from '@/lib/studio/my-data-contract';
 import { MyDataApp } from './MyDataApp';
 
@@ -12,12 +12,18 @@ const DATA: MyDataResponse = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 let bridge: { initData: string; initDataUnsafe: { user: { language_code?: string } }; ready: () => void; expand: () => void; showConfirm: ReturnType<typeof vi.fn> };
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
 beforeEach(() => {
   bridge = { initData: 'SIGNED_BY_VOXXBOT', initDataUnsafe: { user: { language_code: 'en' } }, ready: vi.fn(), expand: vi.fn(), showConfirm: vi.fn((_m: string, cb: (ok: boolean) => void) => cb(true)) };
   (window as unknown as { Telegram: unknown }).Telegram = { WebApp: bridge };
   fetchMock = vi.fn(async (_url: string, init?: RequestInit) => (init?.method ?? 'GET') === 'GET' ? json(DATA) : json({}));
-  vi.stubGlobal('fetch', fetchMock);
+  // Keep existing endpoint assertions scoped to the existing My data API.
+  // The independent ER1 card's default-off availability read has its own response.
+  vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+    if (url === '/api/studio/memory-account' && (init?.method ?? 'GET') === 'GET') return Promise.resolve(json({ error: 'memory_account_unavailable' }, 503));
+    if (url === '/api/studio/my-data' || url.startsWith('/api/studio/my-data/')) return fetchMock(url, init);
+    throw new Error('Unexpected My data fixture route');
+  });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); delete (window as { Telegram?: unknown }).Telegram; });
 
@@ -30,6 +36,8 @@ describe('My data page', () => {
     expect(screen.getByText('from HOOR family')).toBeInTheDocument();
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/studio/my-data');
+    expect(init).toBeDefined();
+    if (!init) throw new Error('Expected authenticated My data request options');
     expect((init.headers as Record<string, string>)['X-Telegram-Init-Data']).toBe('SIGNED_BY_VOXXBOT');
     expect(screen.getByRole('main')).toHaveAttribute('dir', 'ltr');
   });
@@ -40,7 +48,7 @@ describe('My data page', () => {
     expect(await screen.findByRole('heading', { name: 'داده‌های من' })).toBeInTheDocument();
     await screen.findByText('Tea with cardamom');
     expect(screen.getByRole('main')).toHaveAttribute('dir', 'rtl');
-    expect(screen.getByRole('button', { name: 'همه را فراموش کن' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'پاک کردن مراقبت حیوانک‌ها، یادداشت‌های گروه و برنامه‌های وصل‌شده' })).toBeInTheDocument();
   });
 
   it('erasing a note asks first, then deletes only that copy', async () => {
@@ -59,11 +67,13 @@ describe('My data page', () => {
       : json(url === '/api/studio/my-data' && fetchMock.mock.calls.length > 1 ? { petCare: [], agentNames: {} } : DATA));
     render(<MyDataApp />);
     await screen.findByText('Tea with cardamom');
-    fireEvent.click(screen.getByRole('button', { name: 'Forget everything' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Erase pet care, group notes and connected apps' }));
     expect(await screen.findByText('Done. Erased pet care for 2 agents, 1 note.')).toBeInTheDocument();
     expect(bridge.showConfirm.mock.calls[0][0]).toContain('cannot be undone');
     const post = fetchMock.mock.calls.find(([, i]) => i?.method === 'POST')!;
     expect(post[0]).toBe('/api/studio/my-data/forget');
+    expect(post[1]).toBeDefined();
+    if (!post[1]) throw new Error('Expected explicit erase POST request options');
     expect(JSON.parse(post[1].body as string)).toEqual({ confirm: true });
   });
 
@@ -75,7 +85,7 @@ describe('My data page', () => {
     expect(await screen.findByText('My server')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Connected apps' })).toHaveTextContent('Mochi · Work');
     expect(bridge.showConfirm).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Forget everything' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Erase pet care, group notes and connected apps' }));
     expect(bridge.showConfirm.mock.calls[0][0]).toContain('connected apps');
     expect(await screen.findByText('Done. Erased pet care for 1 agent, 1 connected app. 2 more connected apps are stopped and will be gone shortly.')).toBeInTheDocument();
   });
@@ -96,7 +106,7 @@ describe('My data page', () => {
     const apps = screen.getByRole('region', { name: 'Connected apps' });
     expect(apps).not.toHaveTextContent('Stopped Gmail');
     expect(container.querySelector('pre')!.textContent).toContain('Stopped Gmail');
-    fireEvent.click(screen.getByRole('button', { name: 'Forget everything' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Erase pet care, group notes and connected apps' }));
     expect(await screen.findByText(/1 more connected app is stopped and will be gone shortly/)).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Connected apps' })).toBeNull());
   });

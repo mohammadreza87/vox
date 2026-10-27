@@ -1,0 +1,22 @@
+{
+  "base": "9e8752e8eb4b43fcce6303d5eb815c76618044a0",
+  "tree": "8ee228b5dcb799b3bcba4531f443063b7801b3ee",
+  "purpose": "Unmodified accepted9e actual prior reader and owner dependency; synthetic downgrade oracle only, no live data/provider operation. Frozen by root before new reader edits.",
+  "files": {
+    "studio-adaptive-compatibility.mjs": {
+      "source": "scripts/studio-adaptive-compatibility.mjs",
+      "sha256": "cbe12e8a93933e4e8becc25b3afd9499fd24c368a0f5b013e6af8f5df75dd1bb",
+      "bytes": 92172
+    },
+    "studio-file-runtime-owner.mjs": {
+      "source": "scripts/studio-file-runtime-owner.mjs",
+      "sha256": "508d3995a941c5376c069f20314f9e4276ee6a3b12220efeebb3002e8cfb457a",
+      "bytes": 35699
+    },
+    "studio-release.json": {
+      "source": "Accepted9e buildir5 exact generated manifest; metadata only",
+      "sha256": "3245f3ff2a0913783d88fe42e9f6c93a4430f673c0c8bca6d30a7080a71c9ac4",
+      "bytes": 2176
+    }
+  }
+}

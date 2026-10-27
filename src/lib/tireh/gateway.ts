@@ -1,3 +1,4 @@
+import {isMemoryAccountCurrentTurnScope,type MemoryAccountCurrentTurnScope} from '../studio/memory-account';
 /**
  * PersonaGateway — handles Telegram updates for every persona bot.
  *
@@ -142,6 +143,11 @@ interface TurnBoundary {
 }
 
 export interface GatewayDeps {
+  /** ER1 original-source/incarnation gate, rechecked at model and effect boundaries. */
+  memoryAccountCurrent?:()=>boolean;
+  memoryAccountContextExcluded?:boolean;
+  /** Opaque server capability; a caller boolean cannot enable public current-turn-only admission. */
+  currentTurnOnlyScope?:MemoryAccountCurrentTurnScope;
   /** ATI1's actually composed owner Work text seam. Undefined preserves legacy. */
   assistantText?:AssistantTextGatewayHook;
   runtimePrivacy?: RuntimePrivacy;
@@ -308,6 +314,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call', at = this.now(), space: 'work' | 'personal' = 'work') {
+    if(this.deps.memoryAccountContextExcluded){
+      const command=parseExplicitControl(text),match=/^tg-([1-9]\d*)$/.exec(speakerId);
+      if(chat.kind==='private'&&command&&match&&this.deps.relationshipAuthority){
+        if(this.deps.memoryAccountCurrent?.()===false)throw new LLMAuthorizationError();
+        await this.deps.relationshipAuthority.control(Number(match[1]),personaId,space,command,command==='pause'?this.now().getTime()+7*86400000:undefined);
+      }
+      return;
+    }
     if (!this.deps.relationships || chat.kind !== 'private') return;
     try {
       if (this.deps.runtimePrivacy) {
@@ -408,6 +422,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   async handleUpdate(personaId: string, update: TelegramUpdate, deliveryIngress?:unknown): Promise<HandleResult> {
+    if(this.deps.memoryAccountCurrent?.()===false)return 'ignored';
     const message = update.message;
     if (!this.deps.stageTimings || !message || currentStageTimer()) return this.handleUpdateUntimed(personaId, update, deliveryIngress);
     const timer = new StageTimer(message.voice ? 'voice_note' : message.chat.type === 'private' ? 'private_text' : 'group_text');
@@ -431,6 +446,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   // ============================================
 
   private async handleMessage(persona: Persona, message: TelegramMessage, deliveryIngress?:unknown): Promise<HandleResult> {
+    if(this.deps.memoryAccountCurrent?.()===false)return 'ignored';
     const { org } = this.deps;
     const bot = this.deps.botFor(persona.id);
     if (!message.from || message.from.is_bot) return 'ignored';
@@ -487,7 +503,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // Content-free attention: the person this agent just answered keeps it while nobody else, person or
     // agent, speaks. Inferred, never explicit: only where this agent follows unaddressed messages, typed
     // only (group voice needs a mention or reply), and never a message aimed at someone or something else.
-    const windowKey = chat.kind === 'group' ? await this.windowKey(persona, chat) : undefined;
+    const windowKey = !this.deps.memoryAccountContextExcluded&&chat.kind === 'group' ? await this.windowKey(persona, chat) : undefined;
     const followUp = chat.kind === 'group' && !!windowKey && !message.voice && !targeting.direct && !targeting.otherTarget
       && persona.groupParticipation !== 'mentions' && persona.groupObservation !== false
       && !targetsSomeoneElse(persona, message) && !this.addressesCoAgent(persona, chat, message)
@@ -551,7 +567,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // Visible to everyone in the chat: never an image description, never stored or extracted.
     if (windowKey) this.groupWindow.record(windowKey, { personId: speaker.id, text: imageTurn ? rawText : text, at: this.now().getTime(), messageId: message.message_id }, this.now().getTime());
     const extras: TurnExtras = {
-      quote: replyQuote(message, persona.name, (from) => this.ownBot(persona, from), (id) => org.getPersonByTelegramId(id)?.name),
+      quote: this.deps.memoryAccountContextExcluded?undefined:replyQuote(message, persona.name, (from) => this.ownBot(persona, from), (id) => org.getPersonByTelegramId(id)?.name),
       // Stored history, when allowed, is the conversation; otherwise the RAM window of visible lines.
       recent: windowKey && !boundary.historyEnabled ? this.groupWindow.before(windowKey, message.message_id, this.now().getTime()) : undefined,
     };
@@ -760,6 +776,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     try { return !authorize || await authorize() === true; } catch { return false; }
   }
 
+  private currentTurnOnly():boolean {return this.deps.memoryAccountContextExcluded===true&&isMemoryAccountCurrentTurnScope(this.deps.currentTurnOnlyScope);}
+
   private compactPrivacy(): boolean {
     const privacy = this.deps.runtimePrivacy;
     return privacy?.legacyStores === 'unavailable' && typeof privacy.readAuthority === 'function' &&
@@ -818,6 +836,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
   private async privacyInputs(persona: Persona, chat: ChatContext, space: 'work' | 'personal', query: string, authorityOnly: boolean): Promise<PrivacyInputs> {
     const members = audienceOf(chat);
+    if(this.currentTurnOnly()){
+      // This branch never invokes private/canonical, history, shared, notes or relationship adapters.
+      const empty={revision:'er1:stateless-current-source',memoryEnabled:false,historyEnabled:false,storedContextAllowed:false};
+      return {allowed:true,audienceValid:true,states:members.map(()=>empty),...(chat.kind==='group'?{shared:{revision:'er1:excluded'}}:{})};
+    }
     let allowed = members.length > 0 && members.every((id) => Boolean(this.deps.org.getPerson(id))) &&
       (chat.kind !== 'group' || !chat.group.hasGuests);
     const states: RuntimePrivacyState[] = [];
@@ -920,6 +943,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     try {
       const privacy = this.deps.runtimePrivacy!;
       const members = audienceOf(chat);
+      if(this.deps.currentTurnOnlyScope){
+        if(!this.currentTurnOnly()||!members.length)return null;
+        const states=members.map(()=>({revision:'er1:stateless-current-source',memoryEnabled:false,historyEnabled:false,storedContextAllowed:false}));
+        const shared=chat.kind==='group'?{revision:'er1:excluded'}:undefined;
+        return boundary.key===this.boundaryKey(chat,speakerId,boundary.space,true,true,true,states,shared)?Number.MAX_SAFE_INTEGER:null;
+      }
       if (!privacy.validateAudienceNow!(persona.id, chat) || !members.length ||
         members.some(id => !this.deps.org.getPerson(id)) || chat.kind === 'group' && chat.group.hasGuests) return null;
       const states = members.map(id => privacy.finalReadNow!(persona.id, id, boundary.space, chat));
@@ -936,6 +965,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   private exportAuthorizedNow(persona: Persona, chat: ChatContext, speakerId: string, boundary: TurnBoundary, authorize?: () => boolean): boolean {
+    if(this.deps.memoryAccountCurrent?.()===false)return false;
     const deadline = this.boundaryDeadlineNow(persona, chat, speakerId, boundary);
     if (deadline === null || !this.requestAuthorizedNow(authorize)) return false;
     // The request-specific fence may itself perform synchronous reads. Source
@@ -957,6 +987,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
    * privacy-epoch fence to the same read.
    */
   private async unchanged(persona: Persona, chat: ChatContext, speakerId: string, boundary: TurnBoundary, expectedEpoch?: number): Promise<boolean> {
+    if(this.deps.memoryAccountCurrent?.()===false)return false;
     const turn = boundary.revisions;
     if (turn?.snapshot.vector.complete) {
       let values: number[] | undefined;
@@ -1232,6 +1263,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const authority = { authorize: async () => await this.groupAllowed(persona, chat, source.personId!, action) &&
         await this.unchanged(persona, chat, source.personId!, boundary) ? boundary.key : null,
         ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, source.personId!, boundary) } : {}) };
+      if(this.deps.memoryAccountCurrent?.()===false)return UNTRIAGED;
       const detail = decider.decideDetailed ? await decider.decideDetailed(input, questions, TRIAGE_TIMEOUT_MS, authority) : undefined;
       const answers = detail ? detail.answers : await decider.decide(input, questions, TRIAGE_TIMEOUT_MS, authority);
       const triage = readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions', skillAsked ? routable : undefined);
@@ -1351,6 +1383,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       // Run after all asynchronous boundary/history loads, immediately at export.
       if (!await this.requestAuthorized(authorize)) return 'changed';
       if (request.authorizeNow && !request.authorizeNow()) return 'changed';
+      if(this.deps.memoryAccountCurrent?.()===false)return 'changed';
       const { text: raw, sources } = await timed('llm_done', async () => search && model.completeWithWeb
         ? await model.completeWithWeb({ ...request, maxTokens, maxSearches })
         : { text: await model.complete({ ...request, maxTokens }), sources: [] });
@@ -1394,6 +1427,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const bot = this.deps.botFor(persona.id);
     if (canDeliverNow && bot.committedSendFence !== true) return null;
     const canSend = async () => {
+      if(this.deps.memoryAccountCurrent?.()===false)return false;
       await this.deps.beforeSend?.(persona.id, chat);
       if (!await canDeliver() || (privacyEpoch !== undefined && await this.deps.history.getEpoch(persona.id) !== privacyEpoch)) return false;
       if (notesFence && !await notesFence()) return false;
@@ -1767,6 +1801,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   private async memoriesVisibleTo(persona: Persona, personId: string): Promise<MemoryRecord[]> {
+    if(this.deps.memoryAccountContextExcluded)return [];
     const all = await this.deps.memories.listActive(persona.id);
     return all
       .filter((m) => m.source.personId === personId || isVisibleToAudience(this.deps.org, m, [personId]))

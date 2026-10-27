@@ -2,13 +2,14 @@
 
 /**
  * My data (VoxxBot's Mini App): the person's own pet care, choices, group participation, notes and connected apps, each note erasable,
- * the whole export as JSON, and "Forget everything" behind a confirm. Every call carries the initData this page was
+ * the scoped export as JSON, and a separately named erase action behind a confirm. Every call carries the initData this page was
  * opened with; if Telegram's session changes (another account) the page stops and asks to be reopened.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MY_DATA_API, type MyDataForgetResponse, type MyDataResponse } from '@/lib/studio/my-data-contract';
 import { myDataCopy, myDataLang, type MyDataLang } from './copy';
+import { MemoryAccountCard } from './MemoryAccountCard';
 
 interface Bridge {
   initData?: string;
@@ -47,7 +48,7 @@ export function MyDataApp() {
         <h1>{t.title}</h1>
         <p className="vxd-muted">{t.intro}</p>
         {signed === null ? <p role="status">{t.loading}</p>
-          : signed ? <MyDataSession signed={signed} lang={lang} /> : <p role="alert" className="vxd-alert">{t.reopen}</p>}
+          : signed ? <><MemoryAccountCard signed={signed} lang={lang} /><MyDataSession signed={signed} lang={lang} /></> : <p role="alert" className="vxd-alert">{t.reopen}</p>}
       </div>
     </main>
   );
