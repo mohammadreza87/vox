@@ -637,9 +637,14 @@ describe('rights', () => {
   it('export returns only the requester\'s copies; forget me deletes only theirs', async () => {
     const x = await circle();
     await x.save();
+    const ownCopy = (await x.notes.read(ID.stranger))!.copies[0];
     const mine = await x.h.studio.notesFor(ID.stranger);
     expect(mine).toEqual([expect.objectContaining({ text: TRIP, author: 'another member', groupTitle: TITLE })]);
-    expect(JSON.stringify(mine)).not.toContain(String(ID.alice));
+    expect(mine).toStrictEqual([{
+      copyId: ownCopy.copyId, noteId: ownCopy.noteId, text: TRIP, origin: 'group',
+      agentIds: [x.cookie.agent.id, x.mina.agent.id], fromGroupId: groupIdOf(CHAT), groupTitle: TITLE,
+      author: 'another member', savedAt: ownCopy.savedAt, expiresAt: ownCopy.expiresAt,
+    }]);
     expect((await x.h.studio.notesFor(ID.alice))[0].author).toBe('you');
     const reza = await x.notes.read(ID.alice);
     expect(await x.h.studio.forgetNotes(ID.stranger)).toBe(1);
@@ -650,6 +655,25 @@ describe('rights', () => {
     x.setMode('off');
     expect(await x.h.studio.forgetNotes(ID.alice)).toBe(1);
     expect(await x.h.studio.notesFor(ID.alice)).toEqual([]);
+  });
+
+  it('exports an opaque agent ID containing an author ID without exposing private identity fields', async () => {
+    const x = await circle();
+    // A historical agent reference may contain the same digits as a person's ID.
+    const agentId = 'ag3000000000';
+    expect(agentId).toContain(String(ID.alice));
+    expect(await x.notes.save(ID.stranger, {
+      eventId: receiptIdFor(ID.stranger), noteId: 'opaque-collision', text: TRIP, origin: 'group',
+      savedByAgentId: agentId, agentIds: [agentId], fromGroupId: groupIdOf(CHAT), groupTitle: TITLE,
+      authorTelegramId: ID.alice, at: x.h.clock.now,
+    })).toMatchObject({ ok: true, replay: false });
+    const ownCopy = (await x.notes.read(ID.stranger))!.copies[0];
+    expect(ownCopy.authorTelegramId).toBe(ID.alice);
+    expect(await x.h.studio.notesFor(ID.stranger)).toStrictEqual([{
+      copyId: ownCopy.copyId, noteId: 'opaque-collision', text: TRIP, origin: 'group',
+      agentIds: [agentId], fromGroupId: groupIdOf(CHAT), groupTitle: TITLE,
+      author: 'another member', savedAt: ownCopy.savedAt, expiresAt: ownCopy.expiresAt,
+    }]);
   });
 });
 
