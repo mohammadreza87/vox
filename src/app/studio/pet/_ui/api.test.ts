@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FULL_AT, PET_TZ_HEADER } from '@/lib/pet/types';
-import { createHttpApi, createPetApi, isPetError, mockOptions } from './api';
+import { createHttpApi, createPetApi, isPetError, mockClock, mockOptions } from './api';
 import { createMockApi } from './mock';
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -62,6 +62,16 @@ describe('pet api', () => {
   it('switches to the in-memory fake with ?mock=1', () => {
     expect(mockOptions('?mock=1&look=3&role=guest&stage=2')).toEqual({ look: 3, stage: 2, role: 'guest', welcome: false, stageUp: false });
     expect(mockOptions('?look=3')).toBeNull();
+    expect(mockOptions('?mock=1&at=9')?.now).toBeTypeOf('function');
+    expect(mockOptions('?mock=1&at=25')?.now).toBeUndefined();
+    expect(mockOptions('?mock=1&at=x')?.now).toBeUndefined();
+  });
+
+  it('?at=H runs a real-speed clock from H:00 today', () => {
+    const start = Date.UTC(2026, 9, 26, 20, 30);
+    const clock = mockClock(14, start);
+    const at = new Date(clock() - (Date.now() - start));
+    expect([at.getHours(), at.getMinutes()]).toEqual([14, 0]);
     const fetch = vi.spyOn(globalThis, 'fetch');
     void createPetApi('?mock=1').get('x');
     expect(fetch).not.toHaveBeenCalled();

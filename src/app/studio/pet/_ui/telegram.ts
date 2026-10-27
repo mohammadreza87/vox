@@ -40,6 +40,8 @@ export interface PetTelegram {
   /** Bot API 7.8: an HTTPS media URL into the story editor */
   shareToStory?(mediaUrl: string, params?: { text?: string; widget_link?: { url: string; name?: string } }): void;
   openTelegramLink?(url: string): void;
+  /** Bot API 6.0: an https page in Telegram's in-app browser (the sheet's privacy link) */
+  openLink?(url: string): void;
   onEvent?(event: string, cb: Handler): void;
   offEvent?(event: string, cb: Handler): void;
   safeAreaInset?: Insets;
@@ -247,13 +249,22 @@ export function startAccelerometer(onSample: (a: { x: number; y: number; z: numb
 
 /* ---------- DeviceStorage (Bot API 9.0), localStorage fallback ---------- */
 
+/**
+ * DeviceStorage only where the client has it: telegram-web-app.js logs an error each time `DeviceStorage` is touched on
+ * a client older than Bot API 9.0 (every load outside Telegram, where the SDK reports 6.0; P-27), so the version is
+ * asked first. A client without `isVersionAtLeast` (pre-6.1) has no DeviceStorage either.
+ */
+export function deviceStorage(app: PetTelegram | null): PetTelegram['DeviceStorage'] {
+  try { return app?.isVersionAtLeast?.('9.0') ? app.DeviceStorage : undefined; } catch { return undefined; }
+}
+
 /** Reads a value: localStorage synchronously first (instant paint), else DeviceStorage within `timeoutMs`. */
 export function readStored(key: string, timeoutMs = 160, app: PetTelegram | null = tg()): Promise<string | null> {
   try {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
     if (v) return Promise.resolve(v);
   } catch { /* private mode */ }
-  const ds = app?.DeviceStorage;
+  const ds = deviceStorage(app);
   if (!ds) return Promise.resolve(null);
   return new Promise((resolve) => {
     const t = setTimeout(() => resolve(null), timeoutMs);
@@ -267,7 +278,7 @@ export function readStoredSync(key: string): string | null {
 
 export function writeStored(key: string, value: string, app: PetTelegram | null = tg()) {
   try { localStorage.setItem(key, value); } catch { /* private mode */ }
-  safely(() => app?.DeviceStorage?.setItem(key, value));
+  safely(() => deviceStorage(app)?.setItem(key, value));
 }
 
 /** Migration only: erase legacy private snapshots, without ever reading their values into the UI.
@@ -283,7 +294,7 @@ export function clearLegacyPetSnapshots(agentId: string, app: PetTelegram | null
     for (const key of keys) localStorage.removeItem(key);
   } catch { /* storage unavailable */ }
   for (const key of keys) safely(() => {
-    const ds = app?.DeviceStorage;
+    const ds = deviceStorage(app);
     if (ds?.removeItem) ds.removeItem(key);
     else ds?.setItem(key, '');
   });

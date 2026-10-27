@@ -378,4 +378,7 @@ export const FA: Partial<Record<PetStringKey, PetString>> = {
   'share.copied': "کپی شد؛ هر جا خواستید بچسبانید.",
   'visits.later': "دیدوبازدید در به‌روزرسانی بعدی می‌آید. تا آن موقع کسی به ⁨{name}⁩ سر نمی‌زند، و شما هم فقط جایی به ابرک دوستانتان سر می‌زنید که خودشان اجازه داده باشند.",
   'visits.group': "گروه‌هایتان",
+  'toy.play.guess': "کلمهٔ مخفی",
+  'book.tab.learned': "آموخته‌ها",
+  'growth.confirm.title': "اینو توی دفترم بنویسم؟",
 };

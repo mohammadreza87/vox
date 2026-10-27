@@ -156,13 +156,14 @@ const growth = () => ({ moments: [
 ] });
 
 describe('growth: the confirm step and a lit moment (§4.11, §10.3)', () => {
-  it('after a "remember this" save: «Shall I keep this as …?» with the best unlit taught moment; yes posts growth/confirm', async () => {
+  it('after a "remember this" save: «Shall I keep this in my book?» over the best unlit taught moment; yes posts growth/confirm', async () => {
     const lit = { ...growth(), moments: growth().moments.map((m) => (m.id === 'release' ? { ...m, lit: { at: '2026-10-26T12:00:00Z' } } : m)) };
     const growthConfirm = vi.fn(async () => ({ lit: 'agent' as const, growth: lit }));
     const h = fakeHost({ growth: growth() }, { api: { growthConfirm } });
     render(<Extras host={h} />);
     act(() => h.fire({ type: 'reply', saved: true, said: 'remember this: we plan a release every second Tuesday' }));
-    expect(screen.getByRole('dialog', { name: 'Shall I keep this as “I learned how you plan a release”?' })).toBeInTheDocument();
+    // the ask is the title and the moment's own title the body, so a long title never cuts the ask (P-01)
+    expect(screen.getByRole('dialog', { name: 'Shall I keep this in my book?' })).toHaveTextContent('“I learned how you plan a release”');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, that’s it' })); });
     expect(growthConfirm).toHaveBeenCalledWith('a', 'release');
     expect(h.adoptGrowth).toHaveBeenCalledWith(lit);

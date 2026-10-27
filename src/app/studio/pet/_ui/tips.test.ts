@@ -1,12 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { emptyPlay, care } from './host.fixture';
-import { NO_SIGNALS, rankTips, readSignals, tipAllowed, TIPS, writeSignals, type TipMoment } from './tips';
+import { NO_SIGNALS, openOver, rankTips, readSignals, TIP_OPEN_MS, tipAllowed, TIPS, writeSignals, type TipMoment } from './tips';
 import { EN } from './strings/en';
 import { FA } from './strings/fa';
 
 const moment = (o: Partial<TipMoment> = {}): TipMoment => ({ care: care(), hour: 12, micAvailable: true, openedAsleep: false, grown: false, settled: false, quickRounds: 0, ...o });
 
 describe('tips v1 ranker (design §7)', () => {
+  it('the opening seconds are the hello\'s: no tip before the hello, then only after a first touch or 20 s (§7.1, P-16)', () => {
+    expect(TIP_OPEN_MS).toBe(20_000);
+    expect(openOver({ hello: false, touched: true, sinceHelloMs: 60_000 })).toBe(false);
+    expect(openOver({ hello: true, touched: false, sinceHelloMs: 6_000 })).toBe(false);
+    expect(openOver({ hello: true, touched: false, sinceHelloMs: 19_999 })).toBe(false);
+    expect(openOver({ hello: true, touched: false, sinceHelloMs: 20_000 })).toBe(true);
+    expect(openOver({ hello: true, touched: true, sinceHelloMs: 500 })).toBe(true);
+  });
+
   it('fits a tip only when its content-free signal holds (T1: three cookie taps and never a drag)', () => {
     const play = emptyPlay();
     expect(rankTips(play, { ...NO_SIGNALS, cookieTaps: 2 }, moment(), false)).toBeNull();

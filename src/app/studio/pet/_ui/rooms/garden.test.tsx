@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { PetPlayView } from '@/lib/pet/play';
 import { emptyPlay, fakeHost } from '../host.fixture';
 import { loadStrings } from '../strings';
-import GardenRoom, { seedsFor } from './GardenRoom';
+import GardenRoom, { BLOOM_LINE_REDUCED_MS, BLOOM_SPARKLE_MS, seedsFor } from './GardenRoom';
 import { roomIntent } from './intent';
 
 const DIGITS = /[0-9۰-۹]/;
@@ -70,6 +70,9 @@ describe('Garden (design §4.5, S10)', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rain' })); });
     await act(async () => { vi.advanceTimersByTime(2000); });
     expect(h.engineFake.roomReact).toHaveBeenCalledWith('bloom');
+    // the sparkle first, then a breath, then the line
+    expect(h.said).not.toContain('It bloomed! We did that.');
+    await act(async () => { vi.advanceTimersByTime(1000); });
     expect(h.said.at(-1)).toBe('It bloomed! We did that.');
     expect(screen.getByRole('status').textContent).toBe('New keepsake · Bloom pin');
     expect(h.emit).toHaveBeenCalledWith({ type: 'moment', kind: 'bloom' });
@@ -102,6 +105,19 @@ describe('Garden (design §4.5, S10)', () => {
     expect(setGarden).toHaveBeenCalledTimes(1);
   });
 
+  it('reduced motion: no sparkle to wait for, the line follows the look after a short beat', () => {
+    vi.useFakeTimers();
+    roomIntent.bloom = true;
+    const root = document.createElement('main');
+    root.setAttribute('data-tier', 'reduced');
+    document.body.appendChild(root);
+    const h = fakeHost({ play: emptyPlay({ garden: garden('blooming', { bloomedAt: 1 }) }) }, { root });
+    render(<GardenRoom id="garden" host={h} />);
+    act(() => { vi.advanceTimersByTime(600 + BLOOM_LINE_REDUCED_MS + 20); });
+    expect(h.said).toEqual(['It bloomed! We did that.']);
+    root.remove();
+  });
+
   it('arriving from a bloom check-in replays the bloom', () => {
     vi.useFakeTimers();
     roomIntent.bloom = true;
@@ -109,6 +125,12 @@ describe('Garden (design §4.5, S10)', () => {
     render(<GardenRoom id="garden" host={h} />);
     act(() => { vi.advanceTimersByTime(700); });
     expect(roomIntent.bloom).toBe(false);
+    // the pot is on stage and the pet looks to it; the sparkle pops, and only then (400-600 ms on) the line
+    expect(h.engineFake.roomReact).toHaveBeenCalledWith('bloom');
+    expect(h.said).toEqual([]);
+    act(() => { vi.advanceTimersByTime(BLOOM_SPARKLE_MS + 300); });
+    expect(h.said).toEqual([]);
+    act(() => { vi.advanceTimersByTime(300); });
     expect(h.said).toEqual(['It bloomed! We did that.']);
     expect(h.emit).toHaveBeenCalledWith({ type: 'moment', kind: 'bloom' });
   });

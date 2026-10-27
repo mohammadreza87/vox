@@ -289,6 +289,7 @@ class Engine implements PetEngine {
   private xLoading: Promise<void> | null = null;
   private disposed = false;
   private motionFns = new Set<(c: MotionCue) => void>();
+  private sticky = new Map<string, MotionCue>();
   /** reused per frame (no allocation): the composed pose and the procedural offsets */
   private proc: Partial<PoseTargets> = {};
   private dueTags: string[] = [];
@@ -513,7 +514,8 @@ class Engine implements PetEngine {
     this.withX((x) => x.guide(this));
   }
 
-  onMotion(fn: (c: MotionCue) => void): () => void { this.motionFns.add(fn); return () => { this.motionFns.delete(fn); }; }
+  /** A late listener (a lazy overlay that mounts after setGarden or setWearing) hears the last details and wearing at once. */
+  onMotion(fn: (c: MotionCue) => void): () => void { this.motionFns.add(fn); for (const c of this.sticky.values()) fn(c); return () => { this.motionFns.delete(fn); }; }
 
   get motion() {
     return { room: this.room, stage: this.stage, tier: this.tier, contentFloat: this.contentFloat, signatures: this.signaturePool().length, reduced: this.tier === 'reduced' };
@@ -750,13 +752,13 @@ class Engine implements PetEngine {
     this.wake();
   }
 
-  motionCue(c: MotionCue): void { for (const fn of this.motionFns) fn(c); }
+  motionCue(c: MotionCue): void { if (c.type === 'details' || c.type === 'wearing') this.sticky.set(c.type, { ...c, fresh: undefined } as MotionCue); for (const fn of this.motionFns) fn(c); }
 
   /** Is anything still moving (or due within a frame)? */
   private busy(now: number): boolean {
     if (!this.running) return false;
     if (this.player.playing.length || this.oscs.length || this.gulps.length || this.lip || this.drag || this.settle || this.hop.active || this.fling.active || this.home) return true;
-    if (this.bop.on || this.cookie.state !== 'idle' || this.particles.live > 0 || now < this.freezeUntil) return true;
+    if (this.bop.on || !atRest(this.bop.follow) || this.cookie.state !== 'idle' || this.particles.live > 0 || now < this.freezeUntil) return true;
     if (this.talkState === 'thinking' || this.blink.busy(now) || this.blink.nextWake() <= now + 16) return true;
     const br = this.breath;
     if (!this.gaze.atRest() || !atRest(this.impact) || !atRest(this.swell) || !atRest(br.amp) || !atRest(br.bx) || !atRest(br.by) || !atRest(br.sway)) return true;
@@ -1034,7 +1036,7 @@ class Engine implements PetEngine {
       if (g > 0) { add('gape', 0.1 * g * Math.sin(2 * Math.PI * 11 * ts)); mul('sx', 1 + 0.012 * g * Math.sin(2 * Math.PI * 13 * ts)); add('headY', 0.35 * g * Math.sin(2 * Math.PI * 9 * ts)); }
     }
     // the Bop shuffle under the ball
-    if (this.bop.on && this.tier !== 'reduced') x += this.bop.follow.x;
+    if (this.tier !== 'reduced') x += this.bop.follow.x;
     if (x) add('x', x);
     if (y) add('y', y);
     if (rot) add('rot', rot);
@@ -1616,7 +1618,8 @@ class Engine implements PetEngine {
   /** Bop: the ball under gravity, the character tracking it, crouching and jumping to head it. */
   private stepBop(now: number, dt: number): void {
     const b = this.bop;
-    if (!b.on) return;
+    // a round that ended (or was cut by bedtime) eases the shuffle home instead of snapping back
+    if (!b.on) { if (!atRest(b.follow)) step(b.follow, dt); return; }
     const ball = b.ball, k = this.k, c = this.scene.character;
     if (!ball.active && now >= b.respawnAt) {
       // from top-centre (in the character box's units)
@@ -1657,6 +1660,7 @@ class Engine implements PetEngine {
     }
     if (done) {
       b.on = false; ball.active = false;
+      retarget(b.follow, 0, presetKC('float'));
       if (b.el) park(b.el);
       const won = b.bops >= 5;
       this.play({ type: 'playEnd', bops: b.bops, won, misses: b.misses }, now);
@@ -1675,7 +1679,18 @@ class Engine implements PetEngine {
   private moonTap(now: number): void {
     if (this.asleep) { this.sleepTap(now); return; }
     if (this.dozing) { this.wakeUp(now, 'doze'); return; }
+    this.endBop();
     this.goToSleep(now, false);
+  }
+
+  /** Bedtime ends a Bop round where it is (§4.4): the ball goes, the round is over (the page clears its pips). */
+  private endBop(): void {
+    const b = this.bop;
+    if (!b.on) return;
+    b.on = false; b.ball.active = false; b.respawnAt = Infinity;
+    if (b.el) park(b.el);
+    retarget(b.follow, 0, presetKC('float'));
+    this.cue({ type: 'playOver', bops: b.bops, won: false, misses: b.misses });
   }
 
   /* ================= sleep ================= */
@@ -1691,7 +1706,7 @@ class Engine implements PetEngine {
     }
     this.sleeping = true;
     this.dozing = false;
-    this.bop.on = false;
+    this.endBop();
     this.chain([{ type: 'yawn' }, { type: 'sleep' }], now, () => {
       this.sleeping = false;
       this.enterAsleep(this.clock.now(), false);

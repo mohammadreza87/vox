@@ -106,7 +106,7 @@ export const EN: CheckinCatalog = {
   'ci.why.hellos': ["Why this: you turned on Now-and-then hellos. They stop after two unopened messages."],
   'ci.why.care': ["Why this: you asked to hear when {name} gets sleepy. Evenings only."],
   'ci.stopped': ["Okay, no more {category} messages from {name}."],
-  'ci.paused.title': ["I paused my messages since they weren’t landing. Want them back?"],
+  'ci.paused.title': ["I paused my messages; they weren’t landing. Want them back?"],
   'ci.paused.yes': ["Yes, send them"],
   'ci.paused.no': ["Keep paused"],
   'ci.cat.growing': ["Growing up"],

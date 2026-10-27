@@ -20,4 +20,8 @@
 .pet-score i { width: 9px; height: 9px; border-radius: 50%; background: #ffffff33; transition: background-color .2s, transform .2s var(--ease-over); }
 .pet-score i[data-on] { background: var(--volt); transform: scale(1.15); }
 @keyframes petPop { from { transform: translateX(-50%) scale(.6); opacity: 0; } }
+/* bedtime cut the round (P-02): the pips fade with the ball */
+.pet-score { transition: opacity .2s var(--ease-sine); } .pet-score[data-out] { opacity: 0; }
 .pet-root[data-room="garden"] .pet-details [data-anim="sway"] { transform-box: fill-box; transform-origin: 50% 100%; animation: petSprout 3.4s var(--ease-sine) infinite alternate; } @keyframes petSprout { from { transform: rotate(-4deg) } to { transform: rotate(4deg) } } .pet-root[data-room="garden"] .pet-details [data-anim="shimmer"] > * { animation: petShimmer 2.4s var(--ease-sine) infinite alternate; } .pet-details [data-anim="shimmer"] > :nth-child(2) { animation-delay: -.8s } .pet-details [data-anim="shimmer"] > :nth-child(3) { animation-delay: -1.6s } @keyframes petShimmer { from { opacity: .2 } to { opacity: 1 } } .pet-root[data-tier="reduced"] .pet-details [data-anim], .pet-root[data-tier="reduced"] .pet-details [data-anim] > * { animation: none; }
+/* N-5: the box is laid out once (Bubble.tsx), so its lines can balance: no word left alone on the last line */
+.pet-bubble-text { text-wrap: pretty; text-wrap: balance; }

@@ -20,13 +20,13 @@ const pips = () => screen.getByRole('img', { name: 'Round progress' }).querySele
 describe('Guess my word (design §4.2)', () => {
   it('the card is in the picker where the page can send talk turns (a Wave B page without the glue shows none)', () => {
     render(<PlayRoom id="play" host={withSend()} />);
-    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Bop', 'Starfall', 'Guess my word', 'Zen']);
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Bop', 'Starfall', 'Guess', 'Zen']);
   });
 
   it('the pet takes a word in talk; each answer lights a pip (never a number); Done is one play action and the round', async () => {
     const h = withSend();
     const { container } = render(<PlayRoom id="play" host={h} />);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess my word' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess' })); });
     expect(h.send).toHaveBeenCalledWith('Think of a word, and I’ll guess it with yes-or-no questions!');
     expect(h.state.busy.has('game')).toBe(true);
     expect(screen.getByText('Guesses are talk: they go to our chat.')).toBeInTheDocument();
@@ -50,13 +50,13 @@ describe('Guess my word (design §4.2)', () => {
     expect(screen.getByRole('status').textContent).toBe('New page in the Life Book');
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(localStorage.getItem(UNFINISHED('a'))).toBeNull();
-    expect(screen.getByRole('button', { name: 'Guess my word' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Guess' })).toBeInTheDocument();
   });
 
   it('"I give up" asks for the word in the person\'s words, then ends the round', async () => {
     const h = withSend();
     render(<PlayRoom id="play" host={h} />);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess my word' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess' })); });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'I give up. What was it?' })); });
     expect(h.send).toHaveBeenLastCalledWith('I give up. What was it?');
     expect(h.act).toHaveBeenCalledWith('play');
@@ -68,7 +68,7 @@ describe('Guess my word (design §4.2)', () => {
     const h = withSend();
     render(<PlayRoom id="play" host={h} />);
     fireEvent.click(screen.getByRole('button', { name: 'Zen' }));
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess my word' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess' })); });
     expect(screen.queryByRole('img', { name: 'Round progress' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'A hint, please?' }));
     expect(h.send).toHaveBeenLastCalledWith('A hint, please?');
@@ -81,7 +81,7 @@ describe('Guess my word (design §4.2)', () => {
     localStorage.setItem(UNFINISHED('a'), '1');
     const h = withSend();
     render(<PlayRoom id="play" host={h} />);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess my word' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess' })); });
     expect(h.send).not.toHaveBeenCalled();
     expect(h.said).toEqual(['I still have my word. Want to keep guessing?']);
   });
@@ -99,8 +99,8 @@ describe('Guess my word (design §4.2)', () => {
     const h = fakeHost({ role: 'guest' });
     h.send = vi.fn(async () => false);
     render(<PlayRoom id="play" host={h} />);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess my word' })); });
-    expect(screen.getByRole('button', { name: 'Guess my word' })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Guess' })); });
+    expect(screen.getByRole('button', { name: 'Guess' })).toBeInTheDocument();
     expect(h.act).not.toHaveBeenCalled();
   });
 });

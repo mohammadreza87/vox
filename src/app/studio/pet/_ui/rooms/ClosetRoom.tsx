@@ -6,6 +6,7 @@ import type { Accessory } from '@/lib/studio/types';
 import { Sheet } from '../Sheet';
 import { pick, t, type PetStringKey } from '../strings';
 import type { RoomProps } from '.';
+import { ItemIcon, SlotIcon } from './art';
 import './rooms.css';
 
 /** Six items a page (§4.3), swiped by page with dots; nothing scrolls. */
@@ -106,40 +107,49 @@ export default function ClosetRoom({ host }: RoomProps) {
   };
 
   const label = (id: WearableId | Accessory) => t(`item.${id}` as PetStringKey, undefined, lang);
+  const pickSlot = (s: WearSlot) => { setTab('yours'); setSlot(s); setPage(0); setNote(null); };
+  // the tray opens upward above the rail (the segmented control on its own row, then six illustrated cells a page and
+  // the dots); the dock slot under the rail holds the room's three verbs, the slots (P-05, P-10)
   return (
-    <div className="pet-closet" data-room="closet">
-      <div className="pet-tabs" role="tablist">
-        {(creator ? ['yours', 'look'] as const : ['yours'] as const).map((k) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setPage(0); setNote(null); }}>
-            {t(k === 'yours' ? 'closet.tab.yours' : 'closet.tab.look', { name }, lang)}
+    <>
+      <div className="pet-tray pet-closet" data-room="closet">
+        <div className="pet-seg" role="tablist">
+          {(creator ? ['yours', 'look'] as const : ['yours'] as const).map((k) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setPage(0); setNote(null); }}>
+              {t(k === 'yours' ? 'closet.tab.yours' : 'closet.tab.look', { name }, lang)}
+            </button>
+          ))}
+        </div>
+        <div className="pet-grid" role="tabpanel"
+          onPointerDown={(e) => { swipe.current = e.clientX; }}
+          onPointerUp={(e) => { const x = swipe.current; swipe.current = null; if (x === null || Math.abs(e.clientX - x) < 36) return; go((e.clientX < x) !== rtl ? 1 : -1); }}>
+          {shown.map((id) => {
+            if (tab === 'look') {
+              const on = (v?.look.accessory ?? 'none') === id;
+              return <button key={id} type="button" className="pet-item" aria-pressed={on} onClick={() => { if (!on) setConfirm(id as Accessory); }}><ItemIcon id={id} /><span>{label(id)}</span></button>;
+            }
+            const w = id as WearableId;
+            const mine = owned(play, w);
+            const on = play?.wearing[slotOf(w)] === w;
+            return mine
+              ? <button key={id} type="button" className="pet-item" aria-pressed={on} onClick={() => void wear(w)}><ItemIcon id={w} /><span>{label(w)}</span></button>
+              : <button key={id} type="button" className="pet-item" data-locked="" aria-disabled="true" aria-label={`${label(w)}: ${t(earnKey(w as KeepsakeId), undefined, lang)}`}>
+                  <ItemIcon id={w} /><small>{t(earnKey(w as KeepsakeId), undefined, lang)}</small>
+                </button>;
+          })}
+        </div>
+        {pages > 1 && <div className="pet-dots" aria-hidden="true">{Array.from({ length: pages }, (_, k) => <i key={k} data-on={k === at ? '' : undefined} onClick={() => setPage(k)} />)}</div>}
+        {note && <span className="pet-chip" role="status">{note}</span>}
+      </div>
+      <div className="pet-verbs" data-room="closet">
+        {WEAR_SLOTS.map((s) => (
+          <button key={s} type="button" className="pet-verb" aria-pressed={tab === 'yours' && slot === s} onClick={() => pickSlot(s)}>
+            <i><SlotIcon slot={s} /></i><span>{t(SLOT_KEY[s], undefined, lang)}</span>
           </button>
         ))}
-        {tab === 'yours' && WEAR_SLOTS.map((s) => (
-          <button key={s} type="button" className="pet-slot" aria-pressed={slot === s} onClick={() => { setSlot(s); setPage(0); }}>{t(SLOT_KEY[s], undefined, lang)}</button>
-        ))}
       </div>
-      <div className="pet-grid" role="tabpanel"
-        onPointerDown={(e) => { swipe.current = e.clientX; }}
-        onPointerUp={(e) => { const x = swipe.current; swipe.current = null; if (x === null || Math.abs(e.clientX - x) < 36) return; go((e.clientX < x) !== rtl ? 1 : -1); }}>
-        {shown.map((id) => {
-          if (tab === 'look') {
-            const on = (v?.look.accessory ?? 'none') === id;
-            return <button key={id} type="button" className="pet-item" aria-pressed={on} onClick={() => { if (!on) setConfirm(id as Accessory); }}>{label(id)}</button>;
-          }
-          const w = id as WearableId;
-          const mine = owned(play, w);
-          const on = play?.wearing[slotOf(w)] === w;
-          return mine
-            ? <button key={id} type="button" className="pet-item" aria-pressed={on} onClick={() => void wear(w)}>{label(w)}</button>
-            : <button key={id} type="button" className="pet-item" data-locked="" aria-disabled="true" aria-label={`${label(w)}: ${t(earnKey(w as KeepsakeId), undefined, lang)}`}>
-                <small>{t(earnKey(w as KeepsakeId), undefined, lang)}</small>
-              </button>;
-        })}
-      </div>
-      {pages > 1 && <div className="pet-dots" aria-hidden="true">{Array.from({ length: pages }, (_, k) => <i key={k} data-on={k === at ? '' : undefined} onClick={() => setPage(k)} />)}</div>}
-      {note && <span className="pet-chip" role="status">{note}</span>}
       {confirm && <Sheet title={t('closet.warning', { name }, lang)} yes={t('closet.save', undefined, lang)} no={t('closet.cancel', undefined, lang)}
         onYes={() => void saveLook(confirm)} onNo={() => setConfirm(null)} />}
-    </div>
+    </>
   );
 }

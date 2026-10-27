@@ -14,8 +14,8 @@ import type { CharacterLook, Stage } from '@/lib/studio/types';
 import type { TalkState } from '../_ui/contract';
 import { REDUCED_MOTION_QUERY } from '../../_components/motion/activity';
 import type { IdleParams } from './breath';
-import { detailKey, fitDetails, gardenX, type DetailName, type Details, type ShownDetails } from './details';
-import { fitGarden, GARDEN_K, soilY, type GardenInput, type GardenShown } from './garden';
+import { detailKey, fitDetails, gardenAt, type DetailName, type Details, type ShownDetails } from './details';
+import { fitGarden, soilY, type GardenInput, type GardenShown } from './garden';
 import { fitWearing, NO_WEARING, WEAR_SLOT, wearKey, type ShownWearing, type Wearing } from './outfits';
 import { CLOSE_TAU, TextLipSync, type MouthSample } from './lipsync';
 import type { StageMotion } from './motion';
@@ -207,9 +207,10 @@ export const driftFor = (dx: number) => Math.min(RAIN_DRIFT, dx * 0.2);
  */
 export function potAim(h: Pick<Host, 'model' | 'room' | 'tier'>, kind: 'rain' | 'bloom', garden = gardens.get(h as Host)): { dx: number; at: Point } | null {
   if (!garden) return null;
-  const m = h.model, cx = m.pivots.body[0], g = m.growth, dx = gardenX(m) - cx;
+  // the Garden room draws the pot as its hero (bigger, a step in front): aim where it is drawn
+  const m = h.model, cx = m.pivots.body[0], g = m.growth, pot = gardenAt(m, h.room === 'garden'), dx = pot.x - cx;
   if (kind === 'rain') return { dx, at: { x: cx + (dx - driftFor(dx)) / g, y: GROUND - 2 } };
-  const lift = h.tier === 'reduced' ? 0 : ROOMS[h.room].pose.y ?? 0, top = (soilY(garden.kind) - (garden.state === 'bloomed' ? 17 : 8)) * GARDEN_K;
+  const lift = h.tier === 'reduced' ? 0 : ROOMS[h.room].pose.y ?? 0, top = pot.y - GROUND + (soilY(garden.kind) - (garden.state === 'bloomed' ? 17 : 8)) * pot.k;
   return { dx, at: { x: cx + dx / g, y: GROUND + (top - lift) / g } };
 }
 
@@ -438,7 +439,8 @@ function refit(h: Host, st: XState): void {
 /** The details this view has lit (§4.11); what the stage can wear shows now, the rest with its part. */
 export function setDetails(h: Host, d: Details): void {
   const st = state(h);
-  st.details = { ...d, keepsakes: [...(d.keepsakes ?? [])] };
+  // the lit details replace the lit details only: the Garden's seed (setGarden) stays on the floor
+  st.details = { ...d, keepsakes: [...(d.keepsakes ?? [])], ...('garden' in d ? {} : { garden: st.details.garden }) };
   st.fitStage = -1;
   refit(h, st);
   h.wake();

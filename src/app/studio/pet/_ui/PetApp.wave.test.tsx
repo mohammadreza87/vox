@@ -136,6 +136,6 @@ describe('PetApp, Wave B', () => {
     const input = screen.getByRole('textbox', { name: 'Talk to Mochi' });
     fireEvent.change(input, { target: { value: 'remember this: we plan a release on Tuesdays' } });
     fireEvent.submit(input.closest('form')!);
-    expect(await screen.findByRole('dialog', { name: 'Shall I keep this as “I learned how you plan a release”?' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Shall I keep this in my book?' })).toHaveTextContent('“I learned how you plan a release”');
   });
 });

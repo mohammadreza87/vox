@@ -124,6 +124,9 @@ export const TIPS: readonly TipDef[] = [
   { id: 'T14', line: 'tip.T14.closet', place: { kind: 'coach', target: 'rail-closet' }, rank: 4.5, fits: (s, m) => !!m.keepsake && !s.closetOpened },
 ];
 
+/** The opening seconds are the hello's (§7.1): its own tiny module, so the page reads it without the catalogue. */
+export { openOver, TIP_OPEN_MS } from './tipOpen';
+
 /** The record says this tip may show (§7.1): not dismissed, under its two lifetime shows, under three today. */
 export function tipAllowed(play: PetPlayView | undefined, id: TipId): boolean {
   if (!play) return false;

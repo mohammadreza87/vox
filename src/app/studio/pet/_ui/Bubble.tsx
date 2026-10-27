@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { MotionValue } from 'framer-motion';
 import { BUBBLE_MAX_CHARS, type NeedKey } from '@/lib/pet/types';
 import { BallIcon, CookieIcon, MoonIcon } from './Particles';
 import { petLang, t, textDir, type PetLang } from './strings';
@@ -108,6 +109,37 @@ interface BubbleProps {
   onGone?: (id: number) => void;
   /** a long-press on the bubble (a tip's reason line, §3.6) */
   onHold?: () => void;
+  /** the character's travel (engine.body.x, px): the bubble follows the head across the stage, kept on screen */
+  follow?: MotionValue<number>;
+  /** the head's x at rest (stage px; default the stage's centre) */
+  x?: number;
+}
+
+/** The bubble keeps this far from the stage's sides while it follows the pet (px). */
+const EDGE_PX = 8;
+
+/** Says "this message has nothing to say": an empty or blank line never draws a bubble (P-14). */
+export const blank = (m: BubbleMsg | null | undefined) => !m || !m.text.trim();
+
+/**
+ * The bubble follows the head as the character travels (a Bop shuffle, Starfall, a drift): one transform written from
+ * the engine's body x as it changes (no React render per frame), clamped so the bubble never leaves the stage.
+ */
+function useFollow(follow: MotionValue<number> | undefined, x: number | undefined, box: React.RefObject<HTMLDivElement | null>, anchor: React.RefObject<HTMLDivElement | null>, page: string | null) {
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    if (!a || page === null) return;
+    // measured once a page (its box is final from the first frame): the per-frame write never reads layout
+    const w = box.current?.offsetWidth ?? 0, sw = a.parentElement?.clientWidth ?? 0, cx = x ?? sw / 2;
+    // the head's x, kept inside the stage less half the bubble
+    const lo = w / 2 + EDGE_PX - cx, hi = sw - w / 2 - EDGE_PX - cx;
+    const place = (v: number) => {
+      const d = sw ? Math.max(Math.min(lo, hi), Math.min(Math.max(lo, hi), v)) : v;
+      a.style.transform = d ? `translate3d(${d.toFixed(1)}px,0,0)` : '';
+    };
+    place(follow?.get() ?? 0);
+    return follow?.on('change', place);
+  }, [follow, x, box, anchor, page]);
 }
 
 /**
@@ -116,8 +148,10 @@ interface BubbleProps {
  * sentence groups: dots show where you are, "more ›" goes on at once, and an unread page also turns by itself after
  * its hold. Nothing inside scrolls. While a paged reply shows, Telegram's BackButton closes it.
  */
-export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 290, cps = REVEAL_CPS, onGone, onHold }: BubbleProps) {
+export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 290, cps = REVEAL_CPS, onGone, onHold, follow, x }: BubbleProps) {
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const letGo = () => { if (hold.current) clearTimeout(hold.current); hold.current = null; };
   const textRef = useRef<HTMLSpanElement>(null);
   const [phase, setPhase] = useState<'reveal' | 'hold' | 'out'>('reveal');
@@ -138,22 +172,34 @@ export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 
   const last = page >= pages.length - 1;
   const paged = pages.length > 1;
 
-  // reveal the page: one timer, text written straight into the node
+  const empty = blank(msg);
+  // reveal the page: one timer, text written straight into the node. The whole page is laid out from the first frame
+  // (the part not said yet is there but hidden), so the box has its final size and nothing jitters as it types (P-28)
   useLayoutEffect(() => {
     const el = textRef.current;
-    if (!msg || !el) return;
+    if (!msg || empty || !el) return;
     setPhase('reveal');
     let i = 0;
-    el.textContent = '';
+    const said = document.createTextNode('');
+    const rest = document.createElement('span');
+    rest.className = 'pet-bubble-rest';
+    rest.style.visibility = 'hidden';
+    rest.textContent = shown;
+    el.replaceChildren(said, rest);
     const timer = setInterval(() => {
       // a slow frame catches up instead of drifting behind the mouth
       i = Math.min(shown.length, i + 1);
-      el.textContent = shown.slice(0, i);
+      said.data = shown.slice(0, i);
+      rest.textContent = shown.slice(i);
       if (i >= shown.length) { clearInterval(timer); setPhase('hold'); }
     }, 1000 / cps);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msg?.id, page, cps]);
+
+  // nothing to say: no bubble, and the page hears it is gone at once (it never holds a blank slot open)
+  useEffect(() => { if (msg && empty) goneRef.current?.(msg.id); }, [msg, empty]);
+  useFollow(follow, x, boxRef, anchorRef, msg && !empty ? `${msg.id}:${page}` : null);
 
   // hold, then the next page, or fade after the last
   useEffect(() => {
@@ -168,10 +214,12 @@ export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 
     return backButton(() => setPhase('out'));
   }, [paged, phase]);
 
-  if (!msg) return null;
+  if (!msg || empty) return null;
   return (
-    <div className="pet-bubble" role="status" aria-live="polite" dir={tdir} data-out={phase === 'out' ? '' : undefined}
-      style={{ top, ['--pet-lines' as string]: budget }}
+    // the anchor follows the head across the stage; the bubble sits in it as before (z 3: over the room's lamp)
+    <div ref={anchorRef} className="pet-bubble-at" style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: 0, zIndex: 3 }}>
+    <div ref={boxRef} className="pet-bubble" role="status" aria-live="polite" dir={tdir} data-out={phase === 'out' ? '' : undefined}
+      style={{ top, ...(x === undefined ? {} : { left: x }), ['--pet-lines' as string]: budget }}
       onPointerDown={onHold && (() => { letGo(); hold.current = setTimeout(() => { hold.current = null; onHold(); }, 500); })} onPointerUp={letGo} onPointerCancel={letGo} onPointerLeave={letGo}
       onTransitionEnd={(e) => { if (phase === 'out' && e.propertyName === 'opacity') goneRef.current?.(msg.id); }}>
       <span className="pet-sr">{msg.text}</span>
@@ -183,6 +231,7 @@ export const Bubble = memo(function Bubble({ msg, top, room, lines = 4, width = 
           {!last && <button type="button" className="pet-more" dir={lang === 'fa' ? 'rtl' : 'ltr'} onClick={turn}>{t('ui.more')}</button>}
         </span>
       )}
+    </div>
     </div>
   );
 });

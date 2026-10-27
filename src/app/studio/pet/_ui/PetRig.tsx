@@ -51,11 +51,13 @@ function useLatchedLoops(el: React.RefObject<HTMLDivElement | null>) {
  * the look, stage, size or structural expression changes, never per frame. Pointer input is taken by
  * the Stage, which also tracks fingers off the character.
  */
-export const PetRig = memo(function PetRig({ engine, look, stage, size, label, expr, overlay, floor }: PetRigProps & { overlay?: ReactNode; floor?: ReactNode }) {
+export const PetRig = memo(function PetRig({ engine, look, stage, size, label, expr, overlay, back, floor }: PetRigProps & { overlay?: ReactNode; back?: ReactNode; floor?: ReactNode }) {
   const breathe = useRef<HTMLDivElement>(null);
   useLatchedLoops(breathe);
   return (
     <>
+      {/* room keepsakes stand behind the pet; the garden's pot in front of it (Details) */}
+      {back}
       <m.div className="pet-body" data-expr={expr} style={{ width: size, height: size, ...engine.body }}>
         <div className="pet-breathe" ref={breathe}>
           <CharacterView look={look} stage={stage} expr={expr} size={size} lod="hero" label={label} rig={engine.rig} />

@@ -43,8 +43,14 @@ export const TARGET = { js: 130 * 1024, css: 12_000, engine: 25 * 1024 };
  * room, sheet, tip, hands-free and streaming module loads lazily and is not counted; what remains is the page's host
  * glue for them (~1 KB br). Ceiling: 199,142 B plus 1,536 B of environment slack. Engine (45,282 B) and CSS
  * (11,692 B) stay under their ceilings unchanged.
+ * Raised again 2026-10-26, product call "Visual QA polish wave: rooms as places, stable bottom stack, visible payoffs":
+ * the launch page measured 201,175 B br (room light cross-fade in Stage, the bubble following the pet, the hello-first
+ * open sequence and the deferred-dock cross-fade in the page's host glue; the away rooms' light, the garden art and
+ * every room panel still load lazily) and the engine chunk 46,410 B br (the garden fix in setDetails, the ball round
+ * ending on sleep, the bow worn on the head). Motion quality first (Reza, 26 Oct 2026): ceilings are the measured
+ * weight plus the same slack as before. Route CSS 11,800 B raw stays under the brief's 12 KB.
  */
-export const CEILING = { js: 199_142 + 1536, css: TARGET.css, engine: 45_268 + 1024 };
+export const CEILING = { js: 201_175 + 1536, css: TARGET.css, engine: 46_410 + 1024 };
 /** a string only the engine's chunk carries (a reaction kind) */
 const ENGINE_MARK = '"sleepPoke"';
 

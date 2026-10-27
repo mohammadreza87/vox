@@ -1,6 +1,6 @@
 /**
  * Pure layout and colour for the pet page (brief §1.1, §3.2): where the character sits, the static
- * backdrop in the agent's hue, and the anchors the engine aims gaze, feed reach and particles at.
+ * backdrop of each room in the agent's hue, and the anchors the engine aims gaze, feed reach and particles at.
  */
 
 import { mix, TONES } from '@/lib/studio/character';
@@ -13,9 +13,11 @@ import type { SceneAnchors, ToyKind } from './contract';
 export const PET_GROUND = '#0E1013';
 
 export interface Backdrop {
+  /** which room's light this is (the Stage cross-fades when it changes) */
+  room: SceneRoom;
   /** the edge colour: Telegram header, background and bottom bar */
   edge: string;
-  /** the static radial gradient (never animated) */
+  /** the static backdrop: gradients only (never animated, no filters) */
   image: string;
   /** the pool of light the character stands in */
   floor: string;
@@ -25,37 +27,79 @@ export interface Backdrop {
   hue: string;
 }
 
+export type SceneRoom = 'home' | 'play' | 'garden' | 'closet' | 'bedroom' | 'book';
+
+/** The away rooms' own light (roomLight.ts, a lazy chunk: the first paint never carries it). */
+export type AwayBackdrop = (look: Pick<CharacterLook, 'hue'>, room: Exclude<SceneRoom, 'home'>, groundY?: number) => Backdrop;
+
 /**
- * A dusk room in the agent's hue: lit softly behind the character, deepening to the Soft Weather
- * ground at the edges, so the pastel body always has contrast and lights-off reads as night.
+ * A room in the agent's hue, lit softly behind the character and deepening to the Soft Weather ground at the edges,
+ * so the pastel body always has contrast. Home is the dusk room as before; Play is the same room brighter. Garden,
+ * Closet, Bedroom and Life Book are their own places (`away`, roomLight.ts); until that chunk is in they keep Home's
+ * light. Gradients only: static, no filters, no blur (§10.7).
  */
-export function backdrop(look: Pick<CharacterLook, 'hue'>): Backdrop {
-  const t = TONES[look.hue];
-  const core = mix(t.base, PET_GROUND, 0.62);
-  const mid = mix(t.shadow, PET_GROUND, 0.8);
-  const edge = mix(t.deep, PET_GROUND, 0.9);
+export function backdrop(look: Pick<CharacterLook, 'hue'>, room: SceneRoom = 'home', groundY?: number, away?: AwayBackdrop): Backdrop {
+  if (room !== 'home') { if (away) return away(look, room, groundY); if (room !== 'play') room = 'home'; }
+  const t = TONES[look.hue], play = room === 'play';
+  const core = mix(play ? t.light : t.base, PET_GROUND, play ? 0.5 : 0.62);
+  const mid = mix(t.shadow, PET_GROUND, play ? 0.72 : 0.8);
+  const edge = mix(t.deep, PET_GROUND, play ? 0.86 : 0.9);
   return {
-    edge,
-    image: `radial-gradient(120% 78% at 50% 40%, ${core} 0%, ${mid} 52%, ${edge} 100%)`,
-    floor: `radial-gradient(closest-side, ${mix(t.light, PET_GROUND, 0.55)}66, ${mid}00)`,
-    glow: `radial-gradient(closest-side, ${t.light}cc, ${t.base}55 55%, ${t.base}00)`,
-    hue: t.light,
+    room, edge, hue: t.light,
+    image: `radial-gradient(${play ? '135% 88% at 50% 38%' : '120% 78% at 50% 40%'}, ${core} 0%, ${mid} 52%, ${edge} 100%)`,
+    floor: `radial-gradient(closest-side, ${mix(t.light, PET_GROUND, play ? 0.4 : 0.55)}66, ${mid}00)`,
+    glow: glowOf(look),
   };
 }
 
+/** The away rooms' horizon sits this far behind the character's ground line (px): the pet stands on the floor, its room props on the seam. */
+export const HORIZON_PX = 34;
+
+/** The stage-up glow ellipse, in the agent's hue in every room. */
+export const glowOf = (look: Pick<CharacterLook, 'hue'>) => { const t = TONES[look.hue]; return `radial-gradient(closest-side, ${t.light}cc, ${t.base}55 55%, ${t.base}00)`; };
+
 export interface CharacterBox { x: number; y: number; size: number }
 
+/** How big the character is and where it stands, per height class (§9.2, §9.3). */
+const FIT = {
+  // Peek and Short: ~74% of the width, centred near 45% of the height (360×640 reads balanced: kept as it was)
+  small: { w: 0.74, h: 0.68 },
+  // Regular and Tall: the character fills the stage (the body ~70% of the width), standing low on a floor line ~85%
+  // down the free stage, so the gap to the rail is about a bubble zone and the bubble and thought zones sit above the
+  // head; Tall grows toward the 520 cap
+  regular: { w: 0.92, h: 0.58, ground: 0.85 },
+  tall: { w: 0.94, h: 0.6, ground: 0.85 },
+} as const;
+
 /**
- * The character: its body ~56% of the viewport width (the body fills ~3/4 of its 200 box, so the box is
- * ~74%), centred near 45% of the height (§1.1), shrunk on short screens so the head keeps room for
- * the bubble under the safe area and the feet never meet the dock.
+ * The character's box (the body fills ~3/4 of its 200 box). Peek and Short: ~74% of the viewport width, centred near
+ * 45% of the height (§1.1), shrunk on short screens so the head keeps room for the bubble under the safe area and the
+ * feet never meet the dock. Regular and Tall (`cls`): bigger, standing low on a floor line ~85% down the free stage,
+ * so the stage is never half empty above the dock.
  */
-export function characterBox(vw: number, vh: number, top = 0, dockTop = vh): CharacterBox {
+export function characterBox(vw: number, vh: number, top = 0, dockTop = vh, cls?: 'peek' | 'short' | 'regular' | 'tall', tray?: number): CharacterBox {
   const room = Math.max(120, dockTop - top);
-  const size = Math.round(Math.max(120, Math.min(vw * 0.74, room * 0.68, 520)));
-  const cy = Math.min(top + room * 0.52, vh * 0.45 + top * 0.5);
-  return { x: Math.round((vw - size) / 2), y: Math.round(cy - size / 2), size };
+  let box: CharacterBox;
+  if (cls === 'regular' || cls === 'tall') {
+    const f = FIT[cls];
+    const size = Math.round(Math.max(120, Math.min(vw * f.w, room * f.h, 520)));
+    const ground = top + room * f.ground;
+    box = { x: Math.round((vw - size) / 2), y: Math.round(ground - (size * GROUND) / 200), size };
+  } else {
+    const size = Math.round(Math.max(120, Math.min(vw * FIT.small.w, room * FIT.small.h, 520)));
+    const cy = Math.min(top + room * 0.52, vh * 0.45 + top * 0.5);
+    box = { x: Math.round((vw - size) / 2), y: Math.round(cy - size / 2), size };
+  }
+  // a room's tray (Closet, Life Book) rises over the stage: the pet stands on its top edge (the tray may cover the
+  // shadow, never the body), a little smaller only if the bubble zone above the head would not fit
+  if (tray === undefined || groundPoint(box).y <= tray - TRAY.gap) return box;
+  const ground = tray - TRAY.gap, zone = cls === 'tall' ? TRAY.zone.tall : cls === 'regular' ? TRAY.zone.regular : TRAY.zone.small;
+  const size = Math.round(Math.max(120, Math.min(box.size, (ground - top - zone) / (GROUND / 200 - 0.2))));
+  return { x: Math.round((vw - size) / 2), y: Math.round(ground - (size * GROUND) / 200), size };
 }
+
+/** Over a tray: the body's foot this far above the tray's top (px), and the bubble zone kept above the head (px). */
+const TRAY = { gap: 2, zone: { small: 100, regular: 150, tall: 170 } } as const;
 
 /** The character's ground point (where the shadow sits) in stage px. */
 export const groundPoint = (c: CharacterBox): Point => ({ x: c.x + c.size / 2, y: c.y + (c.size * GROUND) / 200 });

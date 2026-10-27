@@ -34,19 +34,22 @@ const FSI = '⁨', PDI = '⁩';
  * (providers, locations, retention); until they are resolved (a legal to-do) it is a neutral line pointing to Privacy
  * and memory, in the privacy doc's own words for that page. Pending legal review like the rest of UX-02.
  */
-export function micSheet(lang: PetLang, n: PetViewB['voiceNotice']): { title: string; body: string; yes: string; no: string } {
+/** The Vox privacy page the UX-02 body names ("Privacy and memory"): on this origin, opened outside the pet. */
+export const PRIVACY_HREF = '/privacy';
+
+export function micSheet(lang: PetLang, n: PetViewB['voiceNotice']): { title: string; body: string; yes: string; no: string; link?: { text: string; href: string } } {
   const full = n?.providers && n.locations && n.retention ? { ...n, locations: n.locations, retention: n.retention } : null;
   if (lang === 'fa') {
     const iso = (s: string) => `${FSI}${s}${PDI}`;
     const facts = full ? `صدای شما برای تبدیل به متن و پاسخ به درخواستتان به ${iso(full.providersFa ?? full.providers)} در ${iso(full.locationsFa ?? full.locations)} فرستاده می‌شود. ${full.retentionFa ?? ''} `
       : 'صدای شما برای تبدیل به متن و پاسخ به درخواستتان به ارائه‌دهندگان خدمات صوتی فرستاده می‌شود؛ فهرست آن‌ها در «حریم خصوصی و حافظه» آمده است. ';
     return { title: 'برای این گفتگو از میکروفون استفاده می‌کنید؟', body: `${facts}با این کار، شناسایی گوینده از روی صدا فعال نمی‌شود.`.replace(/\s+/g, ' ').trim(),
-      yes: 'استفاده از میکروفون', no: 'استفاده از متن' };
+      yes: 'استفاده از میکروفون', no: 'استفاده از متن', ...(full ? {} : { link: { text: 'حریم خصوصی و حافظه', href: PRIVACY_HREF } }) };
   }
   const facts = full ? `Your audio will be sent to ${full.providers} in ${full.locations} to transcribe and answer your request. ${full.retention} `
     : 'Your audio will be sent to our voice providers, listed in Privacy and memory, to transcribe and answer your request. ';
   return { title: 'Use your microphone for this conversation?', body: `${facts}This does not turn on voice recognition.`.replace(/\s+/g, ' ').trim(),
-    yes: 'Use microphone', no: 'Use text' };
+    yes: 'Use microphone', no: 'Use text', ...(full ? {} : { link: { text: 'Privacy and memory', href: PRIVACY_HREF } }) };
 }
 
 /** Hidden when either is missing (some iOS Telegram WebViews, older Android ones): hold-to-talk stays. */
@@ -350,7 +353,8 @@ export default function Extras({ host }: { host: PetHost }) {
       })()}
       {sheet?.kind === 'hf' && <Sheet title={t('perm.P3b.title', undefined, lang)} body={t('perm.P3b.body', { name }, lang)}
         yes={t('perm.P3b.yes', undefined, lang)} no={t('perm.P3b.no', undefined, lang)} onYes={() => answerHf(true)} onNo={() => answerHf(false)} />}
-      {sheet?.kind === 'confirm' && <Sheet title={t('growth.confirm.ask', { title: sheet.m.title }, lang)}
+      {/* the ask is the title, the moment's own (up to sixty characters) its body: a long title never cuts the ask (P-01) */}
+      {sheet?.kind === 'confirm' && <Sheet title={t('growth.confirm.title', undefined, lang)} body={lang === 'fa' ? `«${FSI}${sheet.m.title}${PDI}»` : `“${sheet.m.title}”`}
         yes={t('growth.confirm.yes', undefined, lang)} no={t('growth.confirm.no', undefined, lang)}
         onYes={() => void confirm(sheet.m, true)} onNo={() => void confirm(sheet.m, false)} />}
       {coach && (
