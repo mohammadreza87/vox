@@ -124,17 +124,32 @@ export class TelegramApiError extends Error {
 /** getWebhookInfo, trimmed to what the integrity check reads. `url` is empty while the bot uses getUpdates. */
 export interface TelegramWebhookInfo { url: string; pending_update_count?: number }
 
+export interface TelegramOwnerFence { beforeAuthorize():void; assertActive():void; signal:AbortSignal }
 export class TelegramBotClient {
   readonly committedSendFence = true as const;
   private readonly base: string;
   private readonly fileBase: string;
 
-  constructor(token: string, private readonly fetchFn: FetchFn = fetch) {
+  constructor(token: string, private readonly fetchFn: FetchFn = fetch, private readonly owner?:TelegramOwnerFence) {
     this.base = `https://api.telegram.org/bot${token}`;
     this.fileBase = `https://api.telegram.org/file/bot${token}`;
   }
 
+  private effectSignal(signal?:AbortSignal):AbortSignal|undefined {
+    return this.owner ? AbortSignal.any([this.owner.signal, ...(signal ? [signal] : [])]) : signal;
+  }
+  private authorize(options:{signal?:AbortSignal;authorizeNow?:()=>boolean}):void {
+    if(this.owner){
+      if(this.owner.beforeAuthorize.constructor.name==='AsyncFunction')throw new ExportAuthorityError();
+      const result:unknown=this.owner.beforeAuthorize();
+      if(result && typeof (result as {then?:unknown}).then==='function')throw new ExportAuthorityError();
+    }
+    // Ownership I/O precedes the caller's last boundary/deadline check.
+    assertExportAuthority(options);
+    this.owner?.assertActive();
+  }
   private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal, authorizeNow?: () => boolean): Promise<T> {
+    signal=this.effectSignal(signal);
     const isForm = body instanceof FormData;
     const options: RequestInit = {
       method: 'POST',
@@ -145,7 +160,7 @@ export class TelegramBotClient {
     let response: Response;
     for (let attempt = 0; ; attempt++) {
       try {
-        assertExportAuthority({signal, authorizeNow});
+        this.authorize({signal, authorizeNow});
         response = await this.fetchFn(`${this.base}/${method}`, options);
         break;
       } catch (error) {
@@ -236,11 +251,12 @@ export class TelegramBotClient {
    * byte counter is authoritative before allocating the final artifact. */
   async downloadDocument(fileId: string, options: { maxBytes: number; authorizeNow: () => boolean; signal?: AbortSignal }): Promise<Uint8Array> {
     if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || options.maxBytes > 128 * 1024) throw new Error('Invalid archive download limit');
+    options={...options,signal:this.effectSignal(options.signal)};
     const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, options.signal, options.authorizeNow);
-    assertExportAuthority(options);
+    this.authorize(options);
     if (!file.file_path || (file.file_size !== undefined && (!Number.isSafeInteger(file.file_size) || file.file_size < 0 || file.file_size > options.maxBytes))) throw new Error('Archive file unavailable');
     const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal: options.signal });
-    assertExportAuthority(options);
+    this.authorize(options);
     if (!response.ok || !response.body) throw new Error('Archive file unavailable');
     const declared = response.headers.get('content-length');
     if (declared !== null && (!Number.isSafeInteger(Number(declared)) || Number(declared) > options.maxBytes || Number(declared) < 0)) {
@@ -250,9 +266,9 @@ export class TelegramBotClient {
     let size = 0;
     try {
       for (;;) {
-        assertExportAuthority(options);
+        this.authorize(options);
         const next = await reader.read();
-        assertExportAuthority(options);
+        this.authorize(options);
         if (next.done) break;
         size += next.value.byteLength;
         if (size > options.maxBytes) throw new Error('Archive file too large');
@@ -279,7 +295,9 @@ export class TelegramBotClient {
     const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId });
     if (!file.file_path) throw new TelegramApiError('getFile', 'no file_path');
     if (file.file_size && file.file_size > maxBytes) throw new TelegramApiError('getFile', 'file too large');
-    const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`);
+    const signal=this.effectSignal();
+    this.authorize({signal});
+    const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`,{signal});
     if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
     return response.arrayBuffer();
   }
@@ -289,9 +307,11 @@ export class TelegramBotClient {
    * never carry the URL, the bot token, the file path or any bytes.
    */
   async downloadImage(fileId: string, options: { maxBytes: number; signal?: AbortSignal }): Promise<Uint8Array> {
+    options={...options,signal:this.effectSignal(options.signal)};
     const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, options.signal);
     if (!file.file_path) throw new TelegramApiError('getFile', 'no file_path');
     if (typeof file.file_size === 'number' && file.file_size > options.maxBytes) throw new TelegramApiError('getFile', 'file too large');
+    this.authorize(options);
     const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal: options.signal });
     if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
     const declared = Number(response.headers?.get('content-length'));

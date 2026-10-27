@@ -1,3 +1,4 @@
+import { ensureStudioFileRuntimeOwner, type FileRuntimeOwner } from './file-runtime-owner';
 import { StudioTelegramArchive } from './telegram-archive';
 import {StudioAssistantTextIntegration,parseAssistantTextKeys} from './assistant-text-integration';
 import { createStudioRequestedRoutines } from './requested-routines';
@@ -280,7 +281,7 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 }
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio>; __voxPreferenceTasks?: Studio['deps']['preferenceLearning'];
-  __voxPreferenceStop?: Promise<{ pending: number }>; __voxPreferenceHooks?: boolean; __voxAdaptiveClose?: () => void; __voxAdaptiveExitHook?: boolean };
+  __voxPreferenceStop?: Promise<{ pending: number }>; __voxPreferenceHooks?: boolean; __voxAdaptiveClose?: () => void; __voxAdaptiveExitHook?: boolean; __voxBotRuntime?: { stop(): Promise<{pending:number}> }; __voxRuntimeStop?: Promise<{pending:number}>; __voxFileRuntimeOwner?:FileRuntimeOwner };
 export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
@@ -340,23 +341,28 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
 async function create(): Promise<Studio> {
   const env = process.env;
   const config = validateStudioConfig(env);
+  const fileRuntimeOwner = config.storage === 'file' && config.adaptiveFormat === 'file' ? ensureStudioFileRuntimeOwner(config.dataDir,{requireQualified:config.production||config.assistantTextEnabled}) : undefined;
+  if(fileRuntimeOwner)g.__voxFileRuntimeOwner=fileRuntimeOwner;
+  const ownerHook = fileRuntimeOwner ? { beforeAuthorize: () => fileRuntimeOwner.assertCurrent(), assertActive: () => fileRuntimeOwner.assertActive(), signal: fileRuntimeOwner.signal } : undefined;
   const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled, config.adaptiveFormat);
+  let initialManagerMetadataFailure = false;
   try {
     // Load and persist once so corrupt state or unwritable storage fails startup.
     if (config.production) {
       if (config.storage === 'file') await storage.store.update(() => undefined);
       else await storage.store.read();
     }
-    const managerBot = config.token ? new TelegramBotClient(config.token) : null;
+    const managerBot = config.token ? new TelegramBotClient(config.token, undefined, ownerHook) : null;
     let managerUsername = env.VOXX_BOT_USERNAME ?? '';
     if (managerBot && config.production) {
       let manager;
       // Bound the read-only credential probe; an unavailable Telegram connection
       // must not leave server startup hanging indefinitely.
-      const probe = new TelegramBotClient(config.token!, (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(10_000) }));
-      try { manager = await probe.getMe(); } catch { throw new Error('VOXX_BOT_TOKEN authentication failed (Telegram getMe)'); }
-      if (!manager.is_bot || !manager.username) throw new Error('VOXX_BOT_TOKEN must identify a Telegram bot with a username');
+      const probe = new TelegramBotClient(config.token!, (input, init) => fetch(input, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), AbortSignal.timeout(10_000)]) }), ownerHook);
+      try { manager = await probe.getMe(); } catch { initialManagerMetadataFailure = true; throw new Error('VOXX_BOT_TOKEN authentication failed (Telegram getMe)'); }
+      if (!manager.is_bot || !manager.username) { initialManagerMetadataFailure = true; throw new Error('VOXX_BOT_TOKEN must identify a Telegram bot with a username'); }
       if (managerUsername && managerUsername.replace(/^@/, '').toLowerCase() !== manager.username.toLowerCase()) {
+        initialManagerMetadataFailure = true;
         throw new Error('VOXX_BOT_USERNAME does not match VOXX_BOT_TOKEN');
       }
       managerUsername = manager.username;
@@ -371,6 +377,7 @@ async function create(): Promise<Studio> {
     const authority = new AdaptiveRelationshipService(storage.adaptive!);
     const studio = new Studio({
       store: storage.store,
+      fileRuntimeOwner,
       // Wired here, not derived: route bundles carry their own copy of the store classes, so
       // petStoreFor's instanceof checks fail on a Studio built by instrumentation.
       pets: storage.pets,
@@ -393,7 +400,7 @@ async function create(): Promise<Studio> {
       tts,
       managerBot,
       managerUsername,
-      botFor: (token) => new TelegramBotClient(token),
+      botFor: (token) => new TelegramBotClient(token, undefined, ownerHook),
       secret: env.STUDIO_SECRET!,
       orgName: env.STUDIO_ORG_NAME ?? 'HOOR',
       superadminIds: config.superadminIds,
@@ -564,7 +571,17 @@ async function create(): Promise<Studio> {
       process.once('exit', () => { g.__voxAdaptiveClose?.(); });
     }
     return studio;
-  } catch (error) { storage.closeAdaptive?.(); throw error; }
+  } catch (error) {
+    if (initialManagerMetadataFailure && fileRuntimeOwner) {
+      // Only the completed initial store check and read-only getMe probe ran.
+      // No Studio, invalidators, providers or task graph has been published.
+      // Keep the same healthy epoch for a corrected credential retry; cleanup
+      // failure or an actual loss/drain remains terminal, with no reacquisition.
+      try { storage.closeAdaptive?.(); fileRuntimeOwner.assertCurrent(); }
+      catch (cleanupError) { fileRuntimeOwner.beginDrain(); throw cleanupError; }
+    } else { fileRuntimeOwner?.beginDrain(); storage.closeAdaptive?.(); }
+    throw error;
+  }
 }
 
 export async function maintainAdaptiveAccount(studio: Studio, telegramId: number, signal?: AbortSignal): Promise<void> {
@@ -592,7 +609,8 @@ export function getStudio(): Promise<Studio> {
         g.__voxPreferenceTasks = studio.deps.preferenceLearning;
         if (!g.__voxPreferenceHooks) {
           g.__voxPreferenceHooks = true;
-          const stop = () => { stopStudioPreferenceLearning(); };
+          const stop = () => { void stopStudioRuntime(); };
+          studio.deps.fileRuntimeOwner?.onDrain(() => stopStudioRuntime());
           process.once('SIGTERM', stop); process.once('SIGINT', stop);
         }
         return studio;
@@ -602,5 +620,18 @@ export function getStudio(): Promise<Studio> {
       throw e;
     });
   }
-  return g.__voxStudio;
+  return g.__voxStudio.then(studio => { studio.deps.fileRuntimeOwner?.assertCurrent(); return studio; });
+}
+
+export function registerStudioBotRuntime(runtime:{stop():Promise<{pending:number}>}):void { g.__voxBotRuntime=runtime; }
+export function stopStudioRuntime():Promise<{pending:number}> {
+  if(g.__voxRuntimeStop)return g.__voxRuntimeStop;
+  // Publish the promise before invoking callbacks that can synchronously re-enter onDrain.
+  g.__voxRuntimeStop=Promise.resolve().then(async()=>{
+    const studio=await g.__voxStudio?.catch(()=>undefined);
+    studio?.deps.fileRuntimeOwner?.beginDrain();
+    return g.__voxBotRuntime?.stop() ?? stopStudioPreferenceLearning();
+  });
+  g.__voxFileRuntimeOwner?.beginDrain();
+  return g.__voxRuntimeStop;
 }

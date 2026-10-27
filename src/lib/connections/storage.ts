@@ -1,3 +1,5 @@
+import { fileRuntimePromises, assertFileRuntimePath, commitFileRuntimeRename, prepareFileRuntimeTransient, createFileRuntimeTransientDirectory, publishFileRuntimeTransientTree } from '../studio/file-runtime-owner';
+
 import { createHash } from 'crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { connectionSchema, recordSchemas, type ConnectionsRecords, type RecordCollection } from './contracts';
@@ -116,7 +118,7 @@ export const COLLECTIONS_ADDED_LATER: readonly RecordCollection[] = [];
 /** A collection directory's record files, or null when the generation predates that (later) collection.
  * Throws ENOENT when the generation directory or an always-written collection is missing, so nothing lost reads as empty. */
 export async function collectionFiles(generationDirectory: string, collection: RecordCollection, addedLater: readonly RecordCollection[] = COLLECTIONS_ADDED_LATER): Promise<string[] | null> {
-  const { promises: fs } = await import('fs');
+  const fs = fileRuntimePromises;
   const { join } = await import('path');
   try { return await fs.readdir(join(generationDirectory, collection)); }
   catch (error) {
@@ -131,9 +133,9 @@ const sameGeneration = (raw: unknown, generation: string) => !!raw && typeof raw
  * The pointer switches only after all new records are fsynced; old generations are purged.
  * File permissions are a local boundary, not a substitute for isolated broker identity. */
 export class FileConnectionsStorage implements ConnectionsStorage {
-  constructor(readonly directory: string) {}
+  constructor(readonly directory: string) { assertFileRuntimePath(directory); }
   async transact<T>(partitionId: string, mutate: (records: RawConnectionsRecords) => { records: ConnectionsRecords; result: T }): Promise<T> {
-    const { promises: fs } = await import('fs');
+    const fs = fileRuntimePromises;
     const { join } = await import('path');
     const { randomUUID } = await import('crypto');
     const root = join(this.directory, key(partitionId));
@@ -141,7 +143,7 @@ export class FileConnectionsStorage implements ConnectionsStorage {
     const lock = join(root, 'lock');
     const deadline = Date.now() + 3000;
     while (true) {
-      try { await fs.mkdir(lock, { mode: 0o700 }); break; }
+      try { createFileRuntimeTransientDirectory(lock); break; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         if (Date.now() >= deadline) throw new Error('Connections storage is busy');
@@ -182,7 +184,7 @@ export class FileConnectionsStorage implements ConnectionsStorage {
       const before = JSON.stringify(current);
       const next = mutate(current);
       if (before === JSON.stringify(next.records)) return clone(next.result);
-      await fs.mkdir(nextDirectory, { mode: 0o700 });
+      createFileRuntimeTransientDirectory(nextDirectory);
       let totalBytes = 0;
       for (const collection of CONNECTION_COLLECTIONS) {
         const collectionDirectory = join(nextDirectory, collection);
@@ -200,9 +202,10 @@ export class FileConnectionsStorage implements ConnectionsStorage {
       }
       const generationHandle = await fs.open(nextDirectory, 'r');
       try { await generationHandle.sync(); } finally { await generationHandle.close(); }
+      prepareFileRuntimeTransient(temporaryPointer);
       const pointer = await fs.open(temporaryPointer, 'wx', 0o600);
       try { await pointer.writeFile(JSON.stringify({ generation })); await pointer.sync(); } finally { await pointer.close(); }
-      await fs.rename(temporaryPointer, pointerFile); committed = true;
+      commitFileRuntimeRename(temporaryPointer, pointerFile); publishFileRuntimeTransientTree(nextDirectory); committed = true;
       const directoryHandle = await fs.open(root, 'r');
       try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
       // Never retain historical payload copies as an incidental backup.
@@ -210,13 +213,13 @@ export class FileConnectionsStorage implements ConnectionsStorage {
       return clone(next.result);
     } finally {
       await fs.unlink(temporaryPointer).catch(() => undefined);
-      if (!committed) await fs.rm(nextDirectory, { recursive: true, force: true });
+      if (!committed) await fs.rm(nextDirectory, { recursive: true, force: true }).catch(() => undefined);
       await fs.rmdir(lock);
     }
   }
   /** Lock-free read of one partition's current generation; retried when a writer swaps the generation mid-read. */
   private async readCurrent(root: string, collections: readonly RecordCollection[]): Promise<RawConnectionsRecords> {
-    const { promises: fs } = await import('fs');
+    const fs = fileRuntimePromises;
     const { join } = await import('path');
     for (let attempt = 0; ; attempt++) {
       const current = emptyRecords();
@@ -255,7 +258,7 @@ export class FileConnectionsStorage implements ConnectionsStorage {
   }
   /** O(partitions); callers cache it. Reads only each partition's connections. */
   async countLivePeopleByAgent(agentId: string, excludeAccountId?: string): Promise<Record<string, number>> {
-    const { promises: fs } = await import('fs');
+    const fs = fileRuntimePromises;
     const { join } = await import('path');
     let entries: string[];
     try { entries = await fs.readdir(this.directory); }

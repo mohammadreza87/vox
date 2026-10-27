@@ -12,7 +12,7 @@ const scripts = dirname(fileURLToPath(import.meta.url));
 function fixture(run) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'vox-skill-routing-config-')));
   try {
-    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs']) {
+    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-file-runtime-owner.mjs']) {
       cpSync(join(scripts, name), join(dir, name));
     }
     // The earlier installer has no operation helper; guarded releases import it.

@@ -17,7 +17,7 @@ const ready = version => ({ version, state: 'ready', rootId: uuid, format: 'sqli
   ...(version >= 2 ? { canonicalSchemaVersion: version, controlsSchemaVersion: version, productPauseEnforcementVersion: 1 } : {}),
   ...(version === 3 ? { rightsUseHoldEnforcementVersion: 1 } : {}) });
 function fixture(run) {
-  const dir = mkdtempSync(join(tmpdir(), 'vox-release-pause-'));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'vox-release-pause-')));
   const env = { STUDIO_DATA_DIR: join(dir, 'data'), STUDIO_ADAPTIVE_FORMAT: 'sqlite-v1' };
   const managed = join(env.STUDIO_DATA_DIR, 'adaptive.managed');
   mkdirSync(managed, { recursive: true });
@@ -183,11 +183,24 @@ test('existing null, arrays, partial or invalid release records cannot fall back
 
 /** Exercise the actual CLI's pre-swap ordering with a real clean fixture Git
  * tree. Every network or launchctl attempt is separately recorded and denied. */
+function syntheticNativeDescriptor(project) {
+  // Unit-only inventory: these bytes are never executed or represented as a
+  // compiled Darwin artifact. The preload denies every native subprocess.
+  const bytes = Buffer.from('# SYNTHETIC FRO1 unit native observation fixture; never execute\n');
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  writeFileSync(join(project, '.next', 'studio-process-metadata'), bytes, { mode: 0o700 });
+  return { version: 1, abi: 1, available: true, platform: 'darwin', arch: 'arm64', file: 'studio-process-metadata',
+    bytes: bytes.length, binarySha256: hash(bytes), sourceSha256: hash(readFileSync(join(project, 'scripts', 'native', 'studio-process-metadata-darwin.c'))),
+    compilerPath: '/synthetic/unit-only-not-a-compiler', compilerSha256: hash('synthetic compiler'),
+    compilerVersionSha256: hash('synthetic compiler version'), sdkVersion: '0.0', deploymentTarget: '11.0' };
+}
 function cliFixture(run) {
   fixture(f => {
     const source = fileURLToPath(new URL('.', import.meta.url));
     const project = join(f.dir, 'source'); mkdirSync(join(project, 'scripts'), { recursive: true });
-    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs']) cpSync(join(source, name), join(project, 'scripts', name));
+    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs', 'studio-file-runtime-owner.mjs']) cpSync(join(source, name), join(project, 'scripts', name));
+    mkdirSync(join(project, 'scripts', 'native'));
+    cpSync(join(source, 'native', 'studio-process-metadata-darwin.c'), join(project, 'scripts', 'native', 'studio-process-metadata-darwin.c'));
     writeFileSync(join(project, '.gitignore'), '.next/\nnode_modules/\n');
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(project, 'node_modules'));
     const git = (...args) => { const result = spawnSync('git', args, { cwd: project, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
@@ -195,13 +208,14 @@ function cliFixture(run) {
     mkdirSync(join(project, '.next', 'standalone', '.next'), { recursive: true });
     writeFileSync(join(project, '.next', 'standalone', 'server.js'), 'throw new Error("must not start");\n');
     for (const dir of [join(project, '.next'), join(project, '.next', 'standalone', '.next')]) writeFileSync(join(dir, 'BUILD_ID'), 'synthetic-build');
-    writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), buildId: 'synthetic-build' }));
-    const production = join(f.dir, 'production'), bin = join(f.dir, 'bin'); mkdirSync(production); mkdirSync(bin);
+    const runtimeProcessMetadata = syntheticNativeDescriptor(project);
+    writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), buildId: 'synthetic-build', syntheticOnly: true, runtimeProcessMetadata }));
+    const production = join(f.dir, 'production'), bin = join(f.dir, 'bin'); mkdirSync(production, { mode: 0o700 }); mkdirSync(bin);
     const signal = join(f.dir, 'unexpected-effect');
     writeFileSync(join(bin, 'launchctl'), `#!/bin/sh\nprintf called >> '${signal}'\nexit 1\n`, { mode: 0o700 });
     const guard = join(f.dir, 'network-guard.mjs');
-    writeFileSync(guard, `import{appendFileSync}from'node:fs';globalThis.fetch=async()=>{appendFileSync(${JSON.stringify(signal)},'fetch');throw new Error('network denied')};`);
-    writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='sqlite-v1'\n`);
+    writeFileSync(guard, `import{appendFileSync}from'node:fs';import cp from'node:child_process';import{syncBuiltinESMExports}from'node:module';const deny=()=>{appendFileSync(${JSON.stringify(signal)},'effect');throw new Error('synthetic effect denied')};const original=cp.spawnSync;cp.spawnSync=(command,args,options)=>command==='git'?original(command,args,options):deny();cp.spawn=deny;globalThis.fetch=async()=>deny();syncBuiltinESMExports();`);
+    writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='sqlite-v1'\n`, { mode: 0o600 });
     f.setMarker(ready(2));
     const setRelease = (dir, capabilities = {}) => {
       mkdirSync(join(dir, '.next'), { recursive: true });

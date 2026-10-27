@@ -1,3 +1,4 @@
+import { assertFileRuntimePath, ensureStudioFileRuntimeOwner } from '../studio/file-runtime-owner';
 import { z } from 'zod';
 import { StudioRateLimiter } from '../studio/ratelimit';
 import { join, isAbsolute } from 'node:path';
@@ -43,7 +44,9 @@ async function createRuntime(): Promise<RuntimeState> {
     budgets = new ConnectionsBudgetLedger(new FirestoreAdaptiveStorage(db, 'connectionsBudgets'));
   } else {
     const dataDir = process.env.STUDIO_DATA_DIR ?? join(process.cwd(), 'data/studio');
+    assertFileRuntimePath(dataDir);
     if (process.env.NODE_ENV === 'production' && !isAbsolute(dataDir)) throw new ConnectionsError(503, 'connections_storage_unavailable');
+    if ((process.env.STUDIO_ADAPTIVE_FORMAT ?? 'file') === 'file') ensureStudioFileRuntimeOwner(dataDir, { requireQualified: process.env.NODE_ENV === 'production' || process.env.STUDIO_ASSISTANT_TEXT_DELIVERY === '1' });
     storage = new FileConnectionsStorage(join(dataDir, 'connections'));
     budgets = new ConnectionsBudgetLedger(new FileAdaptiveStorage(join(dataDir, 'connection-budgets')));
   }

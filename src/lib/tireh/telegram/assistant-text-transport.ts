@@ -9,6 +9,8 @@ export interface AssistantTextSendInput {
   token:string;
   prepared:PreparedAssistantText;
   authorizeNow:()=>boolean;
+  ownerSignal?:AbortSignal;
+  ownerActive?:()=>void;
 }
 const byteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'byteLength')!.get!;
 const RESPONSE_BYTES = 65536;
@@ -28,6 +30,9 @@ export class AssistantTextTransport {
     const url=`https://api.telegram.org/bot${token}/sendMessage`;
     const controller=new AbortController(), start=this.now(), remaining=Math.min(20000,s.expiresAt-start);
     if(!Number.isSafeInteger(start)||remaining<=0)return {kind:'unknown',reason:'transport_error'};
+    const ownerAbort=()=>controller.abort();
+    if(input.ownerSignal?.aborted)controller.abort();
+    else input.ownerSignal?.addEventListener('abort',ownerAbort,{once:true});
     const options:RequestInit={method:'POST',headers:{'Content-Type':'application/json'},body,signal:controller.signal,redirect:'error',credentials:'omit',cache:'no-store'};
     let timeoutReject:()=>void=()=>undefined;
     const timeout=new Promise<never>((_resolve,reject)=>{timeoutReject=()=>reject(new Error('timeout'));});
@@ -36,6 +41,7 @@ export class AssistantTextTransport {
       // No await, payload transformation or callback follows this fence before
       // fetch. The gateway checks its own deadline after the nested ARC reads.
       if(authorizeNow()!==true||controller.signal.aborted||this.now()-start>=remaining)return {kind:'unknown',reason:'transport_error'};
+      input.ownerActive?.();
       const response=await Promise.race([this.fetchFn(url,options),timeout]);
       if(controller.signal.aborted||this.now()-start>=remaining)return {kind:'unknown',reason:'transport_error'};
       const reader=response.body?.getReader();
@@ -65,6 +71,6 @@ export class AssistantTextTransport {
         endpointBindingId:s.binding.endpointBindingId,attemptId:s.attemptId,effectKey:s.effectKey,dispatchedBodyHmac:s.evidence.bodyHmac,observedAt:this.now()},
       response:{httpStatus:response.status,body:parsed}};
     } catch {return {kind:'unknown',reason:'transport_error'};}
-    finally {clearTimeout(timer);}
+    finally {clearTimeout(timer);input.ownerSignal?.removeEventListener('abort',ownerAbort);}
   }
 }

@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resetFileRuntimeIoHooks, setFileRuntimeIoHooks } from '@/test/fro1-io-fixture';
+vi.mock('@/lib/studio/file-runtime-owner', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/studio/file-runtime-owner')>();
+  const { instrumentFileRuntime } = await import('@/test/fro1-io-fixture');
+  return instrumentFileRuntime(actual);
+});
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +14,7 @@ import { authority, config, NOW, source } from './test-fixtures';
 import { runExperimentCommand } from '../../../../scripts/studio-experiments';
 const directories: string[] = [];
 const dir = () => { const d = mkdtempSync(join(tmpdir(), 'vox-experiment-test-')); directories.push(d); return d; };
-afterEach(() => directories.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })));
+afterEach(() => { resetFileRuntimeIoHooks(); directories.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })); });
 function activate(service: ControlledExperimentService) { service.install(config(), NOW); service.transition(config().id, 1, 'offline', NOW); service.transition(config().id, 2, 'shadow', NOW); service.transition(config().id, 3, 'pilot', NOW); }
 describe('durable experiment ledger', () => {
   it('survives independent controller restarts and immediately observes another process kill', () => {
@@ -38,9 +44,11 @@ describe('durable experiment ledger', () => {
     const linked = join(dir(), 'alias'); symlinkSync(d, linked); expect(() => new FileExperimentStorage(join(linked, 'child'))).toThrow('Unsafe');
   });
   it('aborts a failed final publication fence and leaves prior ledger intact', () => {
-    const d = dir(), service = new ControlledExperimentService(new FileExperimentStorage(d)); activate(service);
-    const before = readFileSync(join(d, 'ledger.json'), 'utf8'); let fences = 0;
-    expect(() => service.storage.transaction(doc => { doc.observedAt++; }, () => { if (++fences === 2) throw new Error('revoked at publication'); })).toThrow('revoked');
+    const d = dir(), storage = new FileExperimentStorage(d), service = new ControlledExperimentService(storage); activate(service);
+    const before = readFileSync(join(d, 'ledger.json'), 'utf8'); let staged = false, fences = 0;
+    setFileRuntimeIoHooks({ afterDescriptorSync: path => { if (path.startsWith(`${storage.directory}/`) && path.endsWith('.tmp')) staged = true; } });
+    expect(() => service.storage.transaction(doc => { doc.observedAt++; }, () => { fences++; expect(staged).toBe(true); throw new Error('revoked at publication'); })).toThrow('revoked');
+    expect(staged).toBe(true); expect(fences).toBe(1);
     expect(readFileSync(join(d, 'ledger.json'), 'utf8')).toBe(before);
   });
   it('reserves deletion markers and fails capacity rather than evicting tombstones', () => {

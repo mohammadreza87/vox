@@ -9,10 +9,15 @@ import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import { acquireOperation, assertCurrent, assertIdentifiedRuntime, assertReleaseDirectory, guardedBackup, parseExpected, readControlText, readCurrent, readRelease, releaseDirectoryIdentity, transitionRelease, withOperation } from './studio-operation-guard.mjs';
 import { ADAPTIVE_RELEASE_CAPABILITIES } from './studio-adaptive-compatibility.mjs';
+import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { createRuntimeProcessLifecycle, readRuntimeProcessReceipt, parseRuntimeProcessReceipt, commitRuntimeProcessReceipt,
+  createRuntimeHandoff, attachRuntimeProcessLifecycle, normalizeProcessObserver, launchAgentContents } from './studio-production.mjs';
+import { FILE_RUNTIME_OWNER_GUARD, FILE_RUNTIME_OWNER_MARKER, FILE_RUNTIME_OWNER_MARKER_BYTES } from './studio-file-runtime-owner.mjs';
 
 const script = fileURLToPath(new URL('./studio-production.mjs', import.meta.url));
 function fixture(run) {
-  const dir = mkdtempSync(join(tmpdir(), 'vox-prepare-test-'));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'vox-prepare-test-')));
   const source = join(dir, 'source.env'), destination = join(dir, 'production.env');
   const base = `STUDIO_SECRET='synthetic-only-secret-more-than-32-characters'\nSTUDIO_DATA_DIR='${join(dir, 'data')}'\n`;
   const prepare = () => spawnSync(process.execPath, [script, 'prepare', source], {
@@ -98,6 +103,9 @@ function release(base, name, digit) {
 }
 async function operationFixture(run) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'vox-operation-test-')));
+  // The installer treats its existing releases container as private metadata.
+  // Create it explicitly; recursive artifact creation otherwise inherits 0755.
+  mkdirSync(join(base, 'releases'), { mode: 0o700 });
   const old = release(base, 'old', 'a'), next = release(base, 'next', 'b'), foreign = release(base, 'foreign', 'c');
   let serial = 0;
   const pointTo = path => {
@@ -130,6 +138,67 @@ function operations(f, overrides = {}) {
 }
 const invokeTransition = (f, ops, options, command = 'install') =>
   withOperation(f.base, command, f.expected, (guard, baseline) => transitionRelease(guard, baseline, f.next, ops), options);
+
+// FRO1 protected packet. Native observations below are explicitly synthetic;
+// the separate Darwin packet qualifies the real production observer adapter.
+const froProof = pid => [pid,1,501,pid,'9007199254740993','1793016000','1'];
+function froRoot(f) { const root=join(f.base,'data');mkdirSync(root,{mode:0o700});return root; }
+function froConfiguration(f) { const text='STUDIO_BOTS=0\nSTUDIO_ASSISTANT_TEXT_DELIVERY=0\n';writeFileSync(join(f.base,'production.env'),text,{mode:0o600});return createHash('sha256').update(text).digest('hex'); }
+
+test('FRO1 lifecycle strict CAS preserves actual spawn child and terminal chain without inventing running',()=>operationFixture(async f=>{
+  const root=froRoot(f), lifecycle=createRuntimeProcessLifecycle({base:f.base,release:f.old,dataRoot:root,wrapperPid:701,processProof:[froProof(701)],now:()=>123});
+  const initial=lifecycle.snapshot();assert.equal(initial.value.phase,'starting');assert.equal(initial.value.childPid,null);
+  assert.throws(()=>lifecycle.exited(0,null));
+  const spawned=lifecycle.spawned(702);assert.equal(spawned.value.phase,'starting');assert.equal(spawned.value.previousDigest,initial.digest);
+  assert.throws(()=>lifecycle.spawnFailed());assert.throws(()=>lifecycle.spawned(703));
+  const terminal=lifecycle.exited(7,null);assert.equal(terminal.value.phase,'exited');assert.equal(terminal.value.holderIdentity,null);assert.equal(terminal.value.childPid,702);
+  assert.throws(()=>commitRuntimeProcessReceipt(f.base,initial,{...terminal.value}));
+  assert.throws(()=>lifecycle.exited(0,null));assert.deepEqual(readRuntimeProcessReceipt(f.base),terminal);
+  assert.throws(()=>parseRuntimeProcessReceipt(JSON.stringify({...terminal.value,environment:'synthetic-must-refuse'})));
+}));
+
+for(const kind of ['spawn_failed','exit_no_holder','partial_holder','new_holder','wrong_operation','changed_config','remaining_group','recycled_pid','missing_terminal'])test(`FRO1 operation-bound fast startup ${kind}`,()=>operationFixture(async f=>{
+  const dataRoot=froRoot(f),configurationDigest=froConfiguration(f);unlinkSync(join(f.base,'current'));
+  await withOperation(f.base,'install',{absent:true},async guard=>{
+    const nativeQuery=pid=>kind==='recycled_pid'?{version:1,status:'unavailable'}:{version:1,status:'absent',processGroupPids:kind==='remaining_group'&&pid===701?[703]:[]};
+    const handoff=createRuntimeHandoff({base:f.base,dataRoot,guard,maintenanceRelease:f.old,nativeQuery,configurationDigest,supervisor:()=>null,portClosed:()=>true});
+    await handoff.stop();handoff.acquireStopped();handoff.pointTo(f.old.path);handoff.releaseStopped();handoff.beforeStart();
+    const operationDigest=createHash('sha256').update(readFileSync(join(f.base,'.studio-operation.lock','owner.json'))).digest('hex');
+    if(kind!=='missing_terminal'){
+      const lifecycle=createRuntimeProcessLifecycle({base:f.base,release:f.old,dataRoot,wrapperPid:701,processProof:[froProof(701)],operationDigest:kind==='wrong_operation'?'0'.repeat(64):operationDigest,now:()=>123});
+      if(kind==='spawn_failed')lifecycle.spawnFailed();else{lifecycle.spawned(702);lifecycle.exited(0,null);}
+    }
+    if(kind==='partial_holder'||kind==='new_holder')writeFileSync(join(dataRoot,'.studio-runtime-owner-v1.lock'),kind==='partial_holder'?'{' : '{}\n',{mode:0o600});
+    if(kind==='changed_config')writeFileSync(join(f.base,'production.env'),'STUDIO_BOTS=1\n',{mode:0o600});
+    if(kind==='spawn_failed'||kind==='exit_no_holder'){
+      await handoff.stop();handoff.assertStopped();assert.equal(handoff.snapshot().owner,null);
+      assert.equal(readRuntimeProcessReceipt(f.base).value.phase,kind==='spawn_failed'?'spawn_failed':'exited');
+    }else{
+      const before=existsSync(join(dataRoot,'.studio-runtime-owner-v1.lock'))?readFileSync(join(dataRoot,'.studio-runtime-owner-v1.lock')):null;
+      await assert.rejects(()=>handoff.stop());
+      if(before)assert.deepEqual(readFileSync(join(dataRoot,'.studio-runtime-owner-v1.lock')),before);
+    }
+  });
+}));
+
+for(const spawnError of [false,true])test(`FRO1 real ChildProcess event adapter terminal, spawnError=${spawnError}`,{timeout:10000},()=>operationFixture(async f=>{
+  const baseInfo=statSync(f.base,{bigint:true});
+  const dataRoot=froRoot(f), wrapper={version:1,status:'ok',pid:process.pid,ppid:process.ppid,uid:process.getuid(),pgid:process.pid,startAbsTicks:'1',startSeconds:'1',startMicroseconds:'0',executablePath:process.execPath,cwdPath:f.base,cwdDevice:String(baseInfo.dev),cwdInode:String(baseInfo.ino),childPids:[],processGroupPids:[process.pid]};
+  const lifecycle=createRuntimeProcessLifecycle({base:f.base,release:f.old,dataRoot,processProof:[[process.pid,process.ppid,process.getuid(),process.pid,'1','1','0']]});
+  const child=spawn(spawnError?join(f.base,'missing-executable'):process.execPath,spawnError?[]:['-e','process.exit(7)'],{env:{},stdio:'ignore'});
+  let exitCode;const adapter=attachRuntimeProcessLifecycle({child,lifecycle,query:()=>wrapper,wrapper,base:f.base,release:f.old,dataRoot,exit:code=>{exitCode=code;},log:()=>{}});
+  const result=await adapter.settled;assert.equal(result.status,'terminal');assert.equal(result.phase,spawnError?'spawn_failed':'exited');
+  const receipt=readRuntimeProcessReceipt(f.base);assert.equal(receipt.value.phase,result.phase);assert.equal(receipt.value.holderIdentity,null);
+  assert.equal(receipt.value.childPid,spawnError?null:child.pid);assert.equal(exitCode,spawnError?1:7);
+  assert.throws(()=>attachRuntimeProcessLifecycle({child:new EventEmitter(),lifecycle,wrapper,base:f.base,release:f.old,dataRoot,query:()=>wrapper}));
+}));
+
+test('FRO1 observer normalization removes only the completed exact detached self observer',()=>{
+  const row={version:1,status:'ok',pid:701,ppid:700,uid:501,pgid:701,startAbsTicks:'1',startSeconds:'1',startMicroseconds:'0',executablePath:'/synthetic/node',cwdPath:'/synthetic/runtime',cwdDevice:'1',cwdInode:'1',childPids:[702,703],processGroupPids:[701,703]};
+  const normalized=normalizeProcessObserver(row,701,702,701);assert.deepEqual(normalized.childPids,[703]);assert.deepEqual(normalized.processGroupPids,[701,703]);
+  for(const observer of [undefined,701,704,703])assert.throws(()=>normalizeProcessObserver(row,701,observer,701));
+  assert.deepEqual(normalizeProcessObserver(row,701,702,999).childPids,[702,703]);
+});
 
 test('expected baseline CLI requires a complete unambiguous present tuple or explicit initial absence', () => {
   assert.deepEqual(parseExpected(['--expect-absent'], 'install'), { absent: true });
@@ -358,15 +427,160 @@ test('rollback control records reject oversized files, symlinks and FIFOs withou
   assert.throws(() => readControlText(control), /Invalid/);
 }));
 
-/** Real CLI wiring under a synthetic root. launchctl, sockets and providers are
- * intercepted before module imports; no real Studio process or provider runs. */
+function syntheticNativeDescriptor(project) {
+  // A unit-only executable inventory, never compiled or executed. The isolated
+  // preload supplies simulated macOS observations on every supported test host.
+  const bytes = Buffer.from('# SYNTHETIC FRO1 unit native observation fixture; never execute\n');
+  const sha = value => createHash('sha256').update(value).digest('hex');
+  writeFileSync(join(project, '.next', 'studio-process-metadata'), bytes, { mode: 0o700 });
+  return { version: 1, abi: 1, available: true, platform: 'darwin', arch: 'arm64', file: 'studio-process-metadata',
+    bytes: bytes.length, binarySha256: sha(bytes), sourceSha256: sha(readFileSync(join(project, 'scripts', 'native', 'studio-process-metadata-darwin.c'))),
+    compilerPath: '/synthetic/unit-only-not-a-compiler', compilerSha256: sha('synthetic compiler'),
+    compilerVersionSha256: sha('synthetic compiler version'), sdkVersion: '0.0', deploymentTarget: '11.0' };
+}
+function syntheticRows(base, release, wrapperPid, childPid) {
+  const uid = process.geteuid?.() ?? process.getuid();
+  return [wrapperPid, childPid].map(pid => {
+    const cwd = pid === wrapperPid ? base : release.path, info = statSync(cwd, { bigint: true });
+    return { version: 1, status: 'ok', pid, ppid: pid === wrapperPid ? 1 : wrapperPid, uid, pgid: wrapperPid,
+      startAbsTicks: pid === wrapperPid ? '101' : '102', startSeconds: '1000', startMicroseconds: '1',
+      executablePath: process.execPath, cwdPath: cwd, cwdDevice: String(info.dev), cwdInode: String(info.ino),
+      childPids: pid === wrapperPid ? [childPid] : [], processGroupPids: [wrapperPid, childPid] };
+  });
+}
+const syntheticProof = row => [row.pid, row.ppid, row.uid, row.pgid, row.startAbsTicks, row.startSeconds, row.startMicroseconds];
+
+/** Serialized into a separate Node preload, never applied to the test runner.
+ * These are explicitly simulated Darwin observations, not real host evidence.
+ * File validation, operation/maintenance capabilities and receipt CAS stay real.
+ */
+async function syntheticMacPreload(config) {
+  const { default: fs } = await import('node:fs');
+  const { default: cp } = await import('node:child_process');
+  const { default: os } = await import('node:os');
+  const { default: net } = await import('node:net');
+  const { default: http } = await import('node:http');
+  const { default: https } = await import('node:https');
+  const { join } = await import('node:path');
+  const { createHash } = await import('node:crypto');
+  const { syncBuiltinESMExports } = await import('node:module');
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  Object.defineProperty(process, 'arch', { value: 'arm64' });
+  os.homedir = () => config.home;
+  const base = config.base, dataRoot = join(base, 'data'), label = 'io.ludaxis.vox-studio';
+  const record = value => fs.appendFileSync(config.effects, value + '\n');
+  const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+  const readJSON = path => JSON.parse(fs.readFileSync(path, 'utf8'));
+  const tuple = release => ({ revision: release.revision, sourceTree: release.sourceTree, buildId: release.buildId });
+  const receiptPath = join(base, 'runtime-process-v1.json'), guardPath = join(dataRoot, '.studio-runtime-owner-v1.lock');
+  const originalSync = cp.spawnSync, originalSpawn = cp.spawn;
+  let api, operationApi, child = null, childAlive = false;
+  let loaded = !config.copiedRun && fs.existsSync(receiptPath) && readJSON(receiptPath).phase === 'running';
+  let servedRevision = fs.readFileSync(join(base, 'current', 'revision'), 'utf8').trim();
+  const wrapperPid = 1540000001, childPid = 1540000002, observerPid = 1900000000;
+  const proof = row => [row.pid, row.ppid, row.uid, row.pgid, row.startAbsTicks, row.startSeconds, row.startMicroseconds];
+  const releaseNow = () => {
+    const path = fs.realpathSync(join(base, 'current')), manifest = readJSON(join(path, 'studio-release.json'));
+    return { path, ...tuple(manifest) };
+  };
+  const nativeRow = pid => {
+    const wp = config.copiedRun ? process.pid : wrapperPid;
+    const ch = config.copiedRun ? child?.pid : childPid;
+    const live = config.copiedRun ? childAlive : loaded;
+    if (!config.copiedRun && !loaded) return { version: 1, status: 'absent', processGroupPids: [] };
+    if (pid !== wp && (!live || pid !== ch)) return { version: 1, status: 'absent', processGroupPids: [] };
+    const cwd = pid === wp ? base : releaseNow().path, info = fs.lstatSync(cwd, { bigint: true });
+    const children = pid === wp && live ? [ch] : [];
+    // The real production adapter must remove only its own exact completed
+    // observer PID on a self query. The synthetic observer is never in-group.
+    if (pid === process.pid) children.push(observerPid);
+    return { version: 1, status: 'ok', pid, ppid: pid === wp ? config.copiedRun ? process.ppid : 1 : wp,
+      uid: process.geteuid?.() ?? process.getuid(), pgid: wp,
+      startAbsTicks: pid === wp ? '101' : '102', startSeconds: '1000', startMicroseconds: '1',
+      executablePath: process.execPath, cwdPath: cwd, cwdDevice: String(info.dev), cwdInode: String(info.ino),
+      childPids: children, processGroupPids: live ? [wp, ch] : [wp] };
+  };
+  const deny = () => { record('unexpected-effect'); throw new Error('unexpected synthetic subprocess or network'); };
+  const boot = () => {
+    const release = operationApi.readCurrent(base).release;
+    const operationDigest = sha(fs.readFileSync(join(base, '.studio-operation.lock', 'owner.json')));
+    const lifecycle = api.createRuntimeProcessLifecycle({ base, dataRoot, release, wrapperPid, operationDigest,
+      processProof: [proof(nativeRow(wrapperPid))] });
+    lifecycle.spawned(childPid);
+    fs.writeFileSync(guardPath, JSON.stringify({ version: 1, kind: 'studio-file-runtime-owner', role: 'runtime',
+      nonce: 'e'.repeat(64), pid: childPid, startedAt: Date.now(), release: tuple(release) }) + '\n', { mode: 0o600, flag: 'wx' });
+    if (!lifecycle.observeOwner([proof(nativeRow(wrapperPid)), proof(nativeRow(childPid))])) throw new Error('synthetic owner observation failed');
+    servedRevision = release.revision;
+  };
+  cp.spawnSync = (command, args, options) => {
+    if (command === 'git' && !config.copiedRun) return originalSync(command, args, options);
+    const nativePath = config.copiedRun ? join(releaseNow().path, 'studio-process-metadata') : join(config.project, '.next', 'studio-process-metadata');
+    if (command === nativePath) {
+      if (!options.detached || Object.keys(options.env).length || !(options.timeout > 0 && options.timeout <= 2000)) return deny();
+      const row = nativeRow(Number(args[0]));
+      return { status: row.status === 'ok' ? 0 : 3, stdout: Buffer.from(JSON.stringify(row)), stderr: Buffer.alloc(0), pid: observerPid };
+    }
+    if (!config.copiedRun && command === '/usr/sbin/lsof') return { status: loaded ? 0 : 1, stdout: loaded ? String(wrapperPid) : '', stderr: '' };
+    if (!config.copiedRun && command === '/bin/launchctl') {
+      record('launch:' + args[0]);
+      if (args[0] === 'list') return { status: 0, stdout: loaded ? `${wrapperPid}\t0\t${label}\n` : '', stderr: '' };
+      if (args[0] === 'print') return { status: loaded ? 0 : 113, stdout: loaded ?
+        `gui/${process.getuid()}/${label} = {\npath = ${join(config.home, 'Library', 'LaunchAgents', label + '.plist')}\nprogram = ${process.execPath}\npid = ${wrapperPid}\narguments = {\n${process.execPath}\n${join(base, 'current', 'studio-runtime.mjs')}\nrun\n}\n}\n` : '', stderr: '' };
+      if (args[0] === 'bootout') {
+        const old = api.readRuntimeProcessReceipt(base);
+        api.commitRuntimeProcessReceipt(base, old, { ...old.value, phase: 'exited', revision: old.value.revision + 1,
+          previousDigest: old.digest, endedAt: Date.now(), exitCode: 0 });
+        loaded = false;
+      } else if (args[0] === 'bootstrap') { loaded = true; boot(); }
+      else return deny();
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    return deny();
+  };
+  cp.spawn = config.copiedRun ? (...args) => {
+    child = originalSpawn(...args); childAlive = true;
+    child.once('exit', () => { childAlive = false; });
+    child.once('error', () => { childAlive = false; });
+    return child;
+  } : deny;
+  net.createConnection = deny; net.connect = deny; http.request = deny; https.request = deny;
+  globalThis.fetch = async url => {
+    if (config.copiedRun) return deny();
+    record('fetch-stub');
+    if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { username: 'FixtureBot' } });
+    if (url.endsWith('/getWebhookInfo')) return Response.json({ ok: true, result: {} });
+    if (url === 'https://api.anthropic.com/v1/models?limit=100') return Response.json({ data: [{ id: 'claude-sonnet-5-5' }, { id: 'claude-haiku-5-5' }] });
+    if (url === 'http://127.0.0.1:3107/api/studio/health') {
+      record('health:' + servedRevision);
+      if (config.mode === 'foreign') { const tmp = join(base, 'foreign-pointer'); fs.symlinkSync(config.foreignPath, tmp); fs.renameSync(tmp, join(base, 'current')); }
+      if (config.mode === 'release-failure') fs.writeFileSync(join(base, '.studio-operation.lock', 'unexpected'), 'preserve');
+      if (config.mode === 'cancel' && servedRevision === config.revision) process.emit('SIGTERM');
+      return Response.json({ status: 'healthy', bots: true, revision: servedRevision });
+    }
+    return deny();
+  };
+  syncBuiltinESMExports();
+  if (!config.copiedRun) {
+    // Import the same unchanged implementation at its original path so its CLI
+    // guard cannot run recursively; the copied CLI uses byte-identical exports.
+    api = await import(config.apiURL);
+    operationApi = await import(config.operationURL);
+  }
+}
+
+/** Real CLI/controller wiring under synthetic files and simulated macOS process
+ * observations. Only the copied-run check spawns a real harmless Node child;
+ * no Darwin helper, launchctl, listener or provider is actually queried. */
 function installerFixture(run) {
   return operationFixture(async f => {
     const project = join(f.base, 'source'), home = join(f.base, 'home'), effects = join(f.base, 'effects');
     mkdirSync(join(project, 'scripts'), { recursive: true }); mkdirSync(home);
-    for (const file of ['studio-production.mjs', 'studio-operation-guard.mjs', 'studio-adaptive-compatibility.mjs']) {
+    for (const file of ['studio-production.mjs', 'studio-operation-guard.mjs', 'studio-adaptive-compatibility.mjs', 'studio-file-runtime-owner.mjs']) {
       cpSync(join(dirname(script), file), join(project, 'scripts', file));
+      assert.deepEqual(readFileSync(join(project, 'scripts', file)), readFileSync(join(dirname(script), file)));
     }
+    mkdirSync(join(project, 'scripts', 'native'));
+    cpSync(new URL('./native/studio-process-metadata-darwin.c', import.meta.url), join(project, 'scripts', 'native', 'studio-process-metadata-darwin.c'));
     writeFileSync(join(project, '.gitignore'), '.next/\n');
     mkdirSync(join(project, 'public')); writeFileSync(join(project, 'public', 'fixture.txt'), 'synthetic');
     const git = (...args) => {
@@ -377,60 +591,64 @@ function installerFixture(run) {
     git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@invalid.test', '-c', 'commit.gpgsign=false',
       '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'synthetic installer fixture');
     const revision = git('rev-parse', 'HEAD');
-    const metadata = { revision, sourceTree: git('rev-parse', 'HEAD^{tree}'), buildId: 'fixture-build',
-      builtAt: '2026-10-20T00:00:00.000Z', ...ADAPTIVE_RELEASE_CAPABILITIES };
     mkdirSync(join(project, '.next', 'standalone', '.next'), { recursive: true });
     mkdirSync(join(project, '.next', 'static'));
+    const metadata = { revision, sourceTree: git('rev-parse', 'HEAD^{tree}'), buildId: 'fixture-build',
+      builtAt: '2026-10-20T00:00:00.000Z', ...ADAPTIVE_RELEASE_CAPABILITIES,
+      syntheticOnly: true, runtimeProcessMetadata: syntheticNativeDescriptor(project) };
     writeFileSync(join(project, '.next', 'standalone', 'server.js'), 'console.log("SYNTHETIC_RUNTIME_READY");\n');
     for (const dir of [join(project, '.next'), join(project, '.next', 'standalone', '.next')]) {
       writeFileSync(join(dir, 'BUILD_ID'), metadata.buildId);
     }
     writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify(metadata));
-    mkdirSync(join(f.base, 'data'));
-    writeFileSync(join(f.base, 'production.env'), `STUDIO_SECRET='synthetic-fixture-secret-more-than-32-characters'\nVOXX_BOT_TOKEN='synthetic'\nVOXX_BOT_USERNAME='FixtureBot'\nSTUDIO_SUPERADMIN_IDS='123'\nSTUDIO_WEBAPP_URL='https://fixture.invalid/studio'\nANTHROPIC_API_KEY='synthetic'\nSTUDIO_DATA_DIR='${join(f.base, 'data')}'\n`);
+    mkdirSync(join(f.base, 'data'), { mode: 0o700 });
+    mkdirSync(join(f.base, 'data', 'adaptive'), { mode: 0o700 });
+    writeFileSync(join(f.base, 'data', 'adaptive', FILE_RUNTIME_OWNER_MARKER), FILE_RUNTIME_OWNER_MARKER_BYTES, { mode: 0o600 });
+    writeFileSync(join(f.base, 'production.env'), `STUDIO_SECRET='synthetic-fixture-secret-more-than-32-characters'\nVOXX_BOT_TOKEN='synthetic'\nVOXX_BOT_USERNAME='FixtureBot'\nSTUDIO_SUPERADMIN_IDS='123'\nSTUDIO_WEBAPP_URL='https://fixture.invalid/studio'\nANTHROPIC_API_KEY='synthetic'\nSTUDIO_DATA_DIR='${join(f.base, 'data')}'\n`, { mode: 0o600 });
+    const wrapperPid = 1540000001, childPid = 1540000002, dataRoot = join(f.base, 'data');
+    for (const path of [f.base, join(f.base, 'releases'), dataRoot]) {
+      const info = statSync(path);
+      assert.equal(realpathSync(path), path, 'fixture metadata directory must be canonical');
+      assert.equal(info.uid, process.geteuid?.() ?? process.getuid(), 'fixture metadata directory must be owned by the test UID');
+      assert.equal(info.mode & 0o077, 0, 'fixture metadata directory must be private');
+    }
+    const initialRows = syntheticRows(f.base, f.old, wrapperPid, childPid);
+    const initial = createRuntimeProcessLifecycle({ base: f.base, dataRoot, release: f.old, wrapperPid, processProof: [syntheticProof(initialRows[0])] });
+    initial.spawned(childPid);
+    writeFileSync(join(dataRoot, FILE_RUNTIME_OWNER_GUARD), JSON.stringify({ version: 1, kind: 'studio-file-runtime-owner', role: 'runtime',
+      nonce: 'e'.repeat(64), pid: childPid, startedAt: Date.now(), release: { revision: f.old.revision, sourceTree: f.old.sourceTree, buildId: f.old.buildId } }) + '\n', { mode: 0o600, flag: 'wx' });
+    assert.equal(initial.observeOwner(initialRows.map(syntheticProof)), true);
+    mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+    writeFileSync(join(home, 'Library', 'LaunchAgents', 'io.ludaxis.vox-studio.plist'), launchAgentContents(f.base, process.execPath), { mode: 0o600 });
     const preload = join(f.base, 'synthetic-preload.mjs');
+    const preloadConfig = { base: f.base, home, effects, project, revision, foreignPath: f.foreign.path,
+      apiURL: new URL('./studio-production.mjs', import.meta.url).href, operationURL: new URL('./studio-operation-guard.mjs', import.meta.url).href };
     function invoke(command, { mode = 'healthy', flags } = {}) {
-      writeFileSync(preload, `
-import fs from 'node:fs'; import cp from 'node:child_process'; import net from 'node:net'; import os from 'node:os';
-import { EventEmitter } from 'node:events'; import { syncBuiltinESMExports } from 'node:module';
-const base=${JSON.stringify(f.base)}, effects=${JSON.stringify(effects)}, mode=${JSON.stringify(mode)};
-const record=x=>fs.appendFileSync(effects,x+'\\n');
-os.homedir=()=>${JSON.stringify(home)};
-let loaded=true, servedRevision=${JSON.stringify(f.old.revision)};
-const original=cp.spawnSync;
-cp.spawnSync=(command,args,options)=>{
-  if(command==='git') return original(command,args,options);
-  if(command!=='launchctl') throw new Error('unexpected subprocess');
-  record('launch:'+args[0]);
-  if(args[0]==='print') return {status:loaded?0:113,stdout:'',stderr:''};
-  if(args[0]==='bootout') loaded=false;
-  else if(args[0]==='bootstrap') {loaded=true;servedRevision=fs.readFileSync(fs.realpathSync(base+'/current')+'/revision','utf8').trim();}
-  else throw new Error('unexpected launch operation');
-  return {status:0,stdout:'',stderr:''};
-};
-cp.spawn=()=>{throw new Error('unexpected child server in installer fixture')};
-net.createConnection=()=>{record('socket-stub');const s=new EventEmitter();s.setTimeout=()=>{};s.destroy=()=>{};queueMicrotask(()=>s.emit('error',new Error('synthetic closed port')));return s};
-syncBuiltinESMExports();
-globalThis.fetch=async url=>{
-  record('fetch-stub');
-  if(url.endsWith('/getMe')) return Response.json({ok:true,result:{username:'FixtureBot'}});
-  if(url.endsWith('/getWebhookInfo')) return Response.json({ok:true,result:{}});
-  if(url==='https://api.anthropic.com/v1/models?limit=100') return Response.json({data:[{id:'claude-sonnet-5-5'},{id:'claude-haiku-5-5'}]});
-  if(url==='http://127.0.0.1:3107/api/studio/health') {
-    record('health:'+servedRevision);
-    if(mode==='foreign') {const tmp=base+'/foreign-pointer';fs.symlinkSync(${JSON.stringify(f.foreign.path)},tmp);fs.renameSync(tmp,base+'/current');}
-    if(mode==='release-failure') fs.writeFileSync(base+'/.studio-operation.lock/unexpected','preserve');
-    if(mode==='cancel' && servedRevision===${JSON.stringify(revision)}) process.emit('SIGTERM');
-    return Response.json({status:'healthy',bots:true,revision:servedRevision});
-  }
-  throw new Error('unexpected provider request');
-};`);
+      writeFileSync(preload, `await (${syntheticMacPreload.toString()})(${JSON.stringify({ ...preloadConfig, mode })});\n`);
       return spawnSync(process.execPath, ['--import', preload, join(project, 'scripts', 'studio-production.mjs'), command,
         ...(flags ?? (['install', 'rollback'].includes(command) ? ['--expect-current', f.old.path,
           '--expect-revision', f.old.revision, '--expect-build', f.old.buildId] : []))],
       { cwd: project, env: { PATH: process.env.PATH, VOX_PRODUCTION_DIR: f.base }, encoding: 'utf8', timeout: 10000 });
     }
-    await run({ ...f, project, home, effects, revision, invoke });
+    async function prepareCopiedRun(lock) {
+      const current = readCurrent(f.base).release, rows = syntheticRows(f.base, current, wrapperPid, childPid);
+      let loaded = true;
+      const guard = { base: lock.base, operationIdentity: lock, assertOwned: lock.assertOwned };
+      const handoff = createRuntimeHandoff({ base: f.base, dataRoot, guard, maintenanceRelease: current,
+        configurationDigest: createHash('sha256').update(readFileSync(join(f.base, 'production.env'))).digest('hex'),
+        nativeQuery: pid => loaded ? rows.find(row => row.pid === pid) : { version: 1, status: 'absent', processGroupPids: [] },
+        supervisor: () => loaded ? wrapperPid : null, portClosed: () => !loaded, launchBinding: () => true,
+        stopSupervisor: () => {
+          const old = readRuntimeProcessReceipt(f.base);
+          commitRuntimeProcessReceipt(f.base, old, { ...old.value, phase: 'exited', revision: old.value.revision + 1,
+            previousDigest: old.digest, endedAt: Date.now(), exitCode: 0 }); loaded = false;
+        } });
+      await handoff.stop(); handoff.acquireStopped(); handoff.releaseStopped(); handoff.beforeStart();
+      const runtimePreload = join(f.base, 'synthetic-copied-run-preload.mjs');
+      writeFileSync(runtimePreload, `await (${syntheticMacPreload.toString()})(${JSON.stringify({ ...preloadConfig, copiedRun: true })});\n`);
+      return runtimePreload;
+    }
+    await run({ ...f, project, home, effects, revision, invoke, prepareCopiedRun });
   });
 }
 
@@ -458,9 +676,15 @@ test('actual synthetic install packages its helper and copied run boots a harmle
   assert.equal(current.release.revision, f.revision);
   assert.equal(readFileSync(join(current.release.path, 'studio-operation-guard.mjs'), 'utf8'),
     readFileSync(join(dirname(script), 'studio-operation-guard.mjs'), 'utf8'));
+  assert.deepEqual(readFileSync(join(current.release.path, 'studio-file-runtime-owner.mjs')),
+    readFileSync(join(dirname(script), 'studio-file-runtime-owner.mjs')));
+  assert.deepEqual(readFileSync(join(current.release.path, 'studio-process-metadata')),
+    readFileSync(join(f.project, '.next', 'studio-process-metadata')));
   const lock = acquireOperation(f.base, 'install');
   try {
-    const runtime = spawnSync(process.execPath, [join(current.release.path, 'studio-runtime.mjs'), 'run'], {
+    const runtimePreload = await f.prepareCopiedRun(lock);
+    const runtime = spawnSync(process.execPath, ['--import', runtimePreload, join(current.release.path, 'studio-runtime.mjs'), 'run'], {
+      cwd: f.base, detached: true,
       env: { PATH: dirname(process.execPath), VOX_PRODUCTION_DIR: f.base }, encoding: 'utf8', timeout: 10000,
     });
     assert.equal(runtime.status, 0, runtime.stderr);

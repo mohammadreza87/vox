@@ -83,7 +83,7 @@ jobs:
         run: node --test scripts/connections-production-config.test.mjs
 
       - name: Verify single-host release safety and configuration preservation
-        run: node --test scripts/studio-production.test.mjs scripts/studio-skill-routing-config.test.mjs scripts/studio-adaptive-compatibility.test.mjs scripts/studio-rights-erasure-compatibility.test.mjs scripts/rights-intake-storage.test.mjs
+        run: node --test scripts/studio-production.test.mjs scripts/studio-skill-routing-config.test.mjs scripts/studio-adaptive-compatibility.test.mjs scripts/studio-rights-erasure-compatibility.test.mjs scripts/rights-intake-storage.test.mjs scripts/studio-runtime-owner.test.mjs scripts/studio-process-metadata.test.mjs scripts/studio-runtime-handoff.test.mjs
 
       - name: Verify guest browser fixture build provenance
         run: node --test e2e/guest-fixture-build.test.mjs
@@ -141,6 +141,9 @@ jobs:
             exit 1
           fi
 
+      - name: Bind actual Next build to source-only fixture provenance
+        run: node e2e/guest-fixture-build.mjs --write-build-proof
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         if: success()
@@ -193,6 +196,13 @@ jobs:
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'test.firebaseapp.com' }}
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'test-project' }}
           NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Bind fallback Next build to source-only fixture provenance
+        if: steps.download-artifact.outcome == 'failure'
+        run: node e2e/guest-fixture-build.mjs --write-build-proof
+
+      - name: Qualify compiled runtime ownership against the source-bound artifact
+        run: node e2e/guest-fixture-build.mjs --qualify-runtime-owner
 
       - name: Run adaptive production browser journey
         run: npx playwright test --config=e2e/adaptive.config.ts

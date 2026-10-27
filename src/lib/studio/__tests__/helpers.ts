@@ -6,7 +6,7 @@
  * authority. Pass `adaptive: false` only to test the legacy path, which no
  * production runtime builds.
  */
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { vi } from 'vitest';
@@ -175,8 +175,10 @@ export interface Harness {
   advanceDays(days: number): void;
 }
 
-export function makeStudio(options: { openai?: boolean; eleven?: boolean; manager?: boolean; managerUsername?: string; adaptive?: boolean; svgToPng?: boolean } = {}): Harness {
-  const dir = tempDir();
+export function makeStudio(options: { openai?: boolean; eleven?: boolean; manager?: boolean; managerUsername?: string; adaptive?: boolean; svgToPng?: boolean; beforeStore?: (freshCanonicalTempDir: string) => void } = {}): Harness {
+  const fresh = tempDir();
+  const dir = options.beforeStore ? realpathSync(fresh) : fresh;
+  options.beforeStore?.(dir);
   const store = new StudioStore(dir);
   const personaLLM = new ScriptedLLM();
   const chatLLM = new FakeLLM();

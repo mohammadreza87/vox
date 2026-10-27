@@ -1,3 +1,4 @@
+import type { FileRuntimeOwner } from './file-runtime-owner';
 import type { RequestedRoutineEngine } from './routines';
 import { rightsUseAllowed, rightsUseStamp } from '../adaptive/rights-use-holds/state';
 import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
@@ -284,6 +285,7 @@ export interface CallTurnSink {
 const PERSIAN_SCRIPT = /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
 
 export interface StudioDeps {
+  fileRuntimeOwner?: FileRuntimeOwner;
   assistantText?:import('./assistant-text-integration').StudioAssistantTextIntegration;
   store: StudioStorage;
   relationships?: RelationshipLoop;

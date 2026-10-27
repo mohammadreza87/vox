@@ -1,5 +1,4 @@
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, mkdir, realpath, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,10 +14,19 @@ import { AdaptiveRepository } from '../../adaptive/persistence/repository';
 import { MemoryAdaptiveStorage } from '../../adaptive/runtime/storage';
 import type { Studio } from '../../studio/service';
 import type { StudioState } from '../../studio/types';
+import { registerFileRuntimeFixture } from '../../studio/file-runtime-owner';
 
 const featureKeys = ['STUDIO_CONNECTIONS_CONFIG_FILE', 'STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE', 'STUDIO_CONNECTIONS_BROKER_URL'] as const;
 const values = ['/synthetic/config.json', '/synthetic/auth.hex', 'http://127.0.0.1:7091'];
 const directories: string[] = [];
+async function privateControlFixture(prefix:string){
+  const parent=await realpath(await mkdtemp('/tmp/'+prefix)),data=join(parent,'data'),artifact=join(parent,'synthetic-artifact');
+  await mkdir(data,{mode:0o700});await mkdir(artifact,{mode:0o700});await mkdir(join(artifact,'.next'),{mode:0o700});
+  const release={revision:'c4405f4c70f93b5b064ff64bb2815967d64e5785',sourceTree:'93556bf8ad66e87d7bccaa0d7b3a15f5c5dc1759',buildId:'synthetic-broker-control-unit'};
+  // Only low-level unit fixture metadata; never executable production provenance.
+  await writeFile(join(artifact,'server.js'),'// synthetic unit; never executed\n',{mode:0o600});await writeFile(join(artifact,'.next','BUILD_ID'),release.buildId,{mode:0o600});
+  registerFileRuntimeFixture({dataRoot:data,artifactRoot:artifact,release});directories.push(parent);return data;
+}
 const configure = () => featureKeys.forEach((key, i) => vi.stubEnv(key, values[i]));
 const request = (path = '/api/connections/broker', method = 'POST', headers?: Record<string, string>) =>
   new NextRequest(`https://synthetic-studio.invalid${path}`, { method, headers });
@@ -66,7 +74,7 @@ describe('independent exact broker middleware gate and real authenticated handle
   });
 
   it('actual Node control still requires exact HMAC bytes/replay and current identity after middleware admits it', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'vox-heldout-middleware-')); directories.push(directory);
+    const directory = await privateControlFixture('vox-heldout-middleware-');
     const key = Buffer.alloc(32, 73); const keyPath = join(directory, 'synthetic-auth.hex'); const configPath = join(directory, 'synthetic-config.json');
     await writeFile(keyPath, key.toString('hex'), { mode: 0o600 });
     await writeFile(configPath, JSON.stringify({ schemaVersion: 1, enabled: true, profiles: [] }), { mode: 0o600 });
@@ -94,7 +102,7 @@ describe('independent exact broker middleware gate and real authenticated handle
   });
 
   it('erasedContext: answered over the authenticated control route without identity, only for a connection an erasure marked', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'vox-erased-control-')); directories.push(directory);
+    const directory = await privateControlFixture('vox-erased-control-');
     const key = Buffer.alloc(32, 74); const keyPath = join(directory, 'synthetic-auth.hex'); const configPath = join(directory, 'synthetic-config.json');
     await writeFile(keyPath, key.toString('hex'), { mode: 0o600 });
     await writeFile(configPath, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [] }), { mode: 0o600 });

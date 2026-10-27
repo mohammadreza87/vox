@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createPublicKey } from 'crypto';
@@ -10,6 +10,7 @@ import { FilePetStore, petStoreFor } from '../pet-store';
 import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
 import { CHECKPOINT } from '../../adaptive/lifecycle/maintenance';
 import { FileExperimentStorage } from '../../adaptive/experiments/storage';
+import { ensureStudioFileRuntimeOwner, registerFileRuntimeFixture } from '../file-runtime-owner';
 
 const firebase = vi.hoisted(() => ({ getAdminApp: vi.fn(), getAdminDb: vi.fn(), getStorage: vi.fn(), bucket: vi.fn() }));
 vi.mock('@/lib/firebase-admin', () => ({ getAdminApp: firebase.getAdminApp, getAdminDb: firebase.getAdminDb }));
@@ -67,8 +68,14 @@ describe('Studio production initialization', () => {
   });
 
   const configure = (overrides: NodeJS.ProcessEnv = {}) => {
-    const dir = mkdtempSync(join(tmpdir(), 'vox-studio-startup-'));
-    dirs.push(dir);
+    const parent=realpathSync(mkdtempSync('/tmp/vox-studio-startup-')),dir=join(parent,'data'),artifact=join(parent,'synthetic-artifact');
+    mkdirSync(dir,{mode:0o700});mkdirSync(artifact,{mode:0o700});mkdirSync(join(artifact,'.next'),{mode:0o700});
+    // Explicit low-level unit artifact only; never a claimed Next build or
+    // installed release. No environment flag supplies ownership authority.
+    const release={revision:'f895ba59fc43fe9677e08fa602cc48c08ccdf3f8',sourceTree:'9dddab6c6d5ed02ced0ac7f011cfb64f83f3cd44',buildId:'synthetic-startup-unit-only'};
+    writeFileSync(join(artifact,'server.js'),'// unit fixture; never executed\n',{mode:0o600});
+    writeFileSync(join(artifact,'.next','BUILD_ID'),release.buildId+'\n',{mode:0o600});
+    registerFileRuntimeFixture({dataRoot:dir,artifactRoot:artifact,release});dirs.push(parent);
     for (const [key, value] of Object.entries({ ...production(), STUDIO_DATA_DIR: dir, ...overrides })) vi.stubEnv(key, value);
     return dir;
   };
@@ -98,6 +105,19 @@ describe('Studio production initialization', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(readFileSync(join(dir, 'studio.json'), 'utf8'))).toMatchObject({ members: [], agents: [] });
+  });
+
+  it('an owner drained during the initial manager probe remains terminal and never retries provider access',async()=>{
+    const dir=configure();let retained:Buffer|undefined;
+    const fetchMock=vi.fn(async()=>{
+      const owner=ensureStudioFileRuntimeOwner(dir,{requireQualified:true})!;
+      retained=readFileSync(join(dir,'.studio-runtime-owner-v1.lock'));owner.beginDrain();
+      return Response.json({ok:false,description:'Unauthorized'});
+    });
+    vi.stubGlobal('fetch',fetchMock);
+    await expect(getStudio()).rejects.toThrow('Studio FILE runtime ownership unavailable');
+    await expect(getStudio()).rejects.toThrow('Studio FILE runtime ownership unavailable');
+    expect(fetchMock).toHaveBeenCalledTimes(1);expect(readFileSync(join(dir,'.studio-runtime-owner-v1.lock'))).toEqual(retained);
   });
 
   it('keeps relationship providers and workers disabled under adaptive scope even when legacy allowlists are configured', async () => {

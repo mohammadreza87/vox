@@ -1,3 +1,4 @@
+import { ensureStudioFileRuntimeOwner } from './file-runtime-owner';
 /** Public guest intake must not initialize getStudio, Firebase, bots or providers. */
 import { constants, openSync, closeSync, fstatSync, readFileSync, lstatSync, readlinkSync } from 'node:fs';
 import { isAbsolute, join, resolve, parse, relative, sep } from 'node:path';
@@ -55,5 +56,6 @@ export function guestRightsRuntime(env: NodeJS.ProcessEnv = process.env): GuestR
     if (key()?.length !== 32)
         return;
     const data = env.STUDIO_DATA_DIR;
-    return new GuestRightsService(new GuestRightsStorage(join(data, 'guest-rights', 'v1')), { key, policy: () => parseGuestPolicy(env.STUDIO_GUEST_RIGHTS_POLICY_JSON), assertOperatorNow: id => currentOperator(data, id) });
+    const owner = (env.STUDIO_ADAPTIVE_FORMAT ?? 'file') === 'file' ? ensureStudioFileRuntimeOwner(data, { requireQualified: env.NODE_ENV === 'production' || env.STUDIO_ASSISTANT_TEXT_DELIVERY === '1' }) : undefined;
+    return new GuestRightsService(new GuestRightsStorage(join(data, 'guest-rights', 'v1')), { key, policy: () => parseGuestPolicy(env.STUDIO_GUEST_RIGHTS_POLICY_JSON), assertOperatorNow: id => { owner?.assertCurrent(); currentOperator(data, id); owner?.assertActive(); } });
 }

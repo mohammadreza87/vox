@@ -30,7 +30,7 @@ const RETRY_MS = 3000;
 /** Only once a probe has seen a webhook (getUpdates cannot win any update while one is set): retry slower. */
 const WEBHOOK_RETRY_MS = 15_000;
 
-interface Loop { stop: () => void; token?: string }
+interface Loop { stop: () => void; token?: string; done?:Promise<void> }
 
 export function pollLoop(
   bot: TelegramBotClient,
@@ -42,7 +42,7 @@ export function pollLoop(
   let running = true;
   let offset: number | undefined;
   const watch = new IntegrityWatch(bot);
-  (async () => {
+  const done=(async () => {
     await bot.deleteWebhook().catch(() => undefined);
     while (running) {
       try {
@@ -69,10 +69,14 @@ export function pollLoop(
       }
     }
   })();
-  return { stop: () => { running = false; } };
+  return { stop: () => { running = false; }, done };
 }
 
-export function startBots(studio: Studio): { stop: () => void } {
+export function startBots(studio: Studio): { stop: () => Promise<{pending:number}> } {
+  studio.deps.fileRuntimeOwner?.assertCurrent();
+  const pending=new Set<Promise<unknown>>();
+  const track=<T>(task:Promise<T>):Promise<T>=>{pending.add(task);void task.then(()=>pending.delete(task),()=>pending.delete(task));return task;};
+  let stopPromise:Promise<{pending:number}>|undefined;
   const log = studio.deps.logger ?? console;
   const loops = new Map<string, Loop>();
   let stopped = false;
@@ -80,14 +84,15 @@ export function startBots(studio: Studio): { stop: () => void } {
   let profilesRefreshing = false;
 
   const report = integrityReporter(studio);
-  const integrity = (target: string) => (reason: IntegrityReason) => { void report(target, reason).catch(() => undefined); };
+  const integrity = (target: string) => (reason: IntegrityReason) => { void track(report(target, reason).catch(() => undefined)); };
   const manager = studio.deps.managerBot;
   if (manager) {
     const webAppUrl = studio.deps.webAppUrl;
-    if (webAppUrl) manager.setChatMenuButton('Open Studio', webAppUrl).catch(() => logTelegramDiagnostic(log, 'menu_failed'));
+    if (webAppUrl) track(manager.setChatMenuButton('Open Studio', webAppUrl).catch(() => logTelegramDiagnostic(log, 'menu_failed')));
     // Settings v2: the manager's /settings menu (nothing with the flag off).
-    void studio.settingsBot.syncManagerMenu();
-    loops.set('manager', pollLoop(manager, MANAGER_UPDATES, (update) => handleManagerUpdate(studio, update), log, integrity('manager')));
+    void track(studio.settingsBot.syncManagerMenu());
+    const loop=pollLoop(manager, MANAGER_UPDATES, (update) => handleManagerUpdate(studio, update), log, integrity('manager'));
+    if(loop.done)track(loop.done);loops.set('manager',loop);
   }
 
   const refresh = async () => {
@@ -111,15 +116,16 @@ export function startBots(studio: Studio): { stop: () => void } {
         let active=true;
         const assistantPoller:AssistantTextPoller|undefined=agent.bot?.id?studio.deps.assistantText?.poller(agent.id,agent.bot.id,token,()=>active&&!stopped):undefined;
         const loop=pollLoop(bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token),assistantPoller), log, integrity(agent.id));
-        loops.set(agent.id,{token,stop:()=>{active=false;loop.stop();}});
+        if(loop.done)track(loop.done);
+        loops.set(agent.id,{token,done:loop.done,stop:()=>{active=false;loop.stop();}});
         logTelegramDiagnostic(log, 'bot_online');
       }
       // Repairs legacy photos without delaying new/fired bot polling changes.
       if (!profilesRefreshing) {
         profilesRefreshing = true;
-        void studio.reconcileBotProfiles()
+        void track(studio.reconcileBotProfiles()
           .catch(() => logTelegramDiagnostic(log, 'profile_failed'))
-          .finally(() => { profilesRefreshing = false; });
+          .finally(() => { profilesRefreshing = false; }));
       }
     } catch {
       logTelegramDiagnostic(log, 'refresh_failed');
@@ -128,8 +134,8 @@ export function startBots(studio: Studio): { stop: () => void } {
     }
   };
 
-  void refresh();
-  const timer = setInterval(refresh, REFRESH_MS);
+  void track(refresh());
+  const timer = setInterval(()=>{void track(refresh());}, REFRESH_MS);
   let draining = false;
   const drain = async () => {
     if (stopped || draining || studio.deps.relationships?.mode !== 'live') return;
@@ -138,8 +144,8 @@ export function startBots(studio: Studio): { stop: () => void } {
     catch { logTelegramDiagnostic(log, 'relationship_failed'); }
     finally { draining = false; }
   };
-  void drain(); // Recover durable due work after restart.
-  const relationshipTimer = setInterval(drain, 60_000);
+  void track(drain()); // Recover durable due work after restart.
+  const relationshipTimer = setInterval(()=>{void track(drain());}, 60_000);
   // The dependency exists only under the independent STUDIO_MAINTENANCE=1 flag.
   // Lease/checkpoint lives in storage; this guard only prevents process-local overlap.
   let maintaining = false;
@@ -154,8 +160,8 @@ export function startBots(studio: Studio): { stop: () => void } {
     } catch { if (!stopped) log.warn({ type: 'adaptive_maintenance', outcome: 'failed', reason: 'sweep_failed' }); }
     finally { maintaining = false; }
   };
-  const maintenanceTimer = studio.deps.maintenance ? setInterval(maintain, 60_000) : undefined;
-  void maintain();
+  const maintenanceTimer = studio.deps.maintenance ? setInterval(()=>{void track(maintain());}, 60_000) : undefined;
+  void track(maintain());
   // Pet check-ins (design §5, open decision 2): the HTTPS trigger's run, here only under STUDIO_MAINTENANCE=1. It returns
   // at once while STUDIO_PET_CHECKINS is off, and is idempotent per person, agent and day, so overlap with the trigger is safe.
   let checkingIn = false;
@@ -166,8 +172,8 @@ export function startBots(studio: Studio): { stop: () => void } {
     catch { if (!stopped) log.warn({ type: 'pet_checkins', outcome: 'failed' }); }
     finally { checkingIn = false; }
   };
-  const checkinTimer = studio.deps.maintenance ? setInterval(runCheckins, CHECKIN_MAINTENANCE_EVERY_MS) : undefined;
-  void runCheckins();
+  const checkinTimer = studio.deps.maintenance ? setInterval(()=>{void track(runCheckins());}, CHECKIN_MAINTENANCE_EVERY_MS) : undefined;
+  void track(runCheckins());
   let runningRoutines = false;
   const runRoutines = async () => {
     if (stopped || runningRoutines || !studio.deps.requestedRoutines || !studio.deps.requestedRoutinesEnabled?.()) return;
@@ -176,8 +182,8 @@ export function startBots(studio: Studio): { stop: () => void } {
     catch { log.warn({ type: 'requested_routines', outcome: 'failed' }); }
     finally { runningRoutines = false; }
   };
-  const routineTimer = studio.deps.requestedRoutines ? setInterval(runRoutines, 60_000) : undefined;
-  void runRoutines();
+  const routineTimer = studio.deps.requestedRoutines ? setInterval(()=>{void track(runRoutines());}, 60_000) : undefined;
+  void track(runRoutines());
   let archiving = false;
   const archive = async () => {
     if (stopped || archiving || !studio.deps.telegramArchive) return;
@@ -186,11 +192,18 @@ export function startBots(studio: Studio): { stop: () => void } {
     catch { log.warn({type: 'telegram_archive', outcome: 'pending'}); }
     finally { archiving = false; }
   };
-  const archiveTimer = studio.deps.telegramArchive ? setInterval(archive, 15_000) : undefined;
-  void archive();
+  const archiveTimer = studio.deps.telegramArchive ? setInterval(()=>{void track(archive());}, 15_000) : undefined;
+  void track(archive());
   return {
     stop: () => {
+      if(stopPromise)return stopPromise;
+      stopPromise=Promise.resolve().then(async()=>{
+        const deadline=new Promise<void>(resolve=>{const timer=setTimeout(resolve,5000);timer.unref?.();});
+        await Promise.race([Promise.allSettled([...pending]),deadline]);
+        return {pending:pending.size};
+      });
       stopped = true;
+      studio.deps.fileRuntimeOwner?.beginDrain();
       clearInterval(timer);
       if (archiveTimer) clearInterval(archiveTimer);
       clearInterval(relationshipTimer);
@@ -202,7 +215,8 @@ export function startBots(studio: Studio): { stop: () => void } {
       studio.deps.assistantText?.stop();
       for (const loop of loops.values()) loop.stop();
       loops.clear();
-      return studio.deps.preferenceLearning?.tasks.close();
+      if(studio.deps.preferenceLearning)track(studio.deps.preferenceLearning.tasks.close());
+      return stopPromise;
     },
   };
 }

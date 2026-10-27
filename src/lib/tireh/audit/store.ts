@@ -1,3 +1,6 @@
+import { fileRuntimeFs, fileRuntimePromises, assertFileRuntimePath } from '../../studio/file-runtime-owner';
+const { appendFile, chmod, readFile, rename, writeFile } = fileRuntimePromises;
+const { existsSync } = fileRuntimeFs;
 /**
  * Content-free, append-only memory audit log (`vox_audit`), step 8 of
  * docs/AGENT_INTELLIGENCE_SOLUTION.md (section 4.6, "Rights and hygiene").
@@ -19,8 +22,8 @@
  */
 
 import { createHash, randomUUID } from 'crypto';
-import { appendFile, chmod, readFile, rename, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+
+
 import type { Firestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import type { MemoryRecord } from '../types';
@@ -122,6 +125,7 @@ function reviveRow(line: string): AuditRow | null {
 
 /** Append-only JSONL (mode 0o600). Appends are serialized in-process; sweep is the only rewrite. */
 export function createFileAuditStore(path: string): AuditStore {
+  assertFileRuntimePath(path);
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(operation: () => Promise<T>): Promise<T> => {
     const next = chain.then(operation, operation);

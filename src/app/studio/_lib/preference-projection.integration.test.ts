@@ -1,5 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { promises as fs } from 'node:fs';
+import { resetFileRuntimeIoHooks, setFileRuntimeIoHooks } from '@/test/fro1-io-fixture';
+vi.mock('@/lib/studio/file-runtime-owner', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/studio/file-runtime-owner')>();
+  const { instrumentFileRuntime } = await import('@/test/fro1-io-fixture');
+  return instrumentFileRuntime(actual);
+});
 import { learningFixture } from '@/lib/adaptive/personalization/learning/fixtures';
 import { NOW } from '@/lib/adaptive/personalization/__tests__/fixtures';
 import { ID } from '@/lib/studio/__tests__/helpers';
@@ -8,14 +13,14 @@ import { handleExperienceRequest } from '@/lib/adaptive/runtime/http';
 import { experienceApi } from './experience-client';
 import { preferenceLearningApi } from './preference-learning-client';
 const fixtures: Awaited<ReturnType<typeof learningFixture>>[]=[];
-afterEach(async()=>{vi.restoreAllMocks();vi.unstubAllGlobals();delete(window as unknown as{Telegram?:unknown}).Telegram;await Promise.all(fixtures.splice(0).map(x=>x.close()));});
+afterEach(async()=>{vi.restoreAllMocks(); resetFileRuntimeIoHooks();vi.unstubAllGlobals();delete(window as unknown as{Telegram?:unknown}).Telegram;await Promise.all(fixtures.splice(0).map(x=>x.close()));});
 async function setup(){const x=await learningFixture();fixtures.push(x);await x.enable();return x;}
 it.each(['ordinary','learning'] as const)('a genuine concurrent FILE read causes one safe %s conflict then a fresh authorized GET succeeds',async kind=>{
  const x=await setup(),token='123:synthetic-read-overlap',initData=signInitData({id:ID.alice,first_name:'Synthetic'},token);(window as unknown as{Telegram:unknown}).Telegram={WebApp:{initData}};
  const name=kind==='ordinary'?'preferences':'preference-learning',otherName=kind==='ordinary'?'preference-learning':'preferences';
  const send=(part:string)=>handleExperienceRequest(x.h.studio,x.experience,new Request(`https://vox.synthetic/api/studio/experience/${part}?space=work&agentId=${x.agent.id}`,{headers:{'x-telegram-init-data':initData}}),[part],token);
- let release=()=>{},observed!:()=>void,other!:Promise<Response>,held=false;const gate=new Promise<void>(r=>release=r),reached=new Promise<void>(r=>observed=r),rename=fs.rename.bind(fs);
- const overlap=async()=>{vi.spyOn(fs,'rename').mockImplementation(async(...args)=>{if(!held&&String(args[1]).startsWith(x.f.directory!)){held=true;observed();await gate;}return rename(...args);});other=send(otherName);await reached;};
+ let release=()=>{},observed!:()=>void,other!:Promise<Response>,held=false;const gate=new Promise<void>(r=>release=r),reached=new Promise<void>(r=>observed=r);
+ const overlap=async()=>{setFileRuntimeIoHooks({afterTemporarySync:async path=>{if(!held&&path.startsWith(x.f.directory!)){held=true;observed();await gate;}}});other=send(otherName);await reached;};
  if(kind==='learning'){const view=x.learning.view.bind(x.learning);vi.spyOn(x.learning,'view').mockImplementationOnce(async(...args)=>{const result=await view(...args);await overlap();return result;});}
  else{const view=x.experience.readPreferenceState.bind(x.experience);vi.spyOn(x.experience,'readPreferenceState').mockImplementationOnce(async(...args)=>{const result=await view(...args);await overlap();return result;});}
  const statuses:number[]=[];vi.stubGlobal('fetch',async(path:string,options:RequestInit)=>{expect(options.method).toBe('GET');expect(path).toContain(name);const url=new URL(path,'https://vox.synthetic'),response=await handleExperienceRequest(x.h.studio,x.experience,new Request(url,options),[name],token);statuses.push(response.status);if(response.status===409){release();expect((await other).status).toBe(200);}return response;});

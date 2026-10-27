@@ -1,6 +1,9 @@
+import { fileRuntimeFs, fileRuntimePromises, assertFileRuntimePath, commitFileRuntimeRename, prepareFileRuntimeTransient, createFileRuntimeTransientDirectory } from '../../studio/file-runtime-owner';
+const fs = fileRuntimePromises;
+const { existsSync, readFileSync, constants, openSync, closeSync, fstatSync, lstatSync } = fileRuntimeFs;
 /** Separate account documents; never shares the administrator-readable Studio state. */
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs, existsSync, readFileSync, renameSync, constants, openSync, closeSync, fstatSync, lstatSync } from 'fs';
+
 import { assertAssistantDeliveryTransition, parseAssistantDeliveryControl } from '../assistant-delivery-control';
 import type { AdaptiveDocument } from './repository';
 import { join } from 'path';
@@ -95,7 +98,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
   /** Revision bus also advances when a committed file changed in another writer. */
   readonly revisions = new RevisionCounter('file-adaptive');
   private readonly committedDigests = new Map<string, string>();
-  constructor(readonly directory: string) {}
+  constructor(readonly directory: string) { assertFileRuntimePath(directory); }
   static readonly assistantControlMarker = 'assistant-delivery-control-v1.json';
   static readonly assistantControlMarkerBytes = '{"version":1,"kind":"assistant-delivery-control"}\n';
   static readonly assistantControlV2Marker = 'assistant-delivery-control-v2.json';
@@ -189,7 +192,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     const lock = `${file}.lock`;
     const deadline = Date.now() + 3000;
     while (true) {
-      try { await fs.mkdir(lock, { mode: 0o700 }); break; }
+      try { createFileRuntimeTransientDirectory(lock); break; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         if (Date.now() >= deadline) throw new Error('Adaptive storage is busy');
@@ -205,18 +208,17 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
         current = null;
       }
       const before=current===null?undefined:structuredClone(current) as AdaptiveDocument;
+      assertFileRuntimePath(this.directory);
       const { document, result } = mutate(current);
       if(before?.assistantDeliveryControl || (document as AdaptiveDocument)?.assistantDeliveryControl)this.assertAssistantDeliveryControlMarker((document as AdaptiveDocument)?.assistantDeliveryControl?.version===2||before?.assistantDeliveryControl?.version===2?2:1);
       if((document as AdaptiveDocument)?.assistantDeliveryControl!==undefined){const d=document as AdaptiveDocument;if(d.schemaVersion!==1)throw new Error('Assistant control format unavailable');parseAssistantDeliveryControl(d.assistantDeliveryControl,accountId,d.personId,d.updatedAt);}
       assertAssistantDeliveryTransition(before,document as AdaptiveDocument,this.assistantWriters.has(mutate));
       const json = encode(document);
+      prepareFileRuntimeTransient(temporary);
       const handle = await fs.open(temporary, 'wx', 0o600);
       try { await handle.writeFile(json); await handle.sync(); } finally { await handle.close(); }
-      if (beforeCommit) {
-        // Supported single-process topology: external Studio authority and
-        // deadlines cannot change between the last check and atomic commit.
-        beforeCommit(); renameSync(temporary, file);
-      } else await fs.rename(temporary, file);
+      // Owner I/O precedes the trusted authority/deadline fence; no I/O after its final clock.
+      commitFileRuntimeRename(temporary, file, beforeCommit);
       this.committedDigests.set(accountId, createHash('sha256').update(json).digest('hex'));
       this.revisions.bump(accountId);
       const directory = await fs.open(this.directory, 'r');

@@ -1,11 +1,16 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { resetFileRuntimeIoHooks, setFileRuntimeIoHooks } from '@/test/fro1-io-fixture';
+vi.mock('@/lib/studio/file-runtime-owner', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/studio/file-runtime-owner')>();
+  const { instrumentFileRuntime } = await import('@/test/fro1-io-fixture');
+  return instrumentFileRuntime(actual);
+});
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
 import { correctionFixture, CORRECTION_NOW } from './memory-correction-fixtures';
 const fixtures: Awaited<ReturnType<typeof correctionFixture>>[] = [];
 const allowed = { authorizeNow: () => true };
 async function setup(file = true) { const f = await correctionFixture(file); fixtures.push(f); return f; }
-afterEach(async () => { vi.restoreAllMocks(); await Promise.all(fixtures.splice(0).map(f => f.close())); });
+afterEach(async () => { vi.restoreAllMocks(); resetFileRuntimeIoHooks(); await Promise.all(fixtures.splice(0).map(f => f.close())); });
 it('corrects the same own row without changing origin, scope, retention, creation or grants and retires all derived descendants atomically', async () => {
   const f = await setup();
   await f.service.setAgentAccess(123, 'agent', { space: 'work', allowed: true, expectedRevision: (await f.service.read(123, 'work')).revision, eventId: randomUUID() });
@@ -60,16 +65,14 @@ it('serializes competing corrections and deletion with memory CAS so only one wr
 it.each(['profile','memory','policy','member','abort'] as const)('fences %s changes during actual FILE temporary fsync before rename', async kind => {
   const f = await setup(), controller = new AbortController(); let permitted = true;
   if (kind === 'memory') await f.service.withAccountDocument(123, d => { d.memories[0].expiresAt = CORRECTION_NOW + 1; });
-  const open = fs.open.bind(fs); let armed = true;
-  vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    if (armed && String(args[0]).endsWith('.tmp')) { armed = false; const sync = handle.sync.bind(handle); vi.spyOn(handle,'sync').mockImplementationOnce(async () => {
-      await sync(); if (kind === 'profile') f.setNow(CORRECTION_NOW + 12 * 3600_000); if (kind === 'memory') f.setNow(CORRECTION_NOW + 1);
-      if (kind === 'policy') f.deny(); if (kind === 'member') permitted = false; if (kind === 'abort') controller.abort();
-    }); }
-    return handle;
-  });
+  let synced = false;
+  setFileRuntimeIoHooks({ afterTemporarySync: () => {
+    if (synced) return; synced = true;
+    if (kind === 'profile') f.setNow(CORRECTION_NOW + 12 * 3600_000); if (kind === 'memory') f.setNow(CORRECTION_NOW + 1);
+    if (kind === 'policy') f.deny(); if (kind === 'member') permitted = false; if (kind === 'abort') controller.abort();
+  } });
   await expect(f.service.correctMemory(123, f.note.id, f.input(), { authorizeNow: () => permitted, signal: controller.signal })).rejects.toMatchObject({ code: 'memory_correction_changed' });
+  expect(synced).toBe(true);
   const stored = (f.storage.readCommittedForEffect!('telegram-account:123') as { status: 'ready'; document: { memories: Array<{ text: string }> } }).document;
   expect(stored.memories[0].text).toBe(f.note.text);
 });

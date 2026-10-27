@@ -1,3 +1,5 @@
+import { fileRuntimeFs, assertFileRuntimePath } from './file-runtime-owner';
+const { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } = fileRuntimeFs;
 /**
  * Agent-wide lit growth moments (design PET_CARE_GAME_DESIGN_2026_10_26 §4.11): one record per agent, never per person.
  * Each entry is a moment id, its kind and dates, plus for a taught moment an opaque keyed hash of its source note copy
@@ -10,7 +12,7 @@
  * taught moment (in the teacher's own `PetPlay.litMine`) is removed from their play record the same way.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { dimMoments, lightMoment, sanitizeLit, type GrowthKind, type GrowthLit } from '../pet/growth';
@@ -38,7 +40,7 @@ function assertAgent(agentId: string) {
 }
 
 export class FilePetGrowthStore implements PetGrowthStore {
-  constructor(readonly petsDir: string) {}
+  constructor(readonly petsDir: string) { assertFileRuntimePath(petsDir); }
 
   private get dir() { return join(this.petsDir, 'growth'); }
   private file(agentId: string) { return join(this.dir, `${agentId}.json`); }

@@ -1,0 +1,22 @@
+{
+  "base": "f895ba59fc43fe9677e08fa602cc48c08ccdf3f8",
+  "tree": "9dddab6c6d5ed02ced0ac7f011cfb64f83f3cd44",
+  "purpose": "Independent unmodified f895 actual reader and actual accepted generated release manifest. Synthetic downgrade oracle only. No live data or provider operation.",
+  "files": {
+    "studio-adaptive-compatibility.mjs": {
+      "source": "scripts/studio-adaptive-compatibility.mjs",
+      "sha256": "7d578fd25e35c93eab79d8a5a03f496c3b116d8ad7203d9f2a1e52669ae28d7c",
+      "bytes": 90621
+    },
+    "studio-release.json": {
+      "source": "Accepted f895 build tP5oJ7-NnLeJm_G0-ytXy .next/studio-release.json",
+      "sha256": "c4360646ca6b0efdc0c01350a8c384cfde7014813212f815f3dd417b3eb2c4ba",
+      "bytes": 1392
+    },
+    "admission-fixture.json": {
+      "source": "Previously independently accepted synthetic ATI1 installed-reader fixture; reader projection only, no provider authority",
+      "sha256": "b4af32d2ab1245b7f62eb8bda26df852987e9b74b7d1ac26cd2c6dab84582790",
+      "bytes": 5625
+    }
+  }
+}

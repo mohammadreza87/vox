@@ -7,6 +7,7 @@ import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { prepareRightsLocalUseLedger } from '../src/lib/adaptive/rights-intake/conversion';
 import { RightsRepository, RightsError } from '../src/lib/adaptive/rights-intake/repository';
 import { RightsFileStorage } from '../src/lib/adaptive/rights-intake/storage';
+import { assertFileRuntimePath } from './studio-file-runtime-owner.mjs';
 
 const invalid = (): never => { throw new RightsError(400, 'invalid_conversion_arguments'); };
 function readPolicy(path: string): unknown {
@@ -49,6 +50,7 @@ async function main(): Promise<void> {
       typeof dataDir !== 'string' || !isAbsolute(dataDir) || resolve(dataDir) === '/' ||
       typeof policyFile !== 'string' || !isAbsolute(policyFile) || typeof accountId !== 'string' ||
       !/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(Number(accountId.slice(17)))) return invalid();
+  if (assertFileRuntimePath(resolve(dataDir))) return invalid();
   const repository = new RightsRepository(new RightsFileStorage(join(resolve(dataDir), 'rights-intake', 'v1')));
   await prepareRightsLocalUseLedger({ repository, accountId, policy: () => readPolicy(resolve(policyFile)), clock: Date.now,
     assertLocalAdministrationNow: () => { if (flags.get('--local-administrator') !== true) return invalid(); },

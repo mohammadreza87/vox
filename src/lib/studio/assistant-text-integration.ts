@@ -82,7 +82,7 @@ export class StudioAssistantTextIntegration implements AssistantTextGatewayHook 
     this.transport=new AssistantTextTransport(options.fetchFn,()=>this.now());
   }
   private now():number {const n=this.options.now?.()??this.studio.deps.now?.().getTime()??Date.now();if(!Number.isSafeInteger(n)||n<0||Object.is(n,-0))throw new AssistantControlError('clock');return n;}
-  private enabled():boolean {try{return !this.stopped&&this.options.enabled()===true;}catch{return false;}}
+  private enabled():boolean {try{this.studio.deps.fileRuntimeOwner?.assertActive();return !this.stopped&&this.options.enabled()===true;}catch{return false;}}
   private keyAvailable():boolean {
     try{const key=this.options.keys?.current();return !!key&&id.safeParse(key.keyId).success&&types.isUint8Array(key.key)&&!types.isProxy(key.key)&&intrinsicByteLength.call(key.key)===32;}catch{return false;}
   }
@@ -209,7 +209,7 @@ export class StudioAssistantTextIntegration implements AssistantTextGatewayHook 
       const claimed=await this.control.claim(prepared,r.source);if(claimed.status!=='claimed')return {kind:'refused',reason:'duplicate'};
       sending=await this.control.beginDispatch(claimed.state,prepared);
       const expected=sending;
-      const transport=await this.transport.send({token:r.poller.token,prepared,authorizeNow:()=>checkCurrent(()=>this.enabled()&&!!this.source(agentId,message,ingress)&&this.control.isDispatchCurrent(expected,prepared))});
+      const transport=await this.transport.send({token:r.poller.token,prepared,ownerSignal:this.studio.deps.fileRuntimeOwner?.signal,ownerActive:()=>this.studio.deps.fileRuntimeOwner?.assertActive(),authorizeNow:()=>checkCurrent(()=>{this.studio.deps.fileRuntimeOwner?.assertCurrent();return this.enabled()&&!!this.source(agentId,message,ingress)&&this.control.isDispatchCurrent(expected,prepared);})});
       const recorded=transport.kind==='response'?await this.control.recordResponse(expected,prepared,transport.evidence,transport.response):await this.control.recordUncertainty(expected,transport.reason);
       if(recorded.phase!=='sent'||!recorded.outcome||!('receipt' in recorded.outcome))return {kind:'unknown',reason:'uncertain'};
       return {kind:'sent',effectKey:recorded.effectKey,messageId:recorded.outcome.receipt.messageId,contentEligible:recorded.contentEligible,

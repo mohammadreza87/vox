@@ -113,6 +113,12 @@ export class RightsIntakeService {
     if (!p || expected && digest(p) !== digest(expected)) return fail(503, 'reviewed_policy_unavailable');
     return p;
   }
+  /** Pure last clock fence: authority/policy/export checks above may perform owner I/O. */
+  private assertPolicyDeadlineNow(p:RightsPolicy):void {
+    const now=(this.options.clock??Date.now)();
+    if(!Number.isSafeInteger(now)||now<this.observedTime)return fail(503,'rights_clock_unavailable');
+    if(now<p.effectiveAt||now>=p.expiresAt)return fail(503,'reviewed_policy_unavailable');
+  }
   private ref(domain: string, value: string): string {
     if (this.options.key?.length !== 32) return fail(503, 'reviewed_policy_unavailable');
     return createHmac('sha256', this.options.key).update(`vox-rights:${domain}:v1\0${value}`).digest('hex');
@@ -277,10 +283,10 @@ export class RightsIntakeService {
         this.transition(r, input.action, input.action === 'withdraw_request' ? 'requester_withdrew' : 'supported_scope_only', prepared ? 'service' : 'requester', accountId, now, p);
         if (prepared) { prepared.revalidate(); r.localExport = { preparedAt: now, accountRevision: prepared.data.revision, scope: 'authorized_local_account_projection', delivery: 'unverified' }; r.coverage.localAccount = 'export_prepared'; r.coverage.shared = 'currently_authorized_published_only'; }
         this.receipt(d, r, input, fp, now, p);
-      }, () => { this.options.assertAccountNow(id); this.requirePolicy(this.now(), p); prepared?.revalidate(); });
+      }, () => { this.options.assertAccountNow(id); this.requirePolicy(this.now(), p); prepared?.revalidate(); this.requirePolicy(this.now(),p); this.assertPolicyDeadlineNow(p); });
     } catch (e) { if (e instanceof RightsReplay) return { result: (await this.replayResult(id, space, input.eventId, fp))! }; throw e; }
-    this.requirePolicy(this.now(), p); prepared?.revalidate();
-    return { result: { ...this.detail(id, space, requestId), replayed: false }, ...(prepared ? { prepared: { data: prepared.data, revalidate: () => { this.requirePolicy(this.now(), p); this.options.assertAccountNow(id); prepared.revalidate(); this.requirePolicy(this.now(), p); } } } : {}) };
+    this.requirePolicy(this.now(), p); prepared?.revalidate(); this.assertPolicyDeadlineNow(p);
+    return { result: { ...this.detail(id, space, requestId), replayed: false }, ...(prepared ? { prepared: { data: prepared.data, revalidate: () => { this.requirePolicy(this.now(), p); this.options.assertAccountNow(id); prepared.revalidate(); this.requirePolicy(this.now(), p); this.assertPolicyDeadlineNow(p); } } } : {}) };
   }
   private operationView(r: RequestRecord, operator: number, p: RightsPolicy, now: number): RightsOperationView {
     const { version, requestId, space, kind, revision, createdAt, updatedAt, state, reasonCode, deadline, coverage, retentionReviewRequired } = this.view(r, now);
