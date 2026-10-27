@@ -2,6 +2,7 @@
 import{mkdtempSync,mkdirSync,readFileSync,writeFileSync,cpSync,realpathSync,lstatSync,chmodSync}from'node:fs';import{join,resolve}from'node:path';import{spawn}from'node:child_process';import{randomBytes,randomUUID,createHash}from'node:crypto';import{pathToFileURL}from'node:url';import ts from'typescript';import{guestFixtureBuildMetadata}from'./guest-fixture-build.mjs';
 const mode=process.argv[2];if(!['active','disabled','legacy','proxy','ownership'].includes(mode))throw Error('Explicit synthetic fixture mode required');
 const ownership=mode==='ownership';
+if(ownership)process.umask(0o077);
 const root=realpathSync(resolve('.'));const fixtureParent=process.env.GUEST_RUNTIME_DIR||'/tmp';mkdirSync(fixtureParent,{recursive:true,mode:0o700});const dir=realpathSync(mkdtempSync(join(fixtureParent,'vox-guest-compiled-author-'))),runtime=join(dir,'runtime'),data=join(dir,'data');
 cpSync(join(root,'.next','standalone'),runtime,{recursive:true});chmodSync(runtime,0o700);cpSync(join(root,'.next','static'),join(runtime,'.next','static'),{recursive:true});cpSync(join(root,'public'),join(runtime,'public'),{recursive:true});mkdirSync(data,{mode:0o700});
 writeFileSync(join(data,'studio.json'),JSON.stringify({members:[{telegramId:123,role:'owner',name:'Synthetic privacy operator'}],agents:[],groups:[],audit:[]}),{mode:0o600});
