@@ -1,5 +1,7 @@
+import { fileRuntimeFs, assertFileRuntimePath } from '../studio/file-runtime-owner';
+const { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } = fileRuntimeFs;
 import { createHmac, randomUUID } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+
 import { dirname } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import type { FeedbackOutcome, FeedbackScope, RelationshipFeedback, RelationshipKey, RelationshipMode } from './types';
@@ -60,7 +62,7 @@ export class FileObservationStore extends InMemoryObservationStore {
     const run = async () => { const before = this.events; await super.append(event); try { writeFileSync(`${this.path}.tmp`, JSON.stringify(this.events), { mode: 0o600 }); renameSync(`${this.path}.tmp`, this.path); } catch (error) { this.events = before; throw error; } };
     const task = this.queue.then(run, run); this.queue = task.catch(() => undefined); return task;
   }
-  override async recent(limit?: number): Promise<Observation[]> { await this.queue; return super.recent(limit); }
+  override async recent(limit?: number): Promise<Observation[]> { await this.queue; assertFileRuntimePath(this.path); return super.recent(limit); }
 }
 export class FirestoreObservationStore implements ObservationStore {
   constructor(private readonly db: Firestore, private readonly collection = 'vox_relationship_observations') {}

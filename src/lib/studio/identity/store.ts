@@ -1,3 +1,5 @@
+import { fileRuntimeFs, assertFileRuntimePath } from '../file-runtime-owner';
+const { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } = fileRuntimeFs;
 /**
  * Isolated voiceprint template store 'vox_voiceprints' (S11L). It holds only
  * sealed templates (AES-256-GCM with VOICEPRINT_KEY, see crypto.ts) and the
@@ -5,7 +7,7 @@
  * never persisted. Rows are validated with a strict schema on every read;
  * anything else is dropped from results.
  */
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -131,7 +133,7 @@ const fromJson = (raw: unknown): unknown => {
 export class FileVoiceprintStore implements VoiceprintStore {
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly path: string) {}
+  constructor(private readonly path: string) { assertFileRuntimePath(path); }
 
   private load(): { rows: VoiceprintRow[]; echo: EchoTemplateRow[] } {
     if (!existsSync(this.path)) return { rows: [], echo: [] };

@@ -111,3 +111,33 @@ describe('ATI1 protected final synchronous fetch deadline',()=>{
     expect(fetchFn).not.toHaveBeenCalled();expect(certainty(p,result).kind).toBe('unknown');
   });
 });
+
+describe('FRO1 protected owner cancellation without retry or extra authority IO',()=>{
+  it('already-aborted owner makes zero fetch calls despite an otherwise valid prepared request',async()=>{
+    const p=prepared(),owner=new AbortController(),fetchFn=vi.fn(async()=>response(p));owner.abort();
+    const result=await new AssistantTextTransport(fetchFn,()=>NOW).send({token:TOKEN,prepared:p,authorizeNow:()=>true,ownerSignal:owner.signal,ownerActive:()=>undefined});
+    expect(result.kind).toBe('unknown');expect(fetchFn).not.toHaveBeenCalled();
+  });
+  it('pure terminal owner latch after authorization denies without changing the exact wire payload',async()=>{
+    const p=prepared(),before=Array.from(p.bodyBytes),fetchFn=vi.fn(async()=>response(p));
+    const result=await new AssistantTextTransport(fetchFn,()=>NOW).send({token:TOKEN,prepared:p,authorizeNow:()=>true,ownerActive:()=>{throw Error('synthetic_owner_lost');}});
+    expect(result.kind).toBe('unknown');expect(fetchFn).not.toHaveBeenCalled();expect(Array.from(p.bodyBytes)).toEqual(before);
+  });
+  it('loss after the one actual fetch aborts that request and preserves unknown without a second POST',async()=>{
+    const p=prepared(),owner=new AbortController();let aborted=0;
+    const fetchFn=vi.fn(async(_url:Parameters<typeof fetch>[0],init?:RequestInit)=>{
+      expect(Array.from(requestBytes(init!))).toEqual(Array.from(p.bodyBytes));
+      init?.signal?.addEventListener('abort',()=>{aborted++;},{once:true});owner.abort();return response(p);
+    });
+    const result=await new AssistantTextTransport(fetchFn,()=>NOW).send({token:TOKEN,prepared:p,authorizeNow:()=>true,ownerSignal:owner.signal,ownerActive:()=>undefined});
+    expect(fetchFn).toHaveBeenCalledTimes(1);expect(aborted).toBe(1);expect(certainty(p,result).kind).toBe('unknown');
+  });
+  it('retains the hard total deadline when a detached body ignores owner abort',async()=>{
+    vi.useFakeTimers();const p=prepared(),owner=new AbortController();let fetchSignal:AbortSignal|undefined,cancelled=0,entered:()=>void=()=>undefined;
+    const reading=new Promise<void>(resolve=>{entered=resolve;});
+    const fetchFn=vi.fn(async(_url:Parameters<typeof fetch>[0],init?:RequestInit)=>{fetchSignal=init?.signal??undefined;return new Response(new ReadableStream<Uint8Array>({pull(){entered();},cancel(){cancelled++;}},{highWaterMark:0}));});
+    const pending=new AssistantTextTransport(fetchFn,()=>NOW).send({token:TOKEN,prepared:p,authorizeNow:()=>true,ownerSignal:owner.signal,ownerActive:()=>undefined});
+    await reading;owner.abort();expect(fetchSignal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(20001);expect((await pending).kind).toBe('unknown');expect(fetchFn).toHaveBeenCalledTimes(1);expect(cancelled).toBe(1);
+  });
+});

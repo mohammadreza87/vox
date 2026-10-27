@@ -1,5 +1,7 @@
+import { fileRuntimeFs, assertFileRuntimePath, createFileRuntimeTransientDirectory, prepareFileRuntimeTransient, openFileRuntimeDescriptor, type BoundFileRuntimeDescriptor } from '../file-runtime-owner';
+const fs = fileRuntimeFs;
 import { randomUUID } from 'node:crypto';
-import * as fs from 'node:fs';
+
 import path from 'node:path';
 import { z } from 'zod';
 import type { RoutineLedger } from './types';
@@ -46,6 +48,7 @@ export function validateBinding(value: unknown) { return binding.parse(value); }
  * removed by stale cleanup. PID reuse fails closed. Never use on network FS. */
 export class RoutineFileStore {
   constructor(readonly filePath: string) {
+    assertFileRuntimePath(filePath);
     if (!path.isAbsolute(filePath)) throw new Error('routine_absolute_path_required');
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   }
@@ -80,17 +83,18 @@ export class RoutineFileStore {
     const data = JSON.stringify(ledgerSchema.parse(ledger));
     if (Buffer.byteLength(data) > ROUTINE_LIMITS.fileBytes) throw new Error('routine_ledger_capacity');
     const temporary = `${this.filePath}.${randomUUID()}.tmp`;
-    let descriptor: number | undefined;
+    let descriptor: BoundFileRuntimeDescriptor | undefined;
     try {
-      descriptor = fs.openSync(temporary, 'wx', 0o600);
-      fs.writeFileSync(descriptor, data);
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor); descriptor = undefined;
+      prepareFileRuntimeTransient(temporary);
+      descriptor = openFileRuntimeDescriptor(temporary, 'wx', 0o600);
+      descriptor.writeFile(data);
+      descriptor.sync();
+      descriptor.close(); descriptor = undefined;
       fs.renameSync(temporary, this.filePath);
       const parent = fs.openSync(path.dirname(this.filePath), 'r');
       try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
     } finally {
-      if (descriptor !== undefined) fs.closeSync(descriptor);
+      if (descriptor !== undefined) descriptor.close();
       try { fs.unlinkSync(temporary); } catch { /* renamed or failed before create */ }
     }
   }
@@ -99,7 +103,7 @@ export class RoutineFileStore {
     const lock = `${this.filePath}.lock`;
     const owner = `${process.pid}-${randomUUID()}`;
     const staging = `${lock}.${owner}`;
-    fs.mkdirSync(staging, { mode: 0o700 });
+    createFileRuntimeTransientDirectory(staging);
     fs.writeFileSync(path.join(staging, owner), '', { mode: 0o600 });
     const deadline = Date.now() + 2_000;
     try {

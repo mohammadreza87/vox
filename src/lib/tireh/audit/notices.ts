@@ -1,3 +1,6 @@
+import { fileRuntimeFs, fileRuntimePromises, assertFileRuntimePath } from '../../studio/file-runtime-owner';
+const { chmod, readFile, rename, writeFile } = fileRuntimePromises;
+const { existsSync } = fileRuntimeFs;
 /**
  * Content-free "updated" notices (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.6,
  * "Work fact told privately"): when the owner corrects a record they shared,
@@ -8,8 +11,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { chmod, readFile, rename, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+
+
 import type { Firestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 import { auditIdSchema, toDate, withoutUndefined } from './store';
@@ -58,6 +61,7 @@ export class InMemorySupersededNoticeStore implements SupersededNoticeStore {
 
 /** One JSON array file (mode 0o600), rewritten through tmp + rename, serialized in-process. */
 export function createFileSupersededNoticeStore(path: string): SupersededNoticeStore {
+  assertFileRuntimePath(path);
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(operation: () => Promise<T>): Promise<T> => {
     const next = chain.then(operation, operation);

@@ -1,0 +1,184 @@
+{
+  "fixtureVersion": 2,
+  "kind": "ati1-arc2-and-existing-pet-installed-reader-synthetic",
+  "acceptedSource": "b36750294bf7b45e9f434412864733b3e84dd496",
+  "acceptedTree": "9dddab6c6d5ed02ced0ac7f011cfb64f83f3cd44",
+  "basis": "Metadata shapes from accepted core/Node fixtures; placeholder HMAC fields are not authenticated provider evidence. Base is the reader admission projection, not a full AdaptiveDocument.",
+  "canonicalBase": {
+    "schemaVersion": 1,
+    "accountId": "telegram-account:70300",
+    "personId": "account-profile:9f5a665a70425e38fadd5ed9d3ce07c4",
+    "revision": 10,
+    "createdAt": 1793015998000,
+    "updatedAt": 1793016000000
+  },
+  "emptyControl": {
+    "version": 1,
+    "policyVersion": "arc1-control-7d-v1",
+    "revision": 0,
+    "observedAt": 1793016000000,
+    "noReplayBefore": 1793016000000,
+    "sourceFenceSequence": 0,
+    "historyEpoch": 0,
+    "deletionEpoch": 0,
+    "streams": [],
+    "effects": []
+  },
+  "populatedUnknownControl": {
+    "version": 1,
+    "policyVersion": "arc1-control-7d-v1",
+    "revision": 2,
+    "observedAt": 1793016000000,
+    "noReplayBefore": 1793015998000,
+    "sourceFenceSequence": 0,
+    "historyEpoch": 0,
+    "deletionEpoch": 0,
+    "streams": [
+      {
+        "botId": 77001,
+        "destinationChatId": 70300,
+        "agentId": "qa-work",
+        "space": "work",
+        "containerId": "private-tenant:9f5a665a70425e38fadd5ed9:work:private",
+        "messageFloor": 0,
+        "highMessageId": 42,
+        "lastAcceptedAt": 1793016000000
+      }
+    ],
+    "effects": [
+      {
+        "state": {
+          "schemaVersion": 1,
+          "kind": "assistant-text-delivery",
+          "effectKey": "[\"adp1\",\"telegram\",77001,70300,42,\"initial\",\"primary-text\"]",
+          "scope": {
+            "accountId": "telegram-account:70300",
+            "personId": "account-profile:9f5a665a70425e38fadd5ed9d3ce07c4",
+            "agentId": "qa-work",
+            "space": "work",
+            "containerId": "private-tenant:9f5a665a70425e38fadd5ed9:work:private",
+            "kind": "private"
+          },
+          "binding": {
+            "botId": 77001,
+            "destinationChatId": 70300,
+            "endpointBindingId": "qa-endpoint",
+            "credentialBindingId": "qa-credential",
+            "bindingRevision": "qa-binding-v1"
+          },
+          "source": {
+            "messageId": 42,
+            "updateId": 8,
+            "revision": 0,
+            "occurredAt": 1793015999000,
+            "acceptedAt": 1793016000000
+          },
+          "authority": {
+            "authorityRevision": "qa-authority",
+            "grantRevision": "qa-grant",
+            "sourceFenceRevision": "qa-fence",
+            "sourceFenceSequence": 0,
+            "historyEpoch": 0,
+            "deletionEpoch": 0,
+            "expiresAt": 1793016060000
+          },
+          "generationId": "33333333-3333-4333-8333-333333333333",
+          "attemptId": "44444444-4444-4444-8444-444444444444",
+          "evidence": {
+            "keyId": "qa-key",
+            "generatedHmac": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "generatedUtf16Length": 22,
+            "submittedTextHmac": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "submittedUtf16Length": 22,
+            "bodyHmac": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "bodyBytes": 53
+          },
+          "createdAt": 1793016000000,
+          "lastTransitionAt": 1793016000000,
+          "expiresAt": 1793016060000,
+          "revision": 2,
+          "phase": "unknown",
+          "contentEligible": true,
+          "outcome": {
+            "reason": "dispatch_interrupted",
+            "observedAt": 1793016000000
+          }
+        },
+        "retainUntil": 1793620800000
+      }
+    ]
+  },
+  "markerName": "assistant-delivery-control-v1.json",
+  "markerBytes": "{\"version\":1,\"kind\":\"assistant-delivery-control\"}\n",
+  "petPlay": {
+    "v": 1,
+    "agentId": "qa-work",
+    "userId": 70300,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "seenAt": 0,
+    "items": [],
+    "wearing": {},
+    "garden": null,
+    "book": [],
+    "games": {},
+    "tips": {},
+    "asks": {},
+    "seasons": {},
+    "litMine": []
+  },
+  "petGrowth": {
+    "agentId": "qa-work",
+    "lit": [
+      {
+        "id": "room-first",
+        "kind": "room",
+        "at": 0
+      }
+    ]
+  },
+  "petCheckin": {
+    "v": 1,
+    "userId": 70300,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "lang": "en",
+    "sound": false,
+    "unopenedStreak": 0,
+    "agents": {},
+    "seasons": {},
+    "sent": []
+  },
+  "petEpoch": {
+    "v": 1,
+    "epoch": "b3c708bb-58bd-4504-93da-bc0c95f485e3"
+  },
+  "prior43FixtureSha256": "4551dbbb0b5cffab7eca2f20ce3bde57f9bba0ce51c04d5a924ea55e236830ca",
+  "v2MarkerName": "assistant-delivery-control-v2.json",
+  "v2MarkerBytes": "{\"version\":2,\"kind\":\"assistant-delivery-control\"}\n",
+  "v2EmptyControl": {
+    "version": 2,
+    "policyVersion": "arc2-control-7d-v1",
+    "revision": 0,
+    "observedAt": 1793016000000,
+    "noReplayBefore": 1793016000000,
+    "sourceFenceSequence": 0,
+    "historyEpoch": 0,
+    "deletionEpoch": 0,
+    "streams": [],
+    "effects": [],
+    "enrollments": []
+  },
+  "v2Enrollment": {
+    "botId": 77001,
+    "destinationChatId": 70300,
+    "agentId": "qa-work",
+    "space": "work",
+    "containerId": "private-tenant:9f5a665a70425e38fadd5ed9:work:private",
+    "enabled": true,
+    "enrolledAt": 1793015998000,
+    "changedAt": 1793015998000,
+    "revision": 1,
+    "requestId": "55555555-5555-4555-8555-555555555555"
+  }
+}

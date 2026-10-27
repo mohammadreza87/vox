@@ -1,0 +1,79 @@
+{
+  "revision": "f895ba59fc43fe9677e08fa602cc48c08ccdf3f8",
+  "sourceTree": "9dddab6c6d5ed02ced0ac7f011cfb64f83f3cd44",
+  "buildId": "tP5oJ7-NnLeJm_G0-ytXy",
+  "builtAt": "2026-10-27T03:28:13.218Z",
+  "supportedAdaptiveDataSchemas": [
+    1,
+    2,
+    3
+  ],
+  "supportedAdaptiveControlSchemas": [
+    1,
+    2,
+    3
+  ],
+  "productPauseEnforcementVersion": 1,
+  "rightsUseHoldEnforcementVersion": 1,
+  "supportedFileAuthorityProjectionVersions": [
+    1,
+    2
+  ],
+  "supportedObserverClientExperienceVersions": [
+    1
+  ],
+  "supportedRightsLedgerVersions": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "supportedExperimentLedgerSchemas": [
+    1
+  ],
+  "supportedGuestRightsLedgerSchemas": [
+    1
+  ],
+  "supportedImprovementWorkflowSchemas": [
+    1,
+    2
+  ],
+  "supportedPetCareSchemas": [
+    1
+  ],
+  "supportedPetPlaySchemas": [
+    1
+  ],
+  "supportedPetGrowthSchemas": [
+    1
+  ],
+  "supportedPetCheckinSchemas": [
+    1
+  ],
+  "supportedConnectionRecordSchemas": [
+    1,
+    2
+  ],
+  "supportedSelfServiceMcpSchemas": [
+    1
+  ],
+  "supportedReplyUseSchemas": [
+    1
+  ],
+  "supportedProviderTemplateSchemas": [
+    1
+  ],
+  "supportedAssistantDeliveryControlVersions": [
+    1,
+    2
+  ],
+  "supportedTelegramArchiveSchemas": [
+    1
+  ],
+  "supportedTelegramArchiveSourceSuppressionVersions": [
+    1
+  ],
+  "supportedTelegramArchiveSnapshotPublicationVersions": [
+    1
+  ]
+}

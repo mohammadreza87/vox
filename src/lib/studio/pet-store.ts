@@ -1,3 +1,5 @@
+import { fileRuntimeFs, assertFileRuntimePath, createFileRuntimeTransientDirectory } from './file-runtime-owner';
+const { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } = fileRuntimeFs;
 /**
  * Pet care state, one record per (agent, Telegram user). Not in the single studio/state document:
  * every tap batch writes, and the care page must not contend with Studio edits. Two implementations,
@@ -9,7 +11,7 @@
  * put a need outside [floor, 100].
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'fs';
+
 import { join, resolve } from 'path';
 import { randomUUID } from 'node:crypto';
 import type { DocumentReference, Firestore } from 'firebase-admin/firestore';
@@ -99,7 +101,7 @@ export function petFileSerial<T>(dir: string, run: () => T): Promise<T> {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const lock = join(dir, '.writer.lock');
     // Cross-process exclusion fails closed. A crashed lock requires an operator recovery.
-    mkdirSync(lock, { mode: 0o700 });
+    createFileRuntimeTransientDirectory(lock);
     try { return run(); } finally { rmdirSync(lock); }
   };
   const next = (fileQueues.get(key) ?? Promise.resolve()).then(execute, execute);
@@ -146,7 +148,7 @@ export class PetCareChangedError extends Error {
 
 export class FilePetStore implements PetStore {
 
-  constructor(readonly dir: string) {}
+  constructor(readonly dir: string) { assertFileRuntimePath(dir); }
 
   private file(agentId: string) {
     return join(this.dir, `${agentId}.json`);

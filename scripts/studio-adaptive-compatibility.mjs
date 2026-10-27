@@ -3,6 +3,7 @@ import { constants, lstatSync, openSync, closeSync, fstatSync, readSync, opendir
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { isAbsolute, join, resolve, parse, relative, sep } from 'node:path';
+import { FILE_RUNTIME_OWNER_GUARD, FILE_RUNTIME_OWNER_MARKER, FILE_RUNTIME_OWNER_MARKER_BYTES, inspectFileRuntimeOwner } from './studio-file-runtime-owner.mjs';
 
 export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedAdaptiveDataSchemas: Object.freeze([1, 2, 3]),
@@ -24,6 +25,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedReplyUseSchemas: Object.freeze([1]),
   supportedProviderTemplateSchemas: Object.freeze([1]),
   supportedAssistantDeliveryControlVersions: Object.freeze([1,2]),
+  supportedFileRuntimeOwnerVersions: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
   supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
@@ -544,11 +546,31 @@ function scanSqlite(path, marker, required, budget) {
 }
 function scanAdaptive(env, required, budget) {
   const root = join(env.STUDIO_DATA_DIR, 'adaptive'), format = env.STUDIO_ADAPTIVE_FORMAT?.trim() || 'file';
+  const ownerMarker = join(root, FILE_RUNTIME_OWNER_MARKER), ownerGuard = join(env.STUDIO_DATA_DIR, FILE_RUNTIME_OWNER_GUARD);
+  // Managed formats use a regular pointer at adaptive, not a directory. Do
+  // not probe a child of that pointer; links still fail closed as before.
+  const rootInfo = stat(root);
+  if (rootInfo?.isSymbolicLink()) fail();
+  const markerInfo = rootInfo?.isDirectory() ? stat(ownerMarker) : undefined;
+  if (markerInfo) {
+    const info = markerInfo;
+    if (format !== 'file' || info.uid !== (process.geteuid?.() ?? process.getuid?.()) || (info.mode & 0o077) !== 0 ||
+        readBounded(ownerMarker, 128, budget) !== FILE_RUNTIME_OWNER_MARKER_BYTES) fail();
+    inspectFileRuntimeOwner(env.STUDIO_DATA_DIR); // validates private root without adopting/creating a holder
+    required.fileRuntimeOwnerVersion = 1;
+  }
+  if (stat(ownerGuard)) {
+    if (format !== 'file' || !inspectFileRuntimeOwner(env.STUDIO_DATA_DIR)) fail();
+    // This is read-only admission of a valid live/offline holder, never a
+    // second ownership acquisition or a migration during installer preflight.
+    required.fileRuntimeOwnerVersion = 1;
+  }
   if (format === 'file') {
     const names=entries(root);
+    if(names.includes(FILE_RUNTIME_OWNER_MARKER)&&!markerInfo)fail();
     if(names.includes(ARC_MARKER)){if(readBounded(join(root,ARC_MARKER),128,budget)!==ARC_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=1;}
     if(names.includes(ARC_V2_MARKER)){if(!names.includes(ARC_MARKER)||readBounded(join(root,ARC_V2_MARKER),128,budget)!==ARC_V2_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=2;}
-    for(const name of names){if(name===ARC_MARKER||name===ARC_V2_MARKER)continue;if(!/^[a-f0-9]{64}\.json$/.test(name))fail();scanCanonical(readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget),name.slice(0,-5),1,required);}
+    for(const name of names){if(name===ARC_MARKER||name===ARC_V2_MARKER||name===FILE_RUNTIME_OWNER_MARKER)continue;if(!/^[a-f0-9]{64}\.json$/.test(name))fail();scanCanonical(readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget),name.slice(0,-5),1,required);}
     return;
   }
   const managed = `${resolve(root)}.managed`, marker = readPlainJson(join(managed, 'format.json'));
@@ -976,6 +998,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedReplyUseSchemas', 'replyUseSchema', [1]],
     ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
     ['supportedAssistantDeliveryControlVersions', 'assistantDeliveryControlVersion', [1,2]],
+    ['supportedFileRuntimeOwnerVersions', 'fileRuntimeOwnerVersion', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
     ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],

@@ -1,8 +1,11 @@
+import { fileRuntimeFs, fileRuntimePromises, assertFileRuntimePath, createFileRuntimeTransientDirectory } from '../../studio/file-runtime-owner';
+const { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } = fileRuntimeFs;
+const { rmdir } = fileRuntimePromises;
 /** Local JSON persistence. Mutations reload under a process-independent lock.
  * Revision and epoch probes reload under the lock when taken and compare
  * the committed numeric counters on every recheck, including other writers. */
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
-import { mkdir, rmdir } from 'fs/promises';
+
+
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
 import type { RevisionProbe } from '../privacy/revisions';
 import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from './store';
@@ -21,6 +24,7 @@ function reviveDates(_key: string, value: unknown) {
 }
 
 export function createFileStores(path: string) {
+  assertFileRuntimePath(path);
   const epochs = new Map<string, number>();
   const memories = new InMemoryMemoryStore(epochs);
   const offers = new InMemoryShareOfferStore();
@@ -57,7 +61,7 @@ export function createFileStores(path: string) {
   const withLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     let acquired = false;
     for (let attempts = 0; attempts < 500; attempts++) {
-      try { await mkdir(`${path}.lock`); acquired = true; break; }
+      try { createFileRuntimeTransientDirectory(`${path}.lock`); acquired = true; break; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -72,7 +76,7 @@ export function createFileStores(path: string) {
       const original = (store[name] as (...args: unknown[]) => Promise<unknown>).bind(store);
       (store as Record<keyof T, unknown>)[name] = (...args: unknown[]) => withLock(async () => {
         const result = await original(...args);
-        if (mutations.includes(name)) save();
+        if (mutations.includes(name)) {try{save();}catch(error){memories.records.clear();memories.revisions.clear();memories.tombstones.clear();offers.offers.clear();history.chats.clear();epochs.clear();throw error;}}
         if (name === 'revisionProbe' || name === 'epochProbe') {
           const probe = result as RevisionProbe, personaId = args[0] as string;
           return { ...probe, local: () => {

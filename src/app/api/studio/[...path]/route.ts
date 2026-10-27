@@ -34,6 +34,7 @@ async function handle(request: Request, { params }: RouteParams) {
     const transport = studio.deps.webhookBase ? 'webhook' : 'polling';
     const bots = transport === 'webhook' ? !!studio.deps.managerBot : (globalThis as unknown as { __voxBots?: boolean }).__voxBots === true;
     const ready = transport === 'webhook' ? bots : process.env.STUDIO_BOTS !== '1' || bots;
+    try { studio.deps.fileRuntimeOwner?.assertCurrent(); } catch { return Response.json({ status: 'unhealthy' }, { status:503, headers:{'Cache-Control':'no-store'} }); }
     return Response.json({ status: ready ? 'healthy' : 'unhealthy', revision: process.env.STUDIO_REVISION ?? 'unknown', transport, bots }, {
       status: ready ? 200 : 503,
       headers: { 'Cache-Control': 'no-store' },

@@ -5,6 +5,7 @@ import { resolve } from 'path';
 import { prepareFileAuthorityAdaptiveStorage, prepareProductPauseAdaptiveStorage, prepareRightsUseHoldsAdaptiveStorage, migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
 import { rollbackAdaptiveStorage } from '../src/lib/adaptive/persistence/indexed/rollback';
 import { IndexedStorageError } from '../src/lib/adaptive/persistence/indexed/contracts';
+import { assertFileRuntimePath } from './studio-file-runtime-owner.mjs';
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   const allowed = new Set(['--root', '--quiesced', '--transition-id', '--source-digest', '--reclaim-dead-lease', '--format', '--incarnation', '--generation']);
@@ -15,6 +16,9 @@ async function main(): Promise<void> {
     else { const value = args[++i]; if (!value || value.startsWith('--')) throw new IndexedStorageError('invalid_scope'); flags.set(flag, value); }
   }
   const requested = flags.get('--root'); if (typeof requested !== 'string') throw new IndexedStorageError('invalid_scope'); const root = resolve(requested);
+  // An operator's --quiesced flag cannot bypass original-FILE ownership. This
+  // CLI never acquires/adopts a runtime or maintenance capability.
+  if (assertFileRuntimePath(root)) throw new IndexedStorageError('invalid_scope');
   if (command === 'inspect') { if (flags.size !== 1) throw new IndexedStorageError('invalid_scope'); console.log(JSON.stringify(inspectManagedTransition(root))); return; }
   if (flags.get('--quiesced') !== true) throw new IndexedStorageError('invalid_scope');
   if (command === 'prepare-file-authority') {

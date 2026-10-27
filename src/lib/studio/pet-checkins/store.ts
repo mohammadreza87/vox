@@ -1,3 +1,5 @@
+import { fileRuntimeFs, assertFileRuntimePath } from '../file-runtime-owner';
+const { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } = fileRuntimeFs;
 /**
  * Pet check-in records (design PET_CARE_GAME_DESIGN_2026_10_26 §5, §6.2 P1): one per person (`pet/checkins.ts`
  * PetCheckinRecord), holding each agent's consent and moment types, the caps' counters and the content-free sent rows.
@@ -10,7 +12,7 @@
  * catalogue id, an opaque reference, a hash, a local day, a time, a count or a flag: no text can ever be stored.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+
 import { join } from 'path';
 import { randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -117,7 +119,7 @@ function withoutAgent(record: PetCheckinRecord, agentId: string): PetCheckinReco
 
 /** `petsDir` is the pet care directory (FilePetStore.dir): the records live in its `checkins/` and share its lock and epochs. */
 export class FilePetCheckinStore implements PetCheckinStore {
-  constructor(readonly petsDir: string) {}
+  constructor(readonly petsDir: string) { assertFileRuntimePath(petsDir); }
 
   private get dir() { return join(this.petsDir, 'checkins'); }
   private file(userId: number) { return join(this.dir, `${userId}.json`); }

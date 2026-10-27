@@ -1,3 +1,5 @@
+import { fileRuntimeFs, assertFileRuntimePath } from './file-runtime-owner';
+const { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } = fileRuntimeFs;
 /**
  * Pet play records (design PET_CARE_GAME_DESIGN_2026_10_26 §3.4): one per (agent, Telegram user), beside pet care and
  * never inside it. Content-free (pet/play.ts sanitizePlay drops anything that is not a catalogue id, a time, a count
@@ -10,7 +12,7 @@
  * (My data, the rights intake), agent fire/retire and the 90-day guest sweep all reach this store too.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+
 import { join } from 'path';
 import { randomUUID } from 'node:crypto';
 import type { DocumentReference, Firestore } from 'firebase-admin/firestore';
@@ -55,7 +57,7 @@ type AgentFile = Record<string, PetPlay>;
 
 /** `petsDir` is the pet care directory (FilePetStore.dir): the play files live in its `play/` and share its lock and epochs. */
 export class FilePetPlayStore implements PetPlayStore {
-  constructor(readonly petsDir: string) {}
+  constructor(readonly petsDir: string) { assertFileRuntimePath(petsDir); }
 
   private get dir() { return join(this.petsDir, 'play'); }
   private file(agentId: string) { return join(this.dir, `${agentId}.json`); }

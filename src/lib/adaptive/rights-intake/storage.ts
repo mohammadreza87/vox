@@ -1,8 +1,11 @@
+import { fileRuntimeFs, fileRuntimePromises, assertFileRuntimePath, commitFileRuntimeRename, prepareFileRuntimeTransient, createFileRuntimeTransientDirectory, openFileRuntimeDescriptor } from '../../studio/file-runtime-owner';
+const { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, unlinkSync } = fileRuntimeFs;
+const fs = fileRuntimePromises;
 /** Rights-only file hardening and monotonic read-boundary clock. No canonical
  * adaptive format, account authority, queue index or production policy change. */
 import { createHash, randomUUID } from 'crypto';
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from 'fs';
-import { promises as fs } from 'fs';
+
+
 import { join, parse, relative, resolve, sep } from 'path';
 import type { AdaptiveStorage, AdaptiveAccountPageInput, AdaptiveAccountPage } from '../persistence/storage';
 import { fail } from './repository';
@@ -37,8 +40,9 @@ function canonicalDirectory(path: string): string {
 export class RightsFileStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
   readonly directory: string;
-  constructor(directory: string) { this.directory = canonicalDirectory(directory); }
+  constructor(directory: string) { this.directory = canonicalDirectory(directory); assertFileRuntimePath(this.directory); }
   private root(create: boolean): boolean {
+    assertFileRuntimePath(this.directory);
     let current = parse(this.directory).root;
     for (const part of relative(current, this.directory).split(sep).filter(Boolean)) {
       current = join(current, part); const value = stat(current);
@@ -84,7 +88,7 @@ export class RightsFileStorage implements AdaptiveStorage {
     const temporary = `${file}.${randomUUID()}.tmp`, waitUntil = Date.now() + 3000;
     while (true) {
       this.root(true);
-      try { await fs.mkdir(lock, { mode: 0o700 }); break; }
+      try { createFileRuntimeTransientDirectory(lock); break; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         const held = stat(lock);
@@ -103,11 +107,12 @@ export class RightsFileStorage implements AdaptiveStorage {
       const raw = this.record(key), original = JSON.stringify(raw), { document, result } = mutate(raw);
       const serialized = JSON.stringify(document);
       if (Buffer.byteLength(serialized) > 65_536) return fail(409, 'rights_capacity');
+      prepareFileRuntimeTransient(temporary);
       const handle = await fs.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try { await handle.writeFile(serialized); await handle.sync(); } finally { await handle.close(); }
       this.guardRecord(accountId);
       if (JSON.stringify(this.record(key)) !== original) return fail(503, 'rights_storage_busy');
-      beforeCommit?.(); renameSync(temporary, file);
+      commitFileRuntimeRename(temporary, file, beforeCommit);
       const directory = await fs.open(this.directory, constants.O_RDONLY | constants.O_NOFOLLOW);
       try { await directory.sync(); } finally { await directory.close(); }
       return result === undefined ? result : structuredClone(result);
@@ -162,6 +167,7 @@ export class RightsFileStorage implements AdaptiveStorage {
     let fd: number | undefined, locked = false;
     const temporary = join(this.directory, `.clock-v1.${randomUUID()}.tmp`);
     try {
+      prepareFileRuntimeTransient(lock);
       fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); closeSync(fd); fd = undefined; locked = true;
       const info = stat(file);
       let previous = 0;
@@ -175,8 +181,9 @@ export class RightsFileStorage implements AdaptiveStorage {
       }
       if (now < previous) return fail(503, 'rights_clock_unavailable');
       if (now === previous && info) return;
-      fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      writeFileSync(fd, JSON.stringify({ version: 1, observedServerTime: now })); fsyncSync(fd); closeSync(fd); fd = undefined;
+      prepareFileRuntimeTransient(temporary);
+      const staged = openFileRuntimeDescriptor(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      try { staged.writeFile(JSON.stringify({ version: 1, observedServerTime: now })); staged.sync(); } finally { staged.close(); }
       this.root(false); const current = stat(file);
       if (current && (!current.isFile() || current.isSymbolicLink() || current.ino !== info?.ino || current.dev !== info?.dev)) return unavailable();
       renameSync(temporary, file);

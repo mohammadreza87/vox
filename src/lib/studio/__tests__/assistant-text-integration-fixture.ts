@@ -13,13 +13,17 @@ import {TelegramBotClient,type TelegramUpdate} from '../../tireh/telegram/client
 import {StudioAssistantTextIntegration} from '../assistant-text-integration';
 import {handleAgentUpdate} from '../updates';
 import {startBots} from '../bots';
+import {acquireFileRuntimeOwner,installFileRuntimeOwnerMarker,type FileRuntimeOwner} from '../file-runtime-owner';
 import {hire,ID,makeStudio,seedOrg} from './helpers';
 
 export const ATI_NOW=Date.parse('2026-10-27T12:00:00Z');
 export const ATI_GENERATED='ATI1_PRIVATE_GENERATED_فارسی';
 export interface AtiHttpCall {method:string;body:Record<string,unknown>;bytes:number}
-export async function atiFixture(enroll=true) {
-  const h=makeStudio();h.clock.now=new Date(ATI_NOW);const org=await seedOrg(h);
+export async function atiFixture(enroll=true,owned=false) {
+  let fileOwner:FileRuntimeOwner|undefined;
+  const h=makeStudio(owned?{beforeStore:dir=>{fileOwner=acquireFileRuntimeOwner({dataRoot:dir,release:{revision:'f895ba59fc43fe9677e08fa602cc48c08ccdf3f8',sourceTree:'9dddab6c6d5ed02ced0ac7f011cfb64f83f3cd44',buildId:'synthetic-owned-ati'}});installFileRuntimeOwnerMarker(fileOwner);}}:{});
+  if(fileOwner)h.studio.deps.fileRuntimeOwner=fileOwner;
+  h.clock.now=new Date(ATI_NOW);const org=await seedOrg(h);
   h.manager.getManagedBotToken.mockImplementation(async(botId:number)=>`${botId}:ATI1_SYNTHETIC_CREDENTIAL_FOR_TEST_ONLY`);
   const hired=await hire(h,org.alice),agentId=hired.agent.id,botId=hired.botId,token=h.studio.botToken(hired.agent)!;
   const capabilities=['core_text','personalization','auto_memory'];
@@ -64,7 +68,7 @@ export async function atiFixture(enroll=true) {
     return Response.json({ok:true,result:true});
   };
   const clients=new Map<string,TelegramBotClient>();
-  h.studio.deps.botFor=(credential:string)=>{let client=clients.get(credential);if(!client){client=new TelegramBotClient(credential,fetchFn);clients.set(credential,client);}return client;};
+  h.studio.deps.botFor=(credential:string)=>{let client=clients.get(credential);if(!client){client=new TelegramBotClient(credential,fetchFn,fileOwner?{beforeAuthorize:()=>fileOwner!.assertCurrent(),assertActive:()=>fileOwner!.assertActive(),signal:fileOwner.signal}:undefined);clients.set(credential,client);}return client;};
   const serviceOptions={enabled:()=>enabled,keys:{current:()=>({keyId:'qa-ati-key',key:keys.get('qa-ati-key')!}),resolve:(id:string)=>keys.get(id)},fetchFn,now:()=>h.clock.now.getTime()};
   let integration=new StudioAssistantTextIntegration(h.studio,serviceOptions);h.studio.deps.assistantText=integration;
   let poller=integration.poller(agentId,botId,token,()=>active);
@@ -79,12 +83,13 @@ export async function atiFixture(enroll=true) {
   const unbound=(u:TelegramUpdate)=>handleAgentUpdate(h.studio,agentId,u);
   const push=(u:TelegramUpdate)=>{if(pendingPoll){const resolve=pendingPoll;pendingPoll=undefined;resolve([u]);}else batches.push([u]);};
   async function throughPoller(u:TelegramUpdate){if(!stop)stop=startBots(h.studio).stop;push(u);for(let i=0;i<2000;i++){if(pollOffsets.some(n=>n===u.update_id+1))return;await new Promise(resolve=>setTimeout(resolve,2));}throw Error('QA poller did not acknowledge within fixed local budget');}
-  return {h,org,agentId,botId,token,keys,calls,pollOffsets,update,document,path,handle,unbound,push,throughPoller,controlInput,
+  return {h,org,agentId,botId,token,keys,calls,pollOffsets,update,document,path,handle,unbound,push,throughPoller,controlInput,fileOwner,
     get integration(){return integration;},get poller(){return poller;},get adaptive(){return adaptive;},
     enabled:(value:boolean)=>{enabled=value;},active:(value:boolean)=>{active=value;},
     replyHook:(hook:typeof replyHook)=>{replyHook=hook;},clearCalls:()=>{calls.length=0;},
     recreateService:()=>{integration=new StudioAssistantTextIntegration(h.studio,serviceOptions);h.studio.deps.assistantText=integration;poller=integration.poller(agentId,botId,token,()=>active);},
     cleanup:()=>{stop?.();active=false;pendingPoll?.([]);rmSync(h.dir,{recursive:true,force:true});},
+    closeOwned:async()=>{active=false;pendingPoll?.([]);await stop?.();fileOwner?.beginDrain();rmSync(h.dir,{recursive:true,force:true});},
   };
 }
 export type AtiFixture=Awaited<ReturnType<typeof atiFixture>>;

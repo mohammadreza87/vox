@@ -1,4 +1,6 @@
-import { constants, existsSync, mkdirSync, lstatSync, readlinkSync, fstatSync, readSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync, rmdirSync } from 'node:fs';
+import { fileRuntimeFs, assertFileRuntimePath, commitFileRuntimeRename, createFileRuntimeTransientDirectory, prepareFileRuntimeTransient, openFileRuntimeDescriptor } from '../../studio/file-runtime-owner';
+const { constants, existsSync, mkdirSync, lstatSync, readlinkSync, fstatSync, readSync, openSync, fsyncSync, closeSync, unlinkSync, rmdirSync } = fileRuntimeFs;
+
 import { join, resolve, relative, parse, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { emptyExperimentDocument, experimentDocumentSchema, type ExperimentDocument } from './contracts';
@@ -57,6 +59,7 @@ export class FileExperimentStorage implements ExperimentStorage {
   readonly directory: string;
   constructor(directory: string) { this.directory = canonicalDirectory(directory); this.root(false); }
   private root(create: boolean): boolean {
+    assertFileRuntimePath(this.directory);
     let current = parse(this.directory).root;
     for (const part of relative(current, this.directory).split(sep).filter(Boolean)) {
       current = join(current, part); const info = stat(current);
@@ -88,19 +91,20 @@ export class FileExperimentStorage implements ExperimentStorage {
   }
   transaction<T>(mutate: (document: ExperimentDocument) => T, fence?: () => void): T {
     this.root(true); const directoryInfo = lstatSync(this.directory);
-    mkdirSync(this.lock, { mode: 0o700 });
+    createFileRuntimeTransientDirectory(this.lock);
     const temporary = join(this.directory, `ledger-${randomUUID()}.tmp`);
     try {
       const draft = this.load(), result = mutate(draft);
       validateExperimentDocument(draft);
-      const serialized = JSON.stringify(draft); fence?.(); this.root(false);
-      const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      try { writeFileSync(fd, serialized); fsyncSync(fd); } finally { closeSync(fd); }
+      const serialized = JSON.stringify(draft); this.root(false);
+      prepareFileRuntimeTransient(temporary);
+      const staged = openFileRuntimeDescriptor(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      try { staged.writeFile(serialized); staged.sync(); } finally { staged.close(); }
       // Recheck after serialization/durability work, immediately before publication.
-      fence?.(); this.root(false);
+      this.root(false);
       const latestDirectory = lstatSync(this.directory);
       if (latestDirectory.ino !== directoryInfo.ino || latestDirectory.dev !== directoryInfo.dev) throw new Error('Experiment directory changed');
-      renameSync(temporary, this.file);
+      commitFileRuntimeRename(temporary, this.file, fence);
       const directoryFd = openSync(this.directory, constants.O_RDONLY | constants.O_NOFOLLOW);
       try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
       return result;

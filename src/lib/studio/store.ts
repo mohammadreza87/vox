@@ -1,10 +1,12 @@
+import { fileRuntimeFs, assertFileRuntimePath } from './file-runtime-owner';
+const { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } = fileRuntimeFs;
 /**
  * Where Studio keeps its state and media. Two implementations:
  *  - StudioStore (this file): local disk, for one always-on server (Mac Studio)
  *  - FirestoreStudioStore: Firestore + Cloud Storage, for serverless production
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+
 import { join, basename } from 'path';
 import type { AuditEntry, StudioState } from './types';
 import { activeReadScope } from '../tireh/privacy/read-scope';
@@ -39,6 +41,7 @@ export class StudioStore implements StudioStorage {
   private readonly file: string;
 
   constructor(readonly dir: string) {
+    assertFileRuntimePath(dir);
     mkdirSync(dir, { recursive: true });
     this.mediaDir = join(dir, 'media');
     mkdirSync(this.mediaDir, { recursive: true });
@@ -62,6 +65,7 @@ export class StudioStore implements StudioStorage {
   /** A deep copy: callers can't mutate stored state by accident. Inside a read
    * scope every read of one turn snapshot is served from one committed state. */
   async read(): Promise<StudioState> {
+    assertFileRuntimePath(this.dir);
     const scope = activeReadScope();
     if (scope) {
       const loaded = await scope.document(this, 'state', async () => {
@@ -88,6 +92,7 @@ export class StudioStore implements StudioStorage {
   update<T>(fn: (state: StudioState) => T): Promise<T> {
     activeReadScope()?.noteWrite();
     const run = async () => {
+      assertFileRuntimePath(this.dir);
       const draft = structuredClone(this.load());
       const result = fn(draft);
       // Write first: if the disk write fails, memory must not move ahead of disk.

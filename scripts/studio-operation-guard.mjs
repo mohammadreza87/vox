@@ -1,7 +1,8 @@
 /** Cooperative single-host coordination. Crash-stale locks require explicit recovery. */
-import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { constants, closeSync, fstatSync, lstatSync, openSync, readlinkSync, readSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
+import { acquireFileRuntimeOperationGuard } from './studio-file-runtime-owner.mjs';
 
 const fail = message => { throw new Error(message); };
 const identity = stat => ({ dev: String(stat.dev), ino: String(stat.ino), birth: String(stat.birthtimeNs) });
@@ -111,49 +112,9 @@ export function matchExpected(baseline, expected) {
 }
 
 export function acquireOperation(input, operation) {
-  if (!isAbsolute(input) || resolve(input) === '/') fail('Production base must be an absolute private directory.');
-  // Only prepare may bootstrap a missing base. No runtime/config writes precede the lock.
-  if (operation === 'prepare' && !stat(input)) mkdirSync(input, { recursive: true, mode: 0o700 });
-  const base = realpathSync(input), baseStat = stat(base);
-  if (base === '/' || !baseStat?.isDirectory()) fail('Production base must be a private directory, not the filesystem root.');
-  const baseIdentity = identity(baseStat);
-  const path = join(base, '.studio-operation.lock');
-  try { mkdirSync(path, { mode: 0o700 }); }
-  catch (error) {
-    if (error.code === 'EEXIST') fail('Another operation or a stale lock exists. Explicit verified recovery is required; no automatic reclaim.');
-    throw error;
-  }
-  const lockIdentity = identity(stat(path)), token = randomBytes(32).toString('hex');
-  const ownerPath = join(path, 'owner.json');
-  const owner = JSON.stringify({ version: 1, token, pid: process.pid, startedAt: new Date().toISOString(), operation });
-  let ownerFile;
-  try {
-    writeFileSync(ownerPath, owner, { mode: 0o600, flag: 'wx' });
-    ownerFile = regular(ownerPath, 4096);
-  } catch (error) {
-    // An incomplete acquisition remains fail-closed, including a crash during owner creation.
-    throw new Error('Operation lock initialization failed; explicit verified recovery is required.', { cause: error });
-  }
-  let released = false;
-  const assertOwned = () => {
-    const currentBase = stat(base), current = stat(path);
-    if (released || !currentBase?.isDirectory() || !equal(identity(currentBase), baseIdentity) ||
-        !current?.isDirectory() || !equal(identity(current), lockIdentity)) fail('Operation lock ownership changed; refusing cleanup or mutation.');
-    let actual;
-    try { actual = regular(ownerPath, 4096); } catch { fail('Operation lock owner is invalid; refusing cleanup or mutation.'); }
-    if (!equal(actual, ownerFile)) fail('Operation lock owner changed; refusing cleanup or mutation.');
-  };
-  return {
-    base, assertOwned,
-    release() {
-      assertOwned();
-      // Never recursively remove a lock: unknown files or a replaced owner must survive.
-      if (!equal(readdirSync(path), ['owner.json'])) fail('Operation lock contains unknown files; explicit verified recovery is required.');
-      unlinkSync(ownerPath);
-      rmdirSync(path);
-      released = true;
-    },
-  };
+  // The shared factory performs the exclusive mkdir/open and retains its owner
+  // FD. No callback, borrowed FD, or cloned object can mint this identity.
+  return acquireFileRuntimeOperationGuard(input, operation);
 }
 
 export async function withOperation(base, operation, expected, task, { signals = process, onCancel = () => {} } = {}) {
@@ -163,7 +124,7 @@ export async function withOperation(base, operation, expected, task, { signals =
   };
   const interrupt = () => cancel('SIGINT'), terminate = () => cancel('SIGTERM');
   signals.on('SIGINT', interrupt); signals.on('SIGTERM', terminate);
-  const guard = { base: lock.base, signal: controller.signal, assertOwned: lock.assertOwned,
+  const guard = { base: lock.base, operationIdentity: lock, signal: controller.signal, assertOwned: lock.assertOwned,
     check() { lock.assertOwned(); controller.signal.throwIfAborted(); } };
   try {
     // Cancellation never races the task: wait for its operation/children and recovery to settle.
@@ -202,6 +163,8 @@ export async function transitionRelease(guard, baseline, target, ops) {
     checkBaseline(); // Immediately before stop.
     await ops.stop(); stopped = true;
     checkBaseline();
+    await ops.acquireStopped?.();
+    checkBaseline();
     await ops.compatible(target);
     checkBaseline();
     await ops.snapshot();
@@ -215,6 +178,8 @@ export async function transitionRelease(guard, baseline, target, ops) {
     checkActive();
     await ops.afterSwitch?.();
     checkActive();
+    await ops.releaseStopped?.();
+    checkActive();
     await ops.start();
     checkActive();
     await ops.ready(target.revision, checkActive);
@@ -227,28 +192,49 @@ export async function transitionRelease(guard, baseline, target, ops) {
       assertCurrent(guard.base, active);
       await ops.stop();
       guard.assertOwned(); assertCurrent(guard.base, active);
+      await ops.acquireStopped?.();
+      guard.assertOwned(); assertCurrent(guard.base, active);
       if (!baseline.absent) {
         assertRelease(baseline.release);
-        await ops.compatible(baseline.release);
+        try { await ops.compatible(baseline.release); }
+        catch (recovery) {
+          await ops.releaseStopped?.();
+          throw new Error('Baseline is incompatible with current stopped data; runtime remains stopped.', { cause: new AggregateError([error, recovery]) });
+        }
         guard.assertOwned(); assertCurrent(guard.base, active); assertRelease(baseline.release);
         ops.pointTo(baseline.release.path);
         const restored = readCurrent(guard.base);
         if (restored.absent || !equal(restored.release, baseline.release)) fail('Restored baseline identity is uncertain.');
         if (wasRunning) {
           guard.assertOwned(); assertCurrent(guard.base, restored);
+          await ops.releaseStopped?.();
           await ops.start();
           await restoredReadiness(guard, restored, ops);
-        }
+        } else await ops.releaseStopped?.();
       } else {
         guard.assertOwned(); assertCurrent(guard.base, active);
         ops.clearCurrent();
+        await ops.releaseStopped?.();
       }
     } else if (stopped && wasRunning) {
       guard.assertOwned(); assertCurrent(guard.base, baseline);
+      await ops.acquireStopped?.();
+      if (!baseline.absent) {
+        try { await ops.compatible(baseline.release); }
+        catch (recovery) {
+          await ops.releaseStopped?.();
+          throw new Error('Baseline is incompatible with current stopped data; runtime remains stopped.', { cause: new AggregateError([error, recovery]) });
+        }
+      }
+      await ops.releaseStopped?.();
       if (!ops.running()) {
         await ops.start();
       }
       await restoredReadiness(guard, baseline, ops);
+    } else if (stopped) {
+      guard.assertOwned(); assertCurrent(guard.base, baseline);
+      await ops.acquireStopped?.();
+      await ops.releaseStopped?.();
     }
     throw error;
   }
@@ -262,15 +248,23 @@ export async function guardedBackup(guard, ops) {
     guard.check(); assertCurrent(guard.base, baseline);
     await ops.stop(); stopped = true;
     guard.check(); assertCurrent(guard.base, baseline);
+    await ops.acquireStopped?.();
+    guard.check(); assertCurrent(guard.base, baseline);
+    if (!baseline.absent) await ops.compatible?.(baseline.release);
+    guard.check(); assertCurrent(guard.base, baseline);
     await ops.snapshot();
     guard.check(); assertCurrent(guard.base, baseline);
   } finally {
     if (stopped && wasRunning) {
       guard.assertOwned(); assertCurrent(guard.base, baseline);
+      await ops.acquireStopped?.();
+      try { if (!baseline.absent) await ops.compatible?.(baseline.release); }
+      catch (recovery) { await ops.releaseStopped?.(); throw new Error('Stopped data is incompatible; backup recovery remains stopped.', { cause: recovery }); }
+      await ops.releaseStopped?.();
       if (!ops.running()) {
         await ops.start();
       }
       await restoredReadiness(guard, baseline, ops);
-    }
+    } else if (stopped) { guard.assertOwned(); assertCurrent(guard.base, baseline); await ops.acquireStopped?.(); await ops.releaseStopped?.(); }
   }
 }

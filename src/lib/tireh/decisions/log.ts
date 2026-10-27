@@ -1,3 +1,5 @@
+import { fileRuntimeFs, assertFileRuntimePath } from '../../studio/file-runtime-owner';
+const { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } = fileRuntimeFs;
 /**
  * Content-free decision log for calibrating the triage pre-pass
  * (docs/AGENT_INTELLIGENCE_SOLUTION.md section 4.8), behind TIREH_DECISION_LOG=1.
@@ -12,7 +14,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+
 import { dirname } from 'path';
 import type { Firestore, Query } from 'firebase-admin/firestore';
 import { z } from 'zod';
@@ -130,6 +132,7 @@ export class InMemoryDecisionLogStore implements DecisionLogStore {
 
 /** JSONL file store, mode 0o600, writes serialised through one promise chain. */
 export function createFileDecisionLogStore(path: string): DecisionLogStore {
+  assertFileRuntimePath(path);
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(work: () => T | Promise<T>): Promise<T> => {
     const next = chain.then(work);

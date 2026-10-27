@@ -155,3 +155,7 @@ Runtime snapshot publication follows the reviewed [bounded contract](../agents/A
 Release prerequisite for AM-05/AM-12: [Pet FILE admission contract](../agents/PET_STORAGE_ADMISSION_CONTRACT.md). Strictly recognize the existing deployed pet namespaces without changing data, rights or runtime behavior.
 
 Next AM-05/AM-12 slice: [Owner Work-DM text integration](../agents/AGENT_MEMORY_ASSISTANT_TEXT_INTEGRATION.md). Freeze explicit scoped enrollment and actual nonretrying delivery before implementation, then qualify synthetic FILE/injected-HTTP paths independently. Production activation remains separate from a default-off code release.
+
+ATI1 is installed at `f895ba59` with the feature off; main CI360 and indexed173 passed. The next AM-05/AM-12 increment is actual FILE process ownership and managed release handoff, with supported-writer inventory and independent contract review before implementation. Full physical erase/recreate and real activation remain separate.
+
+Implementation contract: [FRO1 ownership](../agents/AGENT_MEMORY_FILE_RUNTIME_OWNERSHIP.md) and [supported writers](../agents/FILE_RUNTIME_WRITER_INVENTORY.md). Independently approved for source implementation only; no runtime or release proof follows from contract acceptance.
