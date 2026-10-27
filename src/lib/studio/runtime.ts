@@ -1,3 +1,4 @@
+import {StudioMemoryAccount,assertMemoryAccountEffect} from './memory-account';
 import { ensureStudioFileRuntimeOwner, type FileRuntimeOwner } from './file-runtime-owner';
 import { StudioTelegramArchive } from './telegram-archive';
 import {StudioAssistantTextIntegration,parseAssistantTextKeys} from './assistant-text-integration';
@@ -343,7 +344,7 @@ async function create(): Promise<Studio> {
   const config = validateStudioConfig(env);
   const fileRuntimeOwner = config.storage === 'file' && config.adaptiveFormat === 'file' ? ensureStudioFileRuntimeOwner(config.dataDir,{requireQualified:config.production||config.assistantTextEnabled}) : undefined;
   if(fileRuntimeOwner)g.__voxFileRuntimeOwner=fileRuntimeOwner;
-  const ownerHook = fileRuntimeOwner ? { beforeAuthorize: () => fileRuntimeOwner.assertCurrent(), assertActive: () => fileRuntimeOwner.assertActive(), signal: fileRuntimeOwner.signal } : undefined;
+  const ownerHook = fileRuntimeOwner ? { beforeAuthorize: () => {fileRuntimeOwner.assertCurrent();assertMemoryAccountEffect();}, assertActive: () => fileRuntimeOwner.assertActive(), signal: fileRuntimeOwner.signal } : undefined;
   const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled, config.adaptiveFormat);
   let initialManagerMetadataFailure = false;
   try {
@@ -554,6 +555,7 @@ async function create(): Promise<Studio> {
     if(config.storage==='file'&&config.adaptiveFormat==='file')studio.deps.assistantText=new StudioAssistantTextIntegration(studio,{
       enabled:()=>config.assistantTextEnabled&&env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1',keys:config.assistantTextKeys,
     });
+    if(config.storage==='file'&&config.adaptiveFormat==='file')studio.deps.memoryAccount=new StudioMemoryAccount(studio);
     studio.deps.maintenanceHealth = () => readMaintenanceHealth(storage.maintenanceStorage);
     if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
       storage.adaptive!.repository.storage, storage.maintenanceStorage, {

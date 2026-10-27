@@ -13,6 +13,9 @@ import { RevisionCounter, revisionField, type RevisionProbe } from '../../tireh/
 import type { DirectAuthorityEvaluator } from './authority';
 import type { SpaceKind } from './repository';
 import type { IndexedAdaptiveQueries } from './indexed/contracts';
+import { currentMemoryAccountWork, memoryAccountWorkDetails, parseMemoryLifecycle, isMemoryAccountErasing, assertMemoryAccountSource, assertMemoryAccountId, type MemoryAccountWork } from '../memory-account-lifecycle';
+import { readMemoryAccountRoot, readMemoryAccountPrivateFile, memoryAccountFileDigest, checkMemoryAccountTime } from '../memory-account-lifecycle-file';
+import { resolve } from 'path';
 
 export interface AdaptiveAccountPage { accountIds: string[]; next?: string }
 export interface AdaptiveAccountPageInput { after?: string; limit: number }
@@ -95,6 +98,7 @@ function encode(document: unknown): string {
 export class FileAdaptiveStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
   private readonly assistantWriters = new WeakSet<object>();
+  private readonly lifecycleWriters = new WeakMap<object, 'bootstrap' | 'migration'>();
   /** Revision bus also advances when a committed file changed in another writer. */
   readonly revisions = new RevisionCounter('file-adaptive');
   private readonly committedDigests = new Map<string, string>();
@@ -149,7 +153,38 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     const value = this.committedRevision(accountId), probe = this.revisions.probe(accountId);
     return { key: probe.key, value, local: () => this.committedRevision(accountId) };
   }
+  memoryAccountMarked(): boolean { return readMemoryAccountRoot(this.directory).marked; }
+  /** Protective/capture read only; never returns a transaction draft or creates a file. */
+  readMemoryAccountState(accountId: string): { status: 'ready'; document: unknown | null; digest?: string } | { status: 'busy' } {
+    assertMemoryAccountId(accountId);
+    const marked = this.memoryAccountMarked();
+    const file = join(this.directory, `${key(accountId)}.json`);
+    if (existsSync(`${file}.lock`)) return { status: 'busy' };
+    let raw: string | null;
+    if (marked) raw = readMemoryAccountPrivateFile(file, MAX_ADAPTIVE_DOCUMENT_BYTES);
+    else { try { raw = readFileSync(file, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; raw = null; } }
+    if (existsSync(`${file}.lock`)) return { status: 'busy' };
+    return { status: 'ready', document: raw === null ? null : JSON.parse(raw), ...(raw === null ? {} : { digest: memoryAccountFileDigest(raw) }) };
+  }
+  assertMemoryAccountWork(accountId: string, document: unknown, work = currentMemoryAccountWork(), now?: number): void {
+    if (!work) throw new Error('Original memory account work required');
+    const captured = memoryAccountWorkDetails(work);
+    if (captured.directory !== resolve(this.directory) || captured.accountId !== accountId || !document || typeof document !== 'object' || isMemoryAccountErasing(document) || !('memoryLifecycle' in document)) throw new Error('Memory account work refused');
+    const lifecycle = parseMemoryLifecycle(document.memoryLifecycle, now ?? Number.MAX_SAFE_INTEGER);
+    if (lifecycle.incarnation !== captured.incarnation) throw new Error('Memory account incarnation changed');
+    if (now !== undefined) assertMemoryAccountSource(lifecycle, captured.sourceDateSeconds, now);
+  }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
+    if (this.memoryAccountMarked()) {
+      const result = this.readMemoryAccountState(accountId);
+      if (result.status === 'ready') {
+        const work = currentMemoryAccountWork();
+        if (!work) throw new Error('Original memory account work required');
+        const now = checkMemoryAccountTime(this.directory, memoryAccountWorkDetails(work).clock);
+        this.assertMemoryAccountWork(accountId, result.document, work, now);
+      }
+      return result;
+    }
     if(lstatSync(join(this.directory,FileAdaptiveStorage.assistantControlMarker),{throwIfNoEntry:false})||lstatSync(join(this.directory,FileAdaptiveStorage.assistantControlV2Marker),{throwIfNoEntry:false}))this.assertAssistantDeliveryControlMarker();
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) return { status: 'busy' };
@@ -157,6 +192,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     try { raw=readFileSync(file,'utf8'); }
     catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {status:'ready',document:null};throw error;}
     const document=JSON.parse(raw);
+    if (document?.memoryLifecycle !== undefined || isMemoryAccountErasing(document)) throw new Error('Memory account format marker required');
     if(document?.assistantDeliveryControl!==undefined){try{this.assertAssistantDeliveryControlMarker(document.assistantDeliveryControl?.version===2?2:1);}catch{throw new Error('Assistant control format unavailable');}}
     if(existsSync(`${file}.lock`))return {status:'busy'};
     return {status:'ready',document};
@@ -186,7 +222,19 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
   async transactAssistantDeliveryControl<T>(accountId:string,mutate:(current:unknown|null)=>{document:unknown;result:T},beforeCommit?:()=>void):Promise<T>{
     this.assistantWriters.add(mutate);try{return await this.transact(accountId,mutate,beforeCommit);}finally{this.assistantWriters.delete(mutate);}
   }
+  /** Dedicated privileged server seam; the repository supplies strict lifecycle policy. */
+  async transactMemoryAccountLifecycle<T>(accountId: string, kind: 'bootstrap' | 'migration', mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit: () => void): Promise<T> {
+    if (!this.memoryAccountMarked()) throw new Error('Memory account migration required');
+    this.lifecycleWriters.set(mutate, kind);
+    try { return await this.transact(accountId, mutate, beforeCommit); } finally { this.lifecycleWriters.delete(mutate); }
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
+    const markedAtAdmission = this.memoryAccountMarked(), work: MemoryAccountWork | undefined = currentMemoryAccountWork(), lifecycleWriter = this.lifecycleWriters.get(mutate);
+    if (markedAtAdmission && !lifecycleWriter) {
+      if (!work) throw new Error('Original memory account work required');
+      const captured = memoryAccountWorkDetails(work);
+      if (captured.directory !== resolve(this.directory) || captured.accountId !== accountId) throw new Error('Memory account work refused');
+    }
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = join(this.directory, `${key(accountId)}.json`);
     const lock = `${file}.lock`;
@@ -202,14 +250,25 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
       let current: unknown | null;
-      try { current = JSON.parse(await fs.readFile(file, 'utf8')); }
+      let originalBytes: string | null = null;
+      try { originalBytes = this.memoryAccountMarked() ? readMemoryAccountPrivateFile(file, MAX_ADAPTIVE_DOCUMENT_BYTES) : await fs.readFile(file, 'utf8'); current = originalBytes === null ? null : JSON.parse(originalBytes); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         current = null;
       }
+      if (this.memoryAccountMarked()) {
+        if (lifecycleWriter === 'bootstrap' ? current !== null : current === null) throw new Error('Memory account expected state changed');
+        if (!lifecycleWriter) this.assertMemoryAccountWork(accountId, current, work);
+        if (isMemoryAccountErasing(current)) throw new Error('Memory account is erasing');
+      }
       const before=current===null?undefined:structuredClone(current) as AdaptiveDocument;
       assertFileRuntimePath(this.directory);
       const { document, result } = mutate(current);
+      if (this.memoryAccountMarked()) {
+        if (!document || typeof document !== 'object' || !('memoryLifecycle' in document)) throw new Error('Memory lifecycle required');
+        const nextLifecycle = parseMemoryLifecycle(document.memoryLifecycle, Number.MAX_SAFE_INTEGER);
+        if (!lifecycleWriter && JSON.stringify(parseMemoryLifecycle((before as AdaptiveDocument)?.memoryLifecycle, Number.MAX_SAFE_INTEGER)) !== JSON.stringify(nextLifecycle)) throw new Error('Memory lifecycle mutation refused');
+      } else if ((before as AdaptiveDocument)?.memoryLifecycle !== undefined || (document as AdaptiveDocument)?.memoryLifecycle !== undefined || isMemoryAccountErasing(current) || isMemoryAccountErasing(document)) throw new Error('Memory account format marker required');
       if(before?.assistantDeliveryControl || (document as AdaptiveDocument)?.assistantDeliveryControl)this.assertAssistantDeliveryControlMarker((document as AdaptiveDocument)?.assistantDeliveryControl?.version===2||before?.assistantDeliveryControl?.version===2?2:1);
       if((document as AdaptiveDocument)?.assistantDeliveryControl!==undefined){const d=document as AdaptiveDocument;if(d.schemaVersion!==1)throw new Error('Assistant control format unavailable');parseAssistantDeliveryControl(d.assistantDeliveryControl,accountId,d.personId,d.updatedAt);}
       assertAssistantDeliveryTransition(before,document as AdaptiveDocument,this.assistantWriters.has(mutate));
@@ -218,7 +277,19 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
       const handle = await fs.open(temporary, 'wx', 0o600);
       try { await handle.writeFile(json); await handle.sync(); } finally { await handle.close(); }
       // Owner I/O precedes the trusted authority/deadline fence; no I/O after its final clock.
-      commitFileRuntimeRename(temporary, file, beforeCommit);
+      commitFileRuntimeRename(temporary, file, () => {
+        if (this.memoryAccountMarked()) {
+          if (!markedAtAdmission) throw new Error('Memory account admission changed');
+          const actual = readMemoryAccountPrivateFile(file, MAX_ADAPTIVE_DOCUMENT_BYTES);
+          if (actual !== originalBytes) throw new Error('Memory account committed state changed');
+          if (!lifecycleWriter) {
+            if (!work) throw new Error('Original memory account work required');
+            const now = checkMemoryAccountTime(this.directory, memoryAccountWorkDetails(work).clock);
+            this.assertMemoryAccountWork(accountId, actual === null ? null : JSON.parse(actual), work, now);
+          }
+        }
+        return beforeCommit?.();
+      });
       this.committedDigests.set(accountId, createHash('sha256').update(json).digest('hex'));
       this.revisions.bump(accountId);
       const directory = await fs.open(this.directory, 'r');

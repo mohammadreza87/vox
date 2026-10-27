@@ -4,7 +4,10 @@ import { rightsUseHoldsSchema, type RightsUseHolds, type RightsUseControls } fro
 import { emptyRightsUseHolds, requireRightsUseHoldCapacity } from '../rights-use-holds/state';
 import { productPauseSchema, PRODUCT_PAUSE_RESERVED_BYTES, type ProductPauseV1, type ProductPauseUseControlsV1 } from '../product-pause/contracts';
 import { emptyProductPause } from '../product-pause/state';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { resolve } from 'path';
+import { memoryLifecycleSchema, parseMemoryLifecycle, parseMemoryAccountErasing, isMemoryAccountErasing, memoryAccountCutoff, assertMemoryAccountSource, assertMemoryAccountId, memoryAccountSynchronous, registerMemoryAccountWork, memoryAccountWorkDetails, currentMemoryAccountWork, type MemoryLifecycle, type MemoryAccountStatus, type MemoryAccountWork } from '../memory-account-lifecycle';
+import { checkMemoryAccountTime, observeMemoryAccountTime } from '../memory-account-lifecycle-file';
 import { z } from 'zod';
 import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { ConsentEvent } from '../consent';
@@ -61,6 +64,7 @@ const legacyDocumentSchema = z.object({ schemaVersion: z.literal(1), accountId: 
   observer: observerDocumentSchema.default(emptyObserverDocument),
   telegramArchives: telegramArchivesSchema.optional(),
   assistantDeliveryControl: z.unknown().optional(),
+  memoryLifecycle: memoryLifecycleSchema.optional(),
   consentEvents: z.array(z.unknown()).max(2000), outbox: z.array(outboxSchema).max(2000),
 }).strict();
 const productPauseDocumentSchema = legacyDocumentSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseSchema }).strict();
@@ -107,6 +111,10 @@ function checkAdaptiveDocument(draft: AdaptiveDocument, accountId: string, now: 
       new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
       new Set(draft.memories.map(m => m.id)).size !== draft.memories.length ||
       new Set(draft.observer.events.map(e => e.id)).size !== draft.observer.events.length) throw new Error('Invalid adaptive document');
+  if (draft.memoryLifecycle !== undefined) {
+    if (draft.schemaVersion !== 1) throw new Error('Memory lifecycle requires original FILE schema');
+    parseMemoryLifecycle(draft.memoryLifecycle, now);
+  }
   // Validate immutable partition keys. Corrupt identity/scope cannot become authoritative.
   for (const s of ['work', 'personal'] as const) for (const p of OPTIONAL_PURPOSES) {
     const permission = draft.permissions.find(row => row.id === `permission:${s}:${p}`);
@@ -196,6 +204,87 @@ function storedForm(draft: AdaptiveDocument): Partial<AdaptiveDocument> {
 
 export class AdaptiveRepository {
   constructor(readonly storage: AdaptiveStorage) {}
+  memoryAccountMarked(): boolean {
+    return this.storage instanceof FileAdaptiveStorage && this.storage.constructor === FileAdaptiveStorage && this.storage.memoryAccountMarked();
+  }
+  private originalMemoryAccountFile(): FileAdaptiveStorage {
+    if (!(this.storage instanceof FileAdaptiveStorage) || this.storage.constructor !== FileAdaptiveStorage) throw new Error('Original FILE required');
+    return this.storage;
+  }
+  memoryAccountStatus(accountId: string, at?: () => number): MemoryAccountStatus {
+    assertMemoryAccountId(accountId);
+    const storage = this.originalMemoryAccountFile();
+    if (!storage.memoryAccountMarked()) return { state: 'unmarked', expected: { kind: 'missing' } };
+    const loaded = storage.readMemoryAccountState(accountId);
+    if (loaded.status !== 'ready') throw new Error('Memory account is busy');
+    // Structural owner status needs no UTC claim. Expiry is evaluated only with qualified time.
+    const now = at ? checkMemoryAccountTime(storage.directory, at) : Number.MAX_SAFE_INTEGER;
+    if (loaded.document === null) return { state: 'missing', expected: { kind: 'missing' } };
+    if (isMemoryAccountErasing(loaded.document)) {
+      const closed = parseMemoryAccountErasing(loaded.document, accountId, now);
+      return { state: 'erasing', expected: { kind: 'current', incarnation: closed.incarnation, revision: closed.revision, documentDigest: loaded.digest! }, closed: { ...closed, dispatchedOutcomes: at ? closed.dispatchedOutcomes.filter(row => row.retainUntil > now) : [] } };
+    }
+    const document = validateAdaptiveDocument(normalizeLegacyAdaptiveDocument(loaded.document, accountId, now), accountId, now);
+    const lifecycle = document.memoryLifecycle;
+    if (!lifecycle) return { state: 'legacy-current', expected: { kind: 'legacy', documentDigest: loaded.digest! } };
+    return { state: lifecycle.mode === 'legacy-current' ? 'legacy-current' : 'active', lifecycle,
+      expected: { kind: 'current', incarnation: lifecycle.incarnation, revision: lifecycle.revision, documentDigest: loaded.digest! } };
+  }
+  /** Capture only at original ingress/job creation, before awaited work. */
+  captureMemoryAccountWork(accountId: string, at: () => number, originalDateSeconds?: number): MemoryAccountWork {
+    const storage = this.originalMemoryAccountFile(), status = this.memoryAccountStatus(accountId, at);
+    if ((status.state !== 'active' && status.state !== 'legacy-current') || !status.lifecycle) throw new Error('Memory account admission refused');
+    const now = checkMemoryAccountTime(storage.directory, at);
+    assertMemoryAccountSource(status.lifecycle, originalDateSeconds, now);
+    return registerMemoryAccountWork({ directory: resolve(storage.directory), accountId, incarnation: status.lifecycle.incarnation, clock: at, ...(originalDateSeconds === undefined ? {} : { sourceDateSeconds: originalDateSeconds }) });
+  }
+  isMemoryAccountWorkCurrent(work: MemoryAccountWork, at: () => number): boolean {
+    try {
+      const storage = this.originalMemoryAccountFile(), captured = memoryAccountWorkDetails(work);
+      const actual = storage.readMemoryAccountState(captured.accountId);
+      if (actual.status !== 'ready') return false;
+      const now = checkMemoryAccountTime(storage.directory, at);
+      storage.assertMemoryAccountWork(captured.accountId, actual.document, work, now);
+      return true;
+    } catch { return false; }
+  }
+  async bootstrapMemoryAccount(accountId: string, input: { clock: () => number; authorizeAtAcceptance: (acceptedAt: number) => void; authorizeCommit: (acceptedAt: number, currentNow: number) => void }): Promise<MemoryLifecycle> {
+    assertMemoryAccountId(accountId);
+    const storage = this.originalMemoryAccountFile();
+    let acceptedAt: number | undefined;
+    return storage.transactMemoryAccountLifecycle(accountId, 'bootstrap', current => {
+      if (current !== null) throw new Error('Memory account expected absence changed');
+      const validationAt = checkMemoryAccountTime(storage.directory, input.clock);
+      memoryAccountSynchronous(input.authorizeAtAcceptance, validationAt);
+      // t0 follows locked fresh-intent validation; slow authentication I/O
+      // must not leave the source cutoff anchored to an earlier sample.
+      acceptedAt = checkMemoryAccountTime(storage.directory, input.clock);
+      observeMemoryAccountTime(storage.directory, input.clock);
+      const memoryLifecycle: MemoryLifecycle = { version: 1, mode: 'fresh-confirmed', incarnation: randomBytes(32).toString('hex'), revision: 1, confirmedAt: acceptedAt, sourceCutoffMs: memoryAccountCutoff(acceptedAt) };
+      const document = validateAdaptiveDocument({ ...create(accountId, acceptedAt), memoryLifecycle }, accountId, acceptedAt);
+      return { document: storedForm(document), result: memoryLifecycle };
+    }, () => {
+      if (acceptedAt === undefined) throw new Error('Memory account acceptance unavailable');
+      observeMemoryAccountTime(storage.directory, input.clock);
+      const now = checkMemoryAccountTime(storage.directory, input.clock);
+      memoryAccountSynchronous(input.authorizeCommit, acceptedAt, now);
+    });
+  }
+  /** Explicit existing-only migration; no account creation or consent changes. */
+  async migrateExistingMemoryAccount(accountId: string, clock: () => number): Promise<MemoryLifecycle> {
+    assertMemoryAccountId(accountId);
+    const storage = this.originalMemoryAccountFile();
+    return storage.transactMemoryAccountLifecycle(accountId, 'migration', current => {
+      if (current === null || isMemoryAccountErasing(current)) throw new Error('Existing active memory account required');
+      const now = checkMemoryAccountTime(storage.directory, clock);
+      // Exact current canonical validation; migration does not normalize grants or payload.
+      const document = validateAdaptiveDocument(current, accountId, now);
+      if (document.schemaVersion !== 1) throw new Error('Original FILE schema required');
+      const lifecycle: MemoryLifecycle = document.memoryLifecycle ?? { version: 1, mode: 'legacy-current', incarnation: randomBytes(32).toString('hex'), revision: 1 };
+      // Preserve original optional/default omissions and every existing payload byte value.
+      return { document: { ...(current as object), memoryLifecycle: lifecycle }, result: lifecycle };
+    }, () => { observeMemoryAccountTime(storage.directory, clock); });
+  }
   readCommittedForEffect(accountId: string, at: number | (() => number)): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
     if (!this.storage.readCommittedForEffect) return { status: 'unsupported' };
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) throw new Error('Invalid adaptive account');
@@ -205,12 +294,23 @@ export class AdaptiveRepository {
     if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     if (result.document === null) return { status: 'ready', document: null };
     const document = validateAdaptiveDocument(result.document, accountId, now);
+    if (this.memoryAccountMarked()) {
+      const storage = this.originalMemoryAccountFile();
+      const observed = checkMemoryAccountTime(storage.directory, () => typeof at === 'function' ? at() : at);
+      storage.assertMemoryAccountWork(accountId, document, currentMemoryAccountWork(), observed);
+    }
     if(document.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
     return { status: 'ready', document };
   }
   transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || typeof at !== 'function' && (!Number.isSafeInteger(at) || at < 0)) throw new Error('Invalid adaptive account');
     if (beforeCommit && this.storage.supportsCommittedWriteFence !== true) throw new Error('Committed write fence unsupported');
+    if (this.memoryAccountMarked()) {
+      if (!currentMemoryAccountWork()) throw new Error('Original memory account work required');
+      // Marked accounts never serve cached complete documents as current authority.
+      activeReadScope()?.noteWrite();
+      return this.committed(accountId, at, fn, beforeCommit, true);
+    }
     const scope = activeReadScope();
     if (scope && !beforeCommit) return this.served(scope, accountId, at, fn, existingOnly);
     // A fenced write inside a read scope is a real commit the scope cannot vouch for.
@@ -230,6 +330,7 @@ export class AdaptiveRepository {
   }
   private committed<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false, assistantMutation=false): Promise<T> {
     const transaction=assistantMutation?(this.storage as FileAdaptiveStorage).transactAssistantDeliveryControl.bind(this.storage):this.storage.transact.bind(this.storage);
+    let committedLifecycle: MemoryLifecycle | undefined;
     return transaction(accountId, current => {
       // Sample after the backend acquires its serialization/lock and reads the
       // committed document. The same time drives validation and business expiry.
@@ -240,11 +341,19 @@ export class AdaptiveRepository {
       const draft = input === null ? create(accountId, now, this.storage.canonicalSchemaVersion ?? 1,this.storage.identity?digest([this.storage.identity.incarnation,this.storage.identity.generation]):undefined) : validateAdaptiveDocument(input, accountId, now);
       if(draft.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
       const prior=structuredClone(draft);
+      committedLifecycle = prior.memoryLifecycle;
       const result = fn(draft, now);
       assertAssistantDeliveryTransition(prior,draft,assistantMutation);
       validateAdaptiveDocument(draft, accountId, this.storage.sampleClock?.(() => typeof at === 'function' ? at() : at) ?? now);
       return { document: storedForm(draft), result };
-    }, beforeCommit);
+    }, this.memoryAccountMarked() ? () => {
+      const storage = this.originalMemoryAccountFile(), now = checkMemoryAccountTime(storage.directory, () => typeof at === 'function' ? at() : at);
+      if (!committedLifecycle) throw new Error('Memory lifecycle required');
+      const work = currentMemoryAccountWork();
+      if (!work) throw new Error('Original memory account work required');
+      assertMemoryAccountSource(committedLifecycle, memoryAccountWorkDetails(work).sourceDateSeconds, now);
+      return beforeCommit?.();
+    } : beforeCommit);
   }
   /** Inside a read scope: the same normalisation, validation and callback over
    * a committed copy (schema-parsed once per snapshot), without rewriting it.

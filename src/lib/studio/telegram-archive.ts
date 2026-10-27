@@ -240,14 +240,18 @@ export class StudioTelegramArchive {
   async invalidateEditedMessage(agentId: string, message: TelegramMessage): Promise<void> {
     if (message.chat.type !== 'private' || !message.from || message.from.is_bot || message.chat.id !== message.from.id) return;
     try {
+    const protective=this.studio.deps.memoryAccount?.protectiveEdit()===true;
+    if(protective)this.studio.deps.memoryAccount!.assertProtectiveEditCurrent();
     // An unconfigured/off rollout must not create or rewrite an account merely
     // because Telegram delivered an edit. Existing archive rows still suppress.
     const read = this.adaptive.repository.readCommittedForEffect(`telegram-account:${message.from.id}`, () => this.now());
     if (read.status !== 'ready') throw new ArchiveCapturePendingError();
     const d = read.document;
     if (!d?.telegramArchives?.some(r => r.agentId === agentId && r.space === 'work')) return;
-    await this.studio.replyAuthority(agentId, message.from.id);
+    if(protective)this.studio.deps.memoryAccount!.assertProtectiveEditCurrent();
+    else await this.studio.replyAuthority(agentId, message.from.id);
     await this.adaptive.withAccountDocument(message.from.id, (current, now) => {
+      if(protective)this.studio.deps.memoryAccount!.assertProtectiveEditCommitCurrent();
       if (current.accountId !== d.accountId || current.personId !== d.personId) throw new ArchiveUnavailableError('scope');
       const row = current.telegramArchives?.find(r => r.agentId === agentId && r.space === 'work');
       if (!row) return;
@@ -269,7 +273,8 @@ export class StudioTelegramArchive {
           catch { current.events.pop(); }
         }
       }
-    });
+    },protective?()=>this.studio.deps.memoryAccount!.assertProtectiveEditCommitCurrent():undefined);
+    if(protective)this.studio.deps.memoryAccount!.assertProtectiveEditCurrent();
     } catch {
       // An edit is acknowledged only after its current suppression is durable.
       // Policy/read/write failures all retain this and later polling updates;

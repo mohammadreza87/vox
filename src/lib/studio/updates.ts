@@ -93,7 +93,12 @@ function myDataPageUrl(webAppUrl: string | undefined): string | undefined {
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.
  */
-export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string,assistantPoller?:AssistantTextPoller): Promise<void> {
+export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string,assistantPoller?:AssistantTextPoller,accepted?:import('./memory-account').MemoryAccountQueuedUpdate): Promise<void> {
+  if(studio.deps.memoryAccount){await studio.deps.memoryAccount.runUpdate(agentId,update,assistantPoller,(snapshot)=>handleAdmittedAgentUpdate(studio,agentId,snapshot,endpointId,assistantPoller),accepted);return;}
+  return handleAdmittedAgentUpdate(studio,agentId,update,endpointId,assistantPoller);
+}
+async function handleAdmittedAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string,assistantPoller?:AssistantTextPoller): Promise<void> {
+  if(studio.deps.memoryAccount?.stateless())return handleStatelessMemoryAccountUpdate(studio,agentId,update,endpointId);
   const assistant=studio.deps.assistantText;
   if(assistant)update=assistant.snapshotUpdate(update);
   // Protective controls precede inactive/blocked/member reply eligibility and
@@ -103,6 +108,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     // Both protective adapters finish before acknowledgement. Neither removed
     // membership nor a public/private greeting path can turn an edit into send.
     await studio.deps.telegramArchive?.invalidateEditedMessage(agentId,update.edited_message);
+    if(studio.deps.memoryAccount?.protectiveEdit())studio.deps.memoryAccount.assertProtectiveEditCurrent();
     return;
   }
   const deliveryIngress=assistant?.ingress(agentId,update,assistantPoller);
@@ -228,12 +234,16 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
       }
     }
     // Circles S5: /post and replies to its Edit prompt, before anything else sees them.
-    if (studio.circlesMode() === 'circles' && (parsePostCommand(msg.text) || msg.reply_to_message)) {
+    if (!studio.deps.memoryAccount?.marked() && studio.circlesMode() === 'circles' && (parsePostCommand(msg.text) || msg.reply_to_message)) {
       const bot = botOf(studio, live), key = `channels:${agentId}:${update.update_id}`;
       if (bot && (await studio.circleChannels.command(live, member, msg, bot, key) || await studio.circleChannels.editReply(live, member, msg, bot, key))) return;
     }
-    noteRequestedRoutineActivity(studio, agentId, msg);
-    if (await handleRequestedRoutineMessage(studio, agentId, msg, endpointId)) return;
+    // Retained routine prompts lack incarnation lineage; the adapter stays outside marked turns.
+    if(!studio.deps.memoryAccount?.marked()){
+      noteRequestedRoutineActivity(studio, agentId, msg);
+      if (await handleRequestedRoutineMessage(studio, agentId, msg, endpointId)) return;
+    }
+    if(studio.deps.memoryAccount?.marked()&&/^\/(?:daily|routines|post)(?:@\w+)?(?:\s|$)/i.test(msg.text??''))return;
     // Existing explicit controls/notes/routines retain their own paths. An
     // ordinary selected refusal cannot reach generation or stranger fallback.
     if(deliverySelection==='refused'&&!studio.circleNotes.wants(live,msg.text??''))return;
@@ -293,6 +303,32 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.blockByAgent(agentId, msg.from.id, text);
     await bot.sendMessage(msg.chat.id, decision.message!);
   }
+}
+
+/** ER1 exception: current public text only, with no notes, canonical context, routines or import. */
+async function handleStatelessMemoryAccountUpdate(studio:Studio,agentId:string,update:TelegramUpdate,endpointId?:string):Promise<void>{
+  const msg=update.message;if(!msg?.from||typeof msg.text!=='string'||!studio.deps.memoryAccount?.current())return;
+  const state=await studio.deps.store.read(),live=state.agents.find(a=>a.id===agentId&&a.status==='active');
+  if(!live||studio.circleNotes.wants(live,msg.text)||!studio.deps.memoryAccount.current())return;
+  const endpoint=endpointId?{personaId:agentId,id:endpointId}:undefined;
+  if(msg.chat.type==='group'||msg.chat.type==='supergroup'){
+    await studio.verifyGroupAudience(agentId,msg.chat.id);
+    if(!studio.deps.memoryAccount.current())return;
+    const {gateway}=await studio.gateway(endpoint);await gateway.handleUpdate(agentId,update);return;
+  }
+  if(msg.chat.type!=='private'||visibilityOf(live)!=='public')return;
+  if(studio.circlesMode()!=='off'){
+    const choice=(await studio.agentChoice(agentId,msg.from.id))?.choice;
+    if(choice==='declined')return;
+    if(!choice){const token=studio.botToken(live);if(token&&studio.deps.memoryAccount.current())await sendAgentCard(studio,live,studio.deps.botFor(token),msg.chat.id,msg.from);return;}
+  }
+  const standing=await studio.admitGuest(agentId,msg.from);
+  if(standing!=='ok'||!studio.deps.memoryAccount.current())return;
+  const decision=await studio.decideOnStranger(live,msg.text);
+  if(!studio.deps.memoryAccount.current())return;
+  if(decision.action==='reply'){const {gateway}=await studio.gateway(endpoint);await gateway.handleUpdate(agentId,update);}
+  else if(decision.action==='decline'){const token=studio.botToken(live);if(token)await studio.deps.botFor(token).sendMessage(msg.chat.id,decision.message!);}
+  // Blocking writes from the stateless exception require their own final authority qualification.
 }
 
 /** The bot side of the registry's 'agent.connectors' command and its alias, from the one command table (settings-commands.ts). */

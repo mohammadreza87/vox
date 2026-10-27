@@ -35,9 +35,10 @@ interface Loop { stop: () => void; token?: string; done?:Promise<void> }
 export function pollLoop(
   bot: TelegramBotClient,
   allowed: string[],
-  handle: (u: TelegramUpdate) => Promise<void>,
+  handle: (u: TelegramUpdate, accepted?:unknown) => Promise<void>,
   log: Pick<Console, 'info' | 'warn' | 'error'>,
-  onIntegrity?: (reason: IntegrityReason) => void
+  onIntegrity?: (reason: IntegrityReason) => void,
+  capture?: (u:TelegramUpdate)=>unknown
 ): Loop {
   let running = true;
   let offset: number | undefined;
@@ -49,9 +50,10 @@ export function pollLoop(
         const updates = await bot.getUpdates(offset, 25, allowed);
         if(!running)break;
         watch.succeeded();
-        for (const update of updates) {
+        const batch=updates.map(update=>({update,accepted:capture?.(update)}));
+        for (const {update,accepted} of batch) {
           if(!running)break;
-          try { await handle(update); }
+          try { await handle(update,accepted); }
           catch (error) {
             logTelegramDiagnostic(log, 'update_failed');
             // A failed eligible capture has no durable receipt. Keep this and
@@ -115,7 +117,8 @@ export function startBots(studio: Studio): { stop: () => Promise<{pending:number
         const bot = studio.deps.botFor(token);
         let active=true;
         const assistantPoller:AssistantTextPoller|undefined=agent.bot?.id?studio.deps.assistantText?.poller(agent.id,agent.bot.id,token,()=>active&&!stopped):undefined;
-        const loop=pollLoop(bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token),assistantPoller), log, integrity(agent.id));
+        const loop=pollLoop(bot, AGENT_UPDATES, (update,accepted) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token),assistantPoller,accepted as import('./memory-account').MemoryAccountQueuedUpdate|undefined), log, integrity(agent.id),
+          update=>studio.deps.memoryAccount?.captureUpdate(agent.id,update,assistantPoller));
         if(loop.done)track(loop.done);
         loops.set(agent.id,{token,done:loop.done,stop:()=>{active=false;loop.stop();}});
         logTelegramDiagnostic(log, 'bot_online');
