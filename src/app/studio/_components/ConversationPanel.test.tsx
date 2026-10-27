@@ -98,6 +98,7 @@ it('reports first text only after actual committed visible reply and acknowledge
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   const reply = await screen.findByText('PRIVATE_REPLY_CANARY');
   expect(reply).toHaveAttribute('data-response-density', 'compact'); expect(controls.event).not.toHaveBeenCalled();
+  await waitFor(() => expect(typeof frames[0]).toBe('function'));
   await act(async () => frames.shift()!(performance.now())); expect(controls.event).not.toHaveBeenCalled();
   await act(async () => frames.shift()!(performance.now()));
   expect(controls.event).toHaveBeenCalledExactlyOnceWith({ agentId: 'agent1', space: 'work', turnId: 'accepted-turn', eventId: 'text-accepted-turn', outcome: 'text_rendered', durationMs: expect.any(Number) }, expect.any(AbortSignal));
@@ -114,6 +115,7 @@ it('drops a committed but not yet visible text measurement when the account/spac
   controls.fetch.mockResolvedValue(Response.json({ reply: 'Private answer', turnId: 'accepted-turn' }));
   const view = render(<ConversationPanel agentId="agent1" space="work" />);
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Private question' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' })); await screen.findByText('Private answer');
+  await waitFor(() => expect(typeof frames[0]).toBe('function'));
   view.rerender(<ConversationPanel agentId="agent1" space="personal" />);
   while (frames.length) await act(async () => frames.shift()!(performance.now()));
   expect(controls.event).not.toHaveBeenCalled(); expect(controls.exposure).not.toHaveBeenCalled();
@@ -127,6 +129,7 @@ it.each(['declined', 'unavailable'] as const)('restores inherited comfortable pr
   if (result === 'declined') controls.exposure.mockResolvedValue({ recorded: false, duplicate: false }); else controls.exposure.mockRejectedValue(new Error('PRIVATE_ACK_ERROR'));
   render(<ConversationPanel agentId="agent1" space="work" />); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Scoped request' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   const reply = await screen.findByText('Scoped reply'); expect(reply).toHaveAttribute('data-response-density', 'compact');
+  await waitFor(() => expect(typeof frames[0]).toBe('function'));
   await act(async () => { frames.shift()!(performance.now()); frames.shift()!(performance.now()); await Promise.resolve(); });
   expect(reply).toHaveAttribute('data-response-density', 'comfortable'); expect(reply.style.lineHeight).toBe('');
   expect(controls.exposure).toHaveBeenCalledOnce();
