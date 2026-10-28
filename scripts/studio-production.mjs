@@ -56,10 +56,10 @@ export function qualifyManagedFixtureSupervisorPreflight(){
 function runtimeArguments(basePath,executable){return fixtureTopology?[executable,'--import',fixtureTopology.preload,join(basePath,'current','studio-runtime.mjs'),'run']:[executable,join(basePath,'current','studio-runtime.mjs'),'run'];}
 function fixtureEnvironment(env){
   const t=assertProductionTopology();if(!t)return {...process.env,...env};
-  const allowed=new Set(['NODE_ENV','STUDIO_STORAGE','STUDIO_PUBLIC_URL','STUDIO_ONLY','STUDIO_DATA_DIR','STUDIO_ADAPTIVE_FORMAT','STUDIO_BOTS','STUDIO_SECRET','VOXX_BOT_TOKEN','VOXX_BOT_USERNAME','STUDIO_SUPERADMIN_IDS','STUDIO_WEBAPP_URL','STUDIO_ORG_NAME','STUDIO_MAINTENANCE','STUDIO_PET_DISABLED','STUDIO_ASSISTANT_TEXT_DELIVERY','STUDIO_ASSISTANT_TEXT_KEYS_JSON','STUDIO_ADAPTIVE_POLICY_JSON','STUDIO_SCOPED_RELATIONSHIPS','STUDIO_RELATIONSHIPS']);
+  const allowed=new Set(['NODE_ENV','STUDIO_STORAGE','STUDIO_PUBLIC_URL','STUDIO_ONLY','STUDIO_DATA_DIR','STUDIO_ADAPTIVE_FORMAT','STUDIO_BOTS','STUDIO_SECRET','VOXX_BOT_TOKEN','VOXX_BOT_USERNAME','STUDIO_SUPERADMIN_IDS','STUDIO_WEBAPP_URL','STUDIO_ORG_NAME','STUDIO_MAINTENANCE','STUDIO_PET_DISABLED','STUDIO_ASSISTANT_TEXT_DELIVERY','STUDIO_ASSISTANT_TEXT_KEYS_JSON','STUDIO_ADAPTIVE_POLICY_JSON','STUDIO_SCOPED_RELATIONSHIPS','STUDIO_RELATIONSHIPS','ANTHROPIC_API_KEY']);
   if(Object.keys(env).some(k=>!allowed.has(k))||!['0','1'].includes(env.STUDIO_BOTS)||env.STUDIO_MAINTENANCE&&env.STUDIO_MAINTENANCE!=='0')closed('fixture_environment_unqualified');
   if(env.NODE_ENV!=='production'||env.STUDIO_STORAGE!=='file'||env.STUDIO_PUBLIC_URL!==''||env.STUDIO_ONLY!=='1')closed('fixture_environment_unqualified');
-  const hex=name=>hash(`mi1-synthetic-${name}:${t.fixtureId}`),fixed={STUDIO_SECRET:hex('secret'),VOXX_BOT_TOKEN:`900000000:${hex('manager').slice(0,32)}`,VOXX_BOT_USERNAME:`mi1_${t.fixtureId.replaceAll('-','').slice(0,20)}_bot`,STUDIO_SUPERADMIN_IDS:'900000002',STUDIO_WEBAPP_URL:'https://mi1.invalid/studio'};
+  const hex=name=>hash(`mi1-synthetic-${name}:${t.fixtureId}`),fixed={STUDIO_SECRET:hex('secret'),VOXX_BOT_TOKEN:`900000000:${hex('manager').slice(0,32)}`,VOXX_BOT_USERNAME:`mi1_${t.fixtureId.replaceAll('-','').slice(0,20)}_bot`,STUDIO_SUPERADMIN_IDS:'900000002',STUDIO_WEBAPP_URL:'https://mi1.invalid/studio',ANTHROPIC_API_KEY:'mi1-synthetic-no-provider-credential'};
   for(const [name,value]of Object.entries(fixed))if(env[name]!==undefined&&env[name]!==value)closed('fixture_credential_unqualified');
   const keyId=`mi1-synthetic-${t.fixtureId}`,keyBase64=createHash('sha256').update(`mi1-synthetic-wire:${t.fixtureId}`).digest('base64'),keys=JSON.stringify({currentKeyId:keyId,keys:[{keyId,keyBase64}]});
   if(env.STUDIO_ASSISTANT_TEXT_KEYS_JSON!==undefined&&env.STUDIO_ASSISTANT_TEXT_KEYS_JSON!==keys||env.STUDIO_ASSISTANT_TEXT_DELIVERY!==undefined&&!['0','1'].includes(env.STUDIO_ASSISTANT_TEXT_DELIVERY)||env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1'&&(env.STUDIO_BOTS!=='1'||env.STUDIO_ASSISTANT_TEXT_KEYS_JSON!==keys))closed('fixture_ati_unqualified');
@@ -454,6 +454,7 @@ function prepare() {
 }
 async function check() {
   const env = config();
+  if(fixtureTopology)fixtureEnvironment(env);
   const missing = ['STUDIO_SECRET', 'VOXX_BOT_TOKEN', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'ANTHROPIC_API_KEY'].filter(k => !env[k]);
   if (missing.length) throw new Error(`Missing production configuration: ${missing.join(', ')}`);
   if (env.STUDIO_SECRET.length < 32) throw new Error('STUDIO_SECRET must have at least 32 characters.');
@@ -1044,6 +1045,9 @@ async function managedMemoryAccount(guard,baseline,{action,binding,preflight,rec
     if(maintenance.memoryAccountMaintenanceVersion!==1||typeof maintenance.runManagedMemoryAccountMaintenance!=='function')closed('managed_entry_interface');
     await maintenance.runManagedMemoryAccountMaintenance({operation:context});checkpoint();await ops.compatible(baseline.release);checkpoint();
     starting=markManagedMemoryAccountStarting(context);await ops.releaseStopped();checkpoint();await ops.start();checkpoint();
+    // The first health request initializes the lazy Studio FILE owner. Establish
+    // ordinary runtime readiness before requiring the stricter marked health.
+    await ops.ready(baseline.release.revision,checkpoint);checkpoint();
     let healthy=false;for(let attempt=0;attempt<15;attempt++){checkpoint();try{await verifyManagedMemoryAccountOperationalHealth(binding,inspectFileRuntimeOperationGuard(raw).digest);healthy=true;break;}catch{checkpoint();}await new Promise(done=>setTimeout(done,2000));}
     if(!healthy)closed('managed_protective_readiness_failed');checkpoint();
     metadataFinalizing=true;

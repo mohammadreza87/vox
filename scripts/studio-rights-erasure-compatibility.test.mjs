@@ -1,3 +1,4 @@
+import {unitManagedDescriptor,unitFixturePrelude,writeUnitFixtureEpoch} from './fixtures/studio-cli-unit-fixture.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -67,6 +68,7 @@ function withLocalUse(doc) {
 }
 function fixture(doc, run, format = 'file', raw = JSON.stringify(doc)) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'vox-rf2-admission-'))), env = { STUDIO_DATA_DIR: join(dir, 'data'), STUDIO_ADAPTIVE_FORMAT: format };
+  mkdirSync(env.STUDIO_DATA_DIR,{mode:0o700});
   const rights = join(env.STUDIO_DATA_DIR, 'rights-intake', 'v1'); mkdirSync(rights, { recursive: true });
   const file = join(rights, `${hash(doc.accountId)}.json`); writeFileSync(file, raw);
   if (format !== 'file') {
@@ -213,16 +215,16 @@ function syntheticNativeDescriptor(project) {
     compilerVersionSha256: sha('synthetic compiler version'), sdkVersion: '0.0', deploymentTarget: '11.0' };
 }
 test('actual install/rollback refuse old, missing and corrupt v4 capability before any effects, even for empty v4', () => fixture(ledger(false), f => {
-  const project = join(f.dir, 'source'), scripts = join(project, 'scripts'), production = join(f.dir, 'production'), bin = join(f.dir, 'bin');
+  const project = join(f.dir, 'source'), scripts = join(project, 'scripts'), production = join(f.dir, 'base'), bin = join(f.dir, 'bin');
   for (const path of [scripts, production, bin]) mkdirSync(path, { recursive: true, mode: 0o700 });
-  for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs', 'studio-file-runtime-owner.mjs']) cpSync(new URL(name, import.meta.url), join(scripts, name));
+  for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs', 'studio-file-runtime-owner.mjs', 'studio-memory-account-operation.mjs', 'studio-memory-account-time.mjs']) cpSync(new URL(name, import.meta.url), join(scripts, name));
   mkdirSync(join(scripts, 'native')); cpSync(new URL('native/studio-process-metadata-darwin.c', import.meta.url), join(scripts, 'native', 'studio-process-metadata-darwin.c'));
   writeFileSync(join(project, '.gitignore'), '.next/\n');
   const git = (...args) => { const r = spawnSync('git', args, { cwd: project, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   git('init', '-q'); git('add', '.'); git('-c', 'user.name=Vox fixture', '-c', 'user.email=fixture@invalid.test', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'synthetic RF2 release');
   mkdirSync(join(project, '.next', 'standalone', '.next'), { recursive: true }); writeFileSync(join(project, '.next', 'standalone', 'server.js'), 'throw new Error("must not start");');
   for (const path of [join(project, '.next'), join(project, '.next', 'standalone', '.next')]) writeFileSync(join(path, 'BUILD_ID'), metadata.buildId);
-  const runtimeProcessMetadata = syntheticNativeDescriptor(project);
+  const runtimeProcessMetadata = syntheticNativeDescriptor(project),memoryAccountManagedRuntime=unitManagedDescriptor(project);
   const current = join(production, 'current-release'), previous = join(production, 'previous-release');
   for (const path of [current, previous]) {
     mkdirSync(join(path, '.next'), { recursive: true }); writeFileSync(join(path, 'server.js'), 'synthetic');
@@ -232,15 +234,15 @@ test('actual install/rollback refuse old, missing and corrupt v4 capability befo
   }
   symlinkSync(current, join(production, 'current')); writeFileSync(join(production, 'previous'), realpathSync(previous));
   writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='file'\n`, { mode: 0o600 });
-  const signal = join(f.dir, 'unexpected-effect'), guard = join(f.dir, 'guard.mjs');
+  const signal = join(f.dir, 'unexpected-effect'), guard = join(f.dir, 'mi1-fixture-preload-v1.mjs');
   writeFileSync(join(bin, 'launchctl'), `#!/bin/sh\nprintf called >> '${signal}'\nexit 1\n`, { mode: 0o700 });
-  writeFileSync(guard, `import{appendFileSync}from'node:fs';import cp from'node:child_process';import net from'node:net';import http from'node:http';import https from'node:https';import{syncBuiltinESMExports}from'node:module';const deny=()=>{appendFileSync(${JSON.stringify(signal)},'effect');throw Error('synthetic effect denied')};const original=cp.spawnSync;cp.spawnSync=(command,args,options)=>command==='git'?original(command,args,options):deny();cp.spawn=deny;globalThis.fetch=async()=>deny();net.createConnection=deny;net.connect=deny;http.request=deny;https.request=deny;syncBuiltinESMExports();`);
+  writeUnitFixtureEpoch({parent:f.dir,release:metadata,helpersDirectory:scripts,preloadText:unitFixturePrelude({parent:f.dir,ownerPath:join(scripts,'studio-file-runtime-owner.mjs')})+`import{appendFileSync}from'node:fs';import cp from'node:child_process';import net from'node:net';import http from'node:http';import https from'node:https';import{syncBuiltinESMExports}from'node:module';const deny=()=>{appendFileSync(${JSON.stringify(signal)},'effect');throw Error('synthetic effect denied')};const original=cp.spawnSync;cp.spawnSync=(command,args,options)=>command==='git'?original(command,args,options):deny();cp.spawn=deny;globalThis.fetch=async()=>deny();net.createConnection=deny;net.connect=deny;http.request=deny;https.request=deny;syncBuiltinESMExports();`});
   const invoke = command => spawnSync(process.execPath, ['--import', guard, join(scripts, 'studio-production.mjs'), command,
     '--expect-current', realpathSync(current), '--expect-revision', metadata.revision, '--expect-build', metadata.buildId],
   { cwd: project, env: { PATH: `${bin}:${process.env.PATH}`, VOX_PRODUCTION_DIR: production }, encoding: 'utf8', timeout: 10000 });
   const { supportedRightsLedgerVersions: omitted, ...without } = capabilities; assert.ok(omitted.includes(4));
   for (const fields of [without, { ...capabilities, supportedRightsLedgerVersions: [1, 2, 3] }, { ...capabilities, supportedRightsLedgerVersions: null }, { ...capabilities, supportedRightsLedgerVersions: [4, 4] }]) {
-    writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ ...metadata, revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), syntheticOnly: true, runtimeProcessMetadata, ...fields }));
+    writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ ...metadata, revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), syntheticOnly: true, runtimeProcessMetadata,memoryAccountManagedRuntime, ...fields }));
     writeFileSync(join(previous, 'studio-release.json'), JSON.stringify({ ...metadata, ...fields }));
     for (const command of ['install', 'rollback']) { const result = invoke(command); assert.equal(result.status, 1, result.stderr); assert.match(result.stderr, /Adaptive storage is incompatible/); }
     assert.equal(existsSync(signal), false); assert.equal(existsSync(join(production, 'releases')), false); assert.equal(existsSync(join(production, 'backups')), false);
