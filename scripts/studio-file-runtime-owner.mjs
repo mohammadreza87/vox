@@ -414,10 +414,11 @@ export function registerFileRuntimeFixture({ dataRoot, artifactRoot, release: in
     if(fs.readFileSync(join(source,'.next','BUILD_ID'),'utf8').trim()!==r.buildId)fail();
   }else if(stat(markerPath(root)))fail();
   if(stat(markerPath(root)))assertMarker(root);
-  // A receipt-bound separate-process contender may reach real exclusive
-  // acquisition. Inspection grants no owner capability or registry root entry.
+  // A receipt-bound contender or maintenance recovery process may reach real
+  // exclusive acquisition. Registration grants no owner capability or registry
+  // root entry; an existing holder still requires actual guarded recovery.
   const holder=inspectFileRuntimeOwner(root);
-  if(holder&&(!receipt||holder.record.role!=='runtime'||holder.root!==root||!equal(holder.rootIdentity,rootIdentity)||!equal(holder.record.release,r)))fail();
+  if(holder&&(!receipt||!['runtime','maintenance'].includes(holder.record.role)||holder.root!==root||!equal(holder.rootIdentity,rootIdentity)||!equal(holder.record.release,r)))fail();
   registry().fixtures.set(root,{artifact,release:r,rootIdentity,artifactIdentity,receipt:receipt?{path:receiptPath,identity:receipt.identity,digest:receipt.digest}:undefined});
 }
 /** A fixture receipt is provenance for isolated qualification, never approval of production. */

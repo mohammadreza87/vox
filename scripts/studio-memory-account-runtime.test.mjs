@@ -10,6 +10,7 @@ import { ADAPTIVE_RELEASE_CAPABILITIES, assertReleaseAdaptiveCompatibility } fro
 import { assertReleaseAdaptiveCompatibility as old9e } from './fixtures/memory-account-prior-reader/studio-adaptive-compatibility.mjs';
 import { assertReleaseAdaptiveCompatibility as oldAe } from './fixtures/memory-account-managed-prior-reader/studio-adaptive-compatibility.mjs';
 import { hash, image, withManagedTimeFixture } from './fixtures/memory-account-managed-fixture.mjs';
+import {FILE_RUNTIME_OWNER_GUARD} from './studio-file-runtime-owner.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const oracle = name => {
@@ -78,6 +79,57 @@ test('C05/C06: a real separate source process cannot acquire the held FILE write
   assert.deepEqual(JSON.parse(result.stdout), { admitted: false, denied: 0 });
   assert.deepEqual(image(f.parent), before); f.owner.assertCurrent();
 }));
+
+
+function boundMetadata(paths){return paths.map(path=>{const v=fs.lstatSync(path,{bigint:true});return {path,dev:String(v.dev),ino:String(v.ino),birth:String(v.birthtimeNs),mode:String(v.mode),uid:String(v.uid),nlink:String(v.nlink),size:String(v.size),mtime:String(v.mtimeNs),ctime:String(v.ctimeNs)};});}
+function maintenanceContender(f,{release=f.release,dataRoot=f.dataRoot}={}){
+  const ownerUrl=new URL('./studio-file-runtime-owner.mjs',import.meta.url).href,timeUrl=new URL('./studio-memory-account-time.mjs',import.meta.url).href,operationUrl=new URL('./studio-memory-account-operation.mjs',import.meta.url).href;
+  const code=`import assert from'node:assert/strict';import net from'node:net';import http from'node:http';import https from'node:https';import fs from'node:fs';
+    let denied=0,providerCalls=0;const deny=()=>{denied++;throw Error('QA_NETWORK_DENIED')};globalThis.fetch=deny;net.Socket.prototype.connect=deny;http.request=deny;http.get=deny;https.request=deny;https.get=deny;
+    const api=await import(${JSON.stringify(ownerUrl)}),time=await import(${JSON.stringify(timeUrl)}),operation=await import(${JSON.stringify(operationUrl)}),root=${JSON.stringify(dataRoot)},release=${JSON.stringify(release)},refused=[];
+    let registered=false;try{api.registerFileRuntimeFixture({dataRoot:root,artifactRoot:${JSON.stringify(f.artifact)},release});registered=true}catch{}
+    if(registered){
+      api.assertFileRuntimeFixture(root);assert.equal(api.inspectFileRuntimeOwner(root).record.role,'maintenance');
+      const no=(name,fn)=>{assert.throws(fn,undefined,name);refused.push(name);};
+      no('runtime-owner',()=>api.acquireFileRuntimeOwner({dataRoot:root,release}));
+      no('maintenance-owner-without-authorization',()=>api.acquireFileRuntimeOwner({dataRoot:root,release,role:'maintenance'}));
+      no('maintenance-owner-forged-authorization',()=>api.acquireFileRuntimeOwner({dataRoot:root,release,role:'maintenance',authorization:{}}));
+      no('borrowed-operation-authorization',()=>api.createMaintenanceAuthorization({base:${JSON.stringify(f.base)},assertOwned(){},release(){}}));
+      no('actual-operation-exclusion',()=>api.acquireFileRuntimeOperationGuard(${JSON.stringify(f.base)},'backup'));
+      const ownGuard=api.acquireFileRuntimeOperationGuard(${JSON.stringify(join(f.parent,'contender-base'))},'backup');
+      try{const ownAuthorization=api.createMaintenanceAuthorization(ownGuard);no('maintenance-owner-real-contender-authorization',()=>api.acquireFileRuntimeOwner({dataRoot:root,release,role:'maintenance',authorization:ownAuthorization}));no('copied-real-operation-authorization',()=>api.createMaintenanceAuthorization({...ownGuard}));}finally{ownGuard.release();}
+      no('guarded-read',()=>api.fileRuntimeFs.readFileSync(${JSON.stringify(join(f.directory,'file-runtime-owner-v1.json'))}));
+      no('guarded-write',()=>api.fileRuntimeFs.writeFileSync(${JSON.stringify(join(f.directory,'contender.json'))},'{}'));
+      no('guarded-open',()=>api.fileRuntimeFs.openSync(${JSON.stringify(join(f.directory,'file-runtime-owner-v1.json'))},'r+'));
+      no('guarded-delete',()=>api.fileRuntimeFs.unlinkSync(${JSON.stringify(join(f.directory,'file-runtime-owner-v1.json'))}));
+      no('guarded-transient',()=>api.prepareFileRuntimeTransient(${JSON.stringify(join(f.directory,'contender.tmp'))}));
+      no('guarded-transient-directory',()=>api.createFileRuntimeTransientDirectory(${JSON.stringify(join(f.directory,'contender-directory'))}));
+      no('forged-managed-context',()=>operation.createManagedMemoryAccountOperation({guard:{},owner:{},authorization:{},time:{},action:'resume'}));
+      time.registerSyntheticMemoryTimePolicy({dataRoot:root,policy:${JSON.stringify(f.policy)},provider:{async acquire(){providerCalls++;throw Error('PROVIDER_MUST_NOT_RUN')}},bootIdentity:()=> 'MI1-independent-contender'});
+      for(const [name,candidate]of [['omitted',undefined],['inspection',api.inspectFileRuntimeOwner(root)],['copied-inspection',structuredClone(api.inspectFileRuntimeOwner(root))],['forged',{assertCurrent(){},assertActive(){},snapshot(){return {}}}]]){await assert.rejects(time.acquireQualifiedMemoryTime({dataRoot:root,owner:candidate,artifactDigest:${JSON.stringify(f.artifactDigest)},purpose:'runtime'}));refused.push('qualified-clock-with-'+name+'-owner');}
+    }
+    process.stdout.write(JSON.stringify({registered,refused,denied,providerCalls}));`;
+  const result=spawnSync(process.execPath,['--input-type=module','--eval',code],{cwd:f.base,env:{PATH:process.env.PATH,NODE_ENV:'test'},encoding:'utf8',timeout:10000});
+  assert.equal(result.error,undefined);assert.equal(result.signal,null);assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);
+}
+test('C05/C06: fresh source-process maintenance provenance registers without granting any writer, read, transient, clock or operation authority',()=>withManagedTimeFixture(f=>{
+  fs.mkdirSync(join(f.parent,'contender-base'),{mode:0o700});
+  const paths=[f.parent,f.base,f.dataRoot,f.directory,f.receiptPath,join(f.dataRoot,FILE_RUNTIME_OWNER_GUARD),join(f.base,'.studio-operation.lock'),join(f.base,'.studio-operation.lock','owner.json')],
+    before=image(f.parent),metadata=boundMetadata(paths),result=maintenanceContender(f);
+  assert.deepEqual(result,{registered:true,refused:['runtime-owner','maintenance-owner-without-authorization','maintenance-owner-forged-authorization','borrowed-operation-authorization','actual-operation-exclusion','maintenance-owner-real-contender-authorization','copied-real-operation-authorization','guarded-read','guarded-write','guarded-open','guarded-delete','guarded-transient','guarded-transient-directory','forged-managed-context','qualified-clock-with-omitted-owner','qualified-clock-with-inspection-owner','qualified-clock-with-copied-inspection-owner','qualified-clock-with-forged-owner'],denied:0,providerCalls:0});
+  assert.deepEqual(image(f.parent),before);assert.deepEqual(boundMetadata(paths),metadata);f.owner.assertCurrent();f.guard.assertOwned();
+}));
+for(const variant of ['missing-receipt','foreign-receipt-root','foreign-receipt-release','copied-release-input','foreign-root-input']){
+  test(`C05/C06: maintenance provenance registration rejects ${variant} without changing the actual held root`,()=>withManagedTimeFixture(f=>{
+    const args={};
+    if(variant==='missing-receipt')fs.unlinkSync(f.receiptPath);
+    if(variant.startsWith('foreign-receipt')){const receipt=JSON.parse(fs.readFileSync(f.receiptPath,'utf8'));if(variant==='foreign-receipt-root')receipt.root=join(f.parent,'foreign-data');else receipt.sourceTree='c'.repeat(40);fs.writeFileSync(f.receiptPath,JSON.stringify(receipt)+'\n',{mode:0o600});}
+    if(variant==='copied-release-input')args.release={...f.release,revision:'c'.repeat(40)};
+    if(variant==='foreign-root-input')args.dataRoot=join(f.parent,'foreign-data');
+    const before=image(f.parent),result=maintenanceContender(f,args);
+    assert.deepEqual(result,{registered:false,refused:[],denied:0,providerCalls:0});assert.deepEqual(image(f.parent),before);f.owner.assertCurrent();f.guard.assertOwned();
+  }));
+}
 
 // No default .next/current/3107 or real launchd label is selected here.
 // Actual built C73-C76 and all native managed positives are a separately
