@@ -273,4 +273,28 @@ describe('account rights and durable maintenance', () => {
     expect(calls).toContainEqual(['startAfter', rows[0].id]);
     expect(JSON.stringify([first, second])).not.toContain('NOT_EXPORTED');
   });
+
+  it('captures validated Firestore pagination inputs before import and result awaits instead of following caller mutations',async()=>{
+    const rows=[2101,2102,2103].map(owner=>({accountId:accountIdFor(owner),id:createHash('sha256').update(accountIdFor(owner)).digest('hex')})).sort((a,b)=>a.id.localeCompare(b.id));
+    const calls:unknown[][]=[];let queryLimit=0,queryAfter='',enter!:()=>void,release!:()=>void;
+    const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+    const query={orderBy:(field:unknown)=>{calls.push(['orderBy',field]);return query;},select:(field:string)=>{calls.push(['select',field]);return query;},
+      limit:(n:number)=>{queryLimit=n;calls.push(['limit',n]);return query;},startAfter:(cursor:string)=>{queryAfter=cursor;calls.push(['startAfter',cursor]);return query;},
+      get:async()=>{enter();await gate;return {docs:rows.filter(row=>row.id>queryAfter).slice(0,queryLimit).map(row=>({id:row.id,get:(field:string)=>{expect(field).toBe('json');return JSON.stringify({accountId:row.accountId});}}))};}};
+    const db={collection:(name:string)=>{calls.push(['collection',name]);return query;}} as unknown as Firestore,storage=new FirestoreAdaptiveStorage(db,'syntheticInputSnapshot');
+    const input={limit:1,after:'0'.repeat(64)},pending=storage.listAccounts(input);
+    // The first mutation is before the newly lazy dependency resolves. The
+    // second is during the actual asynchronous query/result boundary.
+    input.limit=100;input.after='f'.repeat(64);await entered;input.limit=2;input.after='not-a-valid-cursor';release();
+    expect(await pending).toEqual({accountIds:[rows[0].accountId],next:rows[0].id});
+    expect(calls.filter(c=>c[0]==='limit')).toEqual([['limit',2]]);expect(calls.filter(c=>c[0]==='startAfter')).toEqual([['startAfter','0'.repeat(64)]]);
+    const before=calls.length,invalid={limit:101,after:'0'.repeat(64)},refused=storage.listAccounts(invalid);invalid.limit=1;
+    await expect(refused).rejects.toThrow('Invalid adaptive enumeration');expect(calls).toHaveLength(before);
+    let coerced=0;const stringify=()=>{coerced++;return '0'.repeat(64);};
+    for(const after of [{toString:stringify},Object.assign(['0'.repeat(64)],{toString:stringify})]){
+      const malformed={limit:1,after} as unknown as Parameters<FirestoreAdaptiveStorage['listAccounts']>[0];
+      await expect(storage.listAccounts(malformed)).rejects.toThrow('Invalid adaptive enumeration');
+    }
+    expect(coerced).toBe(0);expect(calls).toHaveLength(before);
+  });
 });

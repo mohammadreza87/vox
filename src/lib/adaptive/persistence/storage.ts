@@ -9,7 +9,6 @@ import { assertAssistantDeliveryTransition, parseAssistantDeliveryControl } from
 import type { AdaptiveDocument } from './repository';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
-import { FieldPath } from 'firebase-admin/firestore';
 import { RevisionCounter, revisionField, type RevisionProbe } from '../../tireh/privacy/revisions';
 import type { DirectAuthorityEvaluator } from './authority';
 import type { SpaceKind } from './repository';
@@ -79,7 +78,7 @@ export const MAX_ADAPTIVE_DOCUMENT_BYTES = 700_000;
 const key = (id: string) => createHash('sha256').update(id).digest('hex');
 function pageInput(input: AdaptiveAccountPageInput): void {
   if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100 ||
-      (input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after))) throw new Error('Invalid adaptive enumeration');
+      (input.after !== undefined && (typeof input.after !== 'string' || !/^[a-f0-9]{64}$/.test(input.after)))) throw new Error('Invalid adaptive enumeration');
 }
 function accountFrom(raw: unknown, expectedKey: string): string | undefined {
   if (!raw || typeof raw !== 'object' || !('accountId' in raw)) return undefined;
@@ -314,17 +313,21 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
 export class FirestoreAdaptiveStorage implements AdaptiveStorage {
   constructor(private readonly db: Firestore, private readonly collection = 'adaptiveAccounts') {}
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
-    pageInput(input);
-    let query = this.db.collection(this.collection).orderBy(FieldPath.documentId()).select('json').limit(input.limit + 1);
-    if (input.after) query = query.startAfter(input.after);
-    const page = await query.get(), selected = page.docs.slice(0, input.limit), accountIds: string[] = [];
+    const requested = { limit: input.limit, after: input.after };
+    pageInput(requested);
+    // FILE maintenance must not initialize the cloud SDK. Freeze validated
+    // pagination before this asynchronous import so callers cannot widen it.
+    const { FieldPath } = await import('firebase-admin/firestore');
+    let query = this.db.collection(this.collection).orderBy(FieldPath.documentId()).select('json').limit(requested.limit + 1);
+    if (requested.after) query = query.startAfter(requested.after);
+    const page = await query.get(), selected = page.docs.slice(0, requested.limit), accountIds: string[] = [];
     for (const document of selected) {
       const raw = document.get('json');
       if (typeof raw !== 'string') throw new Error('Invalid adaptive document');
       const account = accountFrom(JSON.parse(raw), document.id);
       if (account) accountIds.push(account);
     }
-    return { accountIds, ...(page.docs.length > input.limit ? { next: selected.at(-1)!.id } : {}) };
+    return { accountIds, ...(page.docs.length > requested.limit ? { next: selected.at(-1)!.id } : {}) };
   }
   async load(accountId: string): Promise<AdaptiveLoad> {
     const ref = this.db.collection(this.collection).doc(key(accountId));
