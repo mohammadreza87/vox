@@ -1,3 +1,4 @@
+import type {MemoryTimeInterval} from '../adaptive/memory-account-time';
 /** Fresh manager-only ER1 protective API. Never ensureMember or caller-selected account/path. */
 import {z} from 'zod';
 import {botIdOfToken,verifyBotInitData,type InitDataUser} from './auth';
@@ -11,10 +12,10 @@ const schemas={preview:z.object({}).strict(),challenge:z.object({action:z.litera
 const limiters=new WeakMap<Studio,StudioRateLimiter>();
 const json=(body:unknown,status=200)=>Response.json(body,{status,headers:{'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'}});
 /** Dedicated wrapper leaves every unrelated manager/client default unchanged. */
-export function verifyMemoryAccountInitData(studio:Studio,initData:string,managerToken:string,now:number):InitDataUser|null {
-  if(!managerToken||!Number.isSafeInteger(now)||now<0)return null;
+export function verifyMemoryAccountInitData(studio:Studio,initData:string,managerToken:string,now:number,interval:MemoryTimeInterval={nowMs:now,utcLowerMs:now,utcUpperMs:now}):InitDataUser|null {
+  if(!managerToken||!Number.isSafeInteger(now)||now<0||interval.nowMs!==now||interval.utcUpperMs!==now||!Number.isSafeInteger(interval.utcLowerMs)||interval.utcLowerMs<0||interval.utcLowerMs>now)return null;
   const authDate=Number(new URLSearchParams(initData).get('auth_date'));
-  if(!Number.isSafeInteger(authDate)||authDate*1000>now+2000||now>=authDate*1000+300_000)return null;
+  if(!Number.isSafeInteger(authDate)||authDate*1000>interval.utcLowerMs+2000||interval.utcUpperMs>=authDate*1000+300_000)return null;
   return verifyBotInitData(initData,{token:managerToken,botId:botIdOfToken(managerToken)},{key:studio.deps.initDataKey,requireSignature:true,maxAgeSeconds:300,nowSeconds:Math.floor(now/1000)}).user;
 }
 export async function handleMemoryAccountRequest(studio:Studio,request:Request,path:string[],managerToken:string|(()=>string)):Promise<Response> {
@@ -28,7 +29,7 @@ export async function handleMemoryAccountRequest(studio:Studio,request:Request,p
     const currentToken=()=>typeof managerToken==='function'?managerToken():managerToken;
     const initData=request.headers.get('x-telegram-init-data')??'';
     if(!initData||initData.length>maxInit||!currentToken())return json({error:'authentication_required'},401);
-    const now=account.now(),user=verifyMemoryAccountInitData(studio,initData,currentToken(),now);
+    const now=account.now(),user=verifyMemoryAccountInitData(studio,initData,currentToken(),now,account.interval(now));
     if(!user)return json({error:'authentication_required'},401);
     await limiter.consume('api',user.id);
     if(request.method!=='GET'){
@@ -39,7 +40,7 @@ export async function handleMemoryAccountRequest(studio:Studio,request:Request,p
       await limiter.consume('mutation',user.id);
     }
     const session:MemoryAccountSession={ownerId:user.id,session:account.session(initData),deadline:Number(new URLSearchParams(initData).get('auth_date'))*1000+300_000,
-      authenticate:(at)=>verifyMemoryAccountInitData(studio,initData,currentToken(),at)?.id===user.id,cancelled:()=>request.signal.aborted};
+      authenticate:(at)=>verifyMemoryAccountInitData(studio,initData,currentToken(),at,account.interval(at))?.id===user.id,cancelled:()=>request.signal.aborted};
     if(route==='status')return json(account.status(session));
     let input:unknown;try{input=await (await boundedStudioRequest(request,small)).json();}catch{return json({error:'invalid_request'},400);}
     if(route==='preview'){schemas.preview.parse(input);return json(account.preview(session));}

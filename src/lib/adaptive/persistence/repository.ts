@@ -1,3 +1,4 @@
+import { qualifiedMemoryInterval } from '../memory-account-time';
 import { parseAssistantDeliveryControl, assistantCapacityProjection, assertAssistantDeliveryTransition, type AssistantDeliveryControl } from '../assistant-delivery-control';
 import { telegramArchivesSchema } from '../telegram-archive-state';
 import { rightsUseHoldsSchema, type RightsUseHolds, type RightsUseControls } from '../rights-use-holds/contracts';
@@ -12,7 +13,7 @@ import { z } from 'zod';
 import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { ConsentEvent } from '../consent';
 import type { ConsentPermission, PersonAccountBinding } from '../types';
-import { committedLoader, CommittedReadBusy, FileAdaptiveStorage, type AdaptiveStorage } from './storage';
+import { committedLoader, CommittedReadBusy, FileAdaptiveStorage, encodeAdaptiveStorageDocument, type AdaptiveStorage } from './storage';
 import { emptyExperience, experienceDocumentSchema } from '../runtime/contracts';
 import { emptyRelationshipDocument, relationshipDocumentSchema } from '../relationships/contracts';
 import { emptyObserverDocument, observerDocumentSchema } from '../observation/contracts';
@@ -202,6 +203,22 @@ function storedForm(draft: AdaptiveDocument): Partial<AdaptiveDocument> {
   return stored;
 }
 
+/** Pure prospective migration shared by readonly admission and the actual locked writer.
+ * Checks may parse normalized projections; the returned candidate preserves raw optional omissions. */
+export function prepareExistingMemoryAccountMigration(current: unknown, accountId: string, now: number, incarnation?: string): {document: Record<string, unknown>; result: MemoryLifecycle; encoded: string} {
+  assertMemoryAccountId(accountId);
+  if (current === null || isMemoryAccountErasing(current)) throw new Error('Existing active memory account required');
+  const parsed = validateAdaptiveDocument(current, accountId, now);
+  if (parsed.schemaVersion !== 1) throw new Error('Original FILE schema required');
+  const original = current as Record<string, unknown>;
+  const lifecycle: MemoryLifecycle = parsed.memoryLifecycle ? original.memoryLifecycle as MemoryLifecycle : parseMemoryLifecycle({version: 1, mode: 'legacy-current', incarnation, revision: 1}, now);
+  const candidate = {...original, memoryLifecycle: lifecycle};
+  // The added lifecycle participates in every real ARC future/reserve and rights/pause check.
+  validateAdaptiveDocument(candidate, accountId, now);
+  const encoded = encodeAdaptiveStorageDocument(candidate);
+  return {document: candidate, result: lifecycle, encoded};
+}
+
 export class AdaptiveRepository {
   constructor(readonly storage: AdaptiveStorage) {}
   memoryAccountMarked(): boolean {
@@ -235,7 +252,7 @@ export class AdaptiveRepository {
     const storage = this.originalMemoryAccountFile(), status = this.memoryAccountStatus(accountId, at);
     if ((status.state !== 'active' && status.state !== 'legacy-current') || !status.lifecycle) throw new Error('Memory account admission refused');
     const now = checkMemoryAccountTime(storage.directory, at);
-    assertMemoryAccountSource(status.lifecycle, originalDateSeconds, now);
+    assertMemoryAccountSource(status.lifecycle, originalDateSeconds, now, qualifiedMemoryInterval(at, now).utcLowerMs);
     return registerMemoryAccountWork({ directory: resolve(storage.directory), accountId, incarnation: status.lifecycle.incarnation, clock: at, ...(originalDateSeconds === undefined ? {} : { sourceDateSeconds: originalDateSeconds }) });
   }
   isMemoryAccountWorkCurrent(work: MemoryAccountWork, at: () => number): boolean {
@@ -280,9 +297,9 @@ export class AdaptiveRepository {
       // Exact current canonical validation; migration does not normalize grants or payload.
       const document = validateAdaptiveDocument(current, accountId, now);
       if (document.schemaVersion !== 1) throw new Error('Original FILE schema required');
-      const lifecycle: MemoryLifecycle = document.memoryLifecycle ?? { version: 1, mode: 'legacy-current', incarnation: randomBytes(32).toString('hex'), revision: 1 };
-      // Preserve original optional/default omissions and every existing payload byte value.
-      return { document: { ...(current as object), memoryLifecycle: lifecycle }, result: lifecycle };
+      // The identical after-add projection/encoder runs before stop and again under this lock.
+      const prepared = prepareExistingMemoryAccountMigration(current, accountId, now, document.memoryLifecycle ? undefined : randomBytes(32).toString('hex'));
+      return {document: prepared.document, result: prepared.result};
     }, () => { observeMemoryAccountTime(storage.directory, clock); });
   }
   readCommittedForEffect(accountId: string, at: number | (() => number)): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
@@ -290,15 +307,18 @@ export class AdaptiveRepository {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) throw new Error('Invalid adaptive account');
     const result = this.storage.readCommittedForEffect(accountId);
     if (result.status !== 'ready') return result;
-    const now = typeof at === 'function' ? at() : at;
+    const markedStorage = this.memoryAccountMarked() ? this.originalMemoryAccountFile() : undefined;
+    const work = markedStorage ? currentMemoryAccountWork() : undefined;
+    if (markedStorage && !work) throw new Error('Original memory account work required');
+    // The source interval belongs to the original captured clock, not a distinct
+    // business clock supplied by a caller. Sample it after the committed read.
+    const now = markedStorage && work
+      ? checkMemoryAccountTime(markedStorage.directory, memoryAccountWorkDetails(work).clock)
+      : typeof at === 'function' ? at() : at;
     if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     if (result.document === null) return { status: 'ready', document: null };
     const document = validateAdaptiveDocument(result.document, accountId, now);
-    if (this.memoryAccountMarked()) {
-      const storage = this.originalMemoryAccountFile();
-      const observed = checkMemoryAccountTime(storage.directory, () => typeof at === 'function' ? at() : at);
-      storage.assertMemoryAccountWork(accountId, document, currentMemoryAccountWork(), observed);
-    }
+    if (markedStorage) markedStorage.assertMemoryAccountWork(accountId, document, work, now);
     if(document.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
     return { status: 'ready', document };
   }

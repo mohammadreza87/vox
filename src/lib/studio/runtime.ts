@@ -1,3 +1,6 @@
+import { acquireQualifiedMemoryTime, qualifiedMemoryClock, type QualifiedMemoryTime } from '../adaptive/memory-account-time';
+import { readMemoryAccountRoot } from '../adaptive/memory-account-lifecycle-file';
+import { fileRuntimeArtifactDigest } from './file-runtime-owner';
 import {StudioMemoryAccount,assertMemoryAccountEffect} from './memory-account';
 import { ensureStudioFileRuntimeOwner, type FileRuntimeOwner } from './file-runtime-owner';
 import { StudioTelegramArchive } from './telegram-archive';
@@ -288,7 +291,7 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
 }
 
 type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'petPlay' | 'petGrowth' | 'petCheckins' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
-function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
+function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat, memoryClock?:()=>number): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
     return { store, pets: new FilePetStore(join(dir, 'pets')), petPlay: new FilePetPlayStore(join(dir, 'pets')), petGrowth: new FilePetGrowthStore(join(dir, 'pets')), petCheckins: new FilePetCheckinStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
@@ -297,7 +300,7 @@ function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: A
     channelDrafts: new ChannelDrafts(new FileAdaptiveStorage(join(dir, 'circles', 'channel-drafts'))), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), ...(memoryClock?{now:memoryClock}:{}), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
     voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
     maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')), closeAdaptive: managed.close };
@@ -345,7 +348,13 @@ async function create(): Promise<Studio> {
   const fileRuntimeOwner = config.storage === 'file' && config.adaptiveFormat === 'file' ? ensureStudioFileRuntimeOwner(config.dataDir,{requireQualified:config.production||config.assistantTextEnabled}) : undefined;
   if(fileRuntimeOwner)g.__voxFileRuntimeOwner=fileRuntimeOwner;
   const ownerHook = fileRuntimeOwner ? { beforeAuthorize: () => {fileRuntimeOwner.assertCurrent();assertMemoryAccountEffect();}, assertActive: () => fileRuntimeOwner.assertActive(), signal: fileRuntimeOwner.signal } : undefined;
-  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled, config.adaptiveFormat);
+  let memoryTime:QualifiedMemoryTime|undefined;
+  if(fileRuntimeOwner){
+    const marked=readMemoryAccountRoot(join(config.dataDir,'adaptive')).marked;
+    try{memoryTime=await acquireQualifiedMemoryTime({dataRoot:config.dataDir,owner:fileRuntimeOwner,artifactDigest:fileRuntimeArtifactDigest(config.dataDir),purpose:'runtime',signal:fileRuntimeOwner.signal});}
+    catch(error){if(marked){fileRuntimeOwner.beginDrain();throw error;}}
+  }
+  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled, config.adaptiveFormat,memoryTime?qualifiedMemoryClock(memoryTime):undefined);
   let initialManagerMetadataFailure = false;
   try {
     // Load and persist once so corrupt state or unwritable storage fails startup.
@@ -552,10 +561,17 @@ async function create(): Promise<Studio> {
     if (config.storage === 'file' && config.adaptiveFormat === 'file') studio.deps.telegramArchive = new StudioTelegramArchive(studio, () => process.env.STUDIO_TELEGRAM_ARCHIVE === '1');
     // Composed while off so retained enrollments cannot fall back to legacy and
     // protective edits remain keyless. Never creates a marker/account on boot.
-    if(config.storage==='file'&&config.adaptiveFormat==='file')studio.deps.assistantText=new StudioAssistantTextIntegration(studio,{
-      enabled:()=>config.assistantTextEnabled&&env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1',keys:config.assistantTextKeys,
-    });
-    if(config.storage==='file'&&config.adaptiveFormat==='file')studio.deps.memoryAccount=new StudioMemoryAccount(studio);
+    if(config.storage==='file'&&config.adaptiveFormat==='file'){
+      const assistantClock=memoryTime?qualifiedMemoryClock(memoryTime):undefined;
+      // Marked runtime dispatch, control retention and retired-key expiry share
+      // the admitted upper bound; the initial config parse grants no authority.
+      const assistantKeys=assistantClock?parseAssistantTextKeys(env.STUDIO_ASSISTANT_TEXT_KEYS_JSON,assistantClock(),assistantClock):config.assistantTextKeys;
+      studio.deps.assistantText=new StudioAssistantTextIntegration(studio,{
+        enabled:()=>config.assistantTextEnabled&&env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1',keys:assistantKeys,
+        ...(assistantClock?{now:assistantClock}:{}),
+      });
+    }
+    if(config.storage==='file'&&config.adaptiveFormat==='file')studio.deps.memoryAccount=new StudioMemoryAccount(studio,memoryTime?{time:memoryTime,managerToken:()=>{const current=process.env.VOXX_BOT_TOKEN??'';return current===config.token?current:'';}}:{});
     studio.deps.maintenanceHealth = () => readMaintenanceHealth(storage.maintenanceStorage);
     if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
       storage.adaptive!.repository.storage, storage.maintenanceStorage, {

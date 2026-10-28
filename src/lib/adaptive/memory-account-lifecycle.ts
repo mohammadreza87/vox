@@ -98,10 +98,11 @@ export function runWithMemoryAccountWork<T>(work: MemoryAccountWork, fn: () => T
   memoryAccountWorkDetails(work);
   return registry().context.run(work, fn);
 }
-export function assertMemoryAccountSource(lifecycle: MemoryLifecycle, dateSeconds: number | undefined, now: number): void {
-  integer.parse(now);
+export function assertMemoryAccountSource(lifecycle: MemoryLifecycle, dateSeconds: number | undefined, now: number, utcLowerMs = now): void {
+  integer.parse(now); integer.parse(utcLowerMs);
+  if (utcLowerMs > now) throw new Error('Memory account interval unavailable');
   if (dateSeconds === undefined) return;
   positive.parse(dateSeconds);
   const originalMs = dateSeconds * 1000;
-  if (!Number.isSafeInteger(originalMs) || originalMs > now + 2000 || lifecycle.mode === 'fresh-confirmed' && originalMs <= lifecycle.sourceCutoffMs) throw new Error('Memory account source refused');
+  if (!Number.isSafeInteger(originalMs) || originalMs > utcLowerMs + 2000 || lifecycle.mode === 'fresh-confirmed' && originalMs <= lifecycle.sourceCutoffMs) throw new Error('Memory account source refused');
 }

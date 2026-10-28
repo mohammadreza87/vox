@@ -68,16 +68,33 @@ test('receipt-bound synthetic fixture registration is read-only and conveys no o
   assert.throws(()=>acquire(data));assert.throws(()=>ownerApi.fileRuntimeFs.writeFileSync(join(data,'forbidden.json'),'FORBIDDEN'));
   assert.deepEqual(snapshot(parent),before);
 }));
+test('receipt-bound maintenance-holder provenance registers read-only without adopting the forensic holder or granting FILE authority',()=>contenderFixture(({parent,data,artifact,holder,guardPath,receiptPath})=>{
+  // This is a negative/reader forensic record, not a genuine owner or native
+  // process proof. The separate-process MI1 suite covers a real held owner.
+  writeFileSync(guardPath,JSON.stringify({...holder,role:'maintenance'})+'\n',{mode:0o600});
+  const before=snapshot(parent),identity=path=>{const v=lstatSync(path,{bigint:true});return [String(v.dev),String(v.ino),String(v.birthtimeNs),String(v.size),String(v.mtimeNs),String(v.ctimeNs)];},
+    identities=[parent,data,guardPath,receiptPath].map(identity);
+  ownerApi.registerFileRuntimeFixture({dataRoot:data,artifactRoot:artifact,release});
+  ownerApi.assertFileRuntimeFixture(data);assert.equal(ownerApi.inspectFileRuntimeOwner(data).record.role,'maintenance');
+  assert.deepEqual(ownerApi.resolveFileRuntimeRelease(data),release);
+  assert.throws(()=>acquire(data));
+  assert.throws(()=>ownerApi.acquireFileRuntimeOwner({dataRoot:data,release,role:'maintenance'}));
+  assert.throws(()=>ownerApi.acquireFileRuntimeOwner({dataRoot:data,release,role:'maintenance',authorization:{}}));
+  assert.throws(()=>ownerApi.assertFileRuntimePath(data));
+  assert.throws(()=>ownerApi.fileRuntimeFs.readFileSync(join(data,'adaptive',markerName)));
+  assert.throws(()=>ownerApi.fileRuntimeFs.writeFileSync(join(data,'forbidden.json'),'FORBIDDEN'));
+  assert.throws(()=>ownerApi.prepareFileRuntimeTransient(join(data,'forbidden.tmp')));
+  assert.deepEqual(snapshot(parent),before);assert.deepEqual([parent,data,guardPath,receiptPath].map(identity),identities);
+}));
 test('receipt-bound synthetic fixture cannot rebind an owner already registered in this process',()=>contenderFixture(({parent,data,artifact,guardPath})=>{
   unlinkSync(guardPath);const owner=install(data),before=snapshot(parent);
   assert.throws(()=>ownerApi.registerFileRuntimeFixture({dataRoot:data,artifactRoot:artifact,release}));owner.assertCurrent();assert.deepEqual(snapshot(parent),before);owner.beginDrain();
 }));
-for(const damage of ['no-receipt','partial-guard','corrupt-guard','wrong-release','maintenance-holder','wrong-root-identity','wrong-artifact-identity','wrong-source-build','corrupt-marker','guard-link'])test(`receipt-bound synthetic fixture rejects ${damage} without adopting or changing the holder`,()=>contenderFixture(({parent,data,artifact,receipt,holder,receiptPath,guardPath})=>{
+for(const damage of ['no-receipt','partial-guard','corrupt-guard','wrong-release','wrong-root-identity','wrong-artifact-identity','wrong-source-build','corrupt-marker','guard-link'])test(`receipt-bound synthetic fixture rejects ${damage} without adopting or changing the holder`,()=>contenderFixture(({parent,data,artifact,receipt,holder,receiptPath,guardPath})=>{
   if(damage==='no-receipt')unlinkSync(receiptPath);
   if(damage==='partial-guard')writeFileSync(guardPath,'{');
   if(damage==='corrupt-guard')writeFileSync(guardPath,JSON.stringify({...holder,extra:'FORBIDDEN'}));
   if(damage==='wrong-release')writeFileSync(guardPath,JSON.stringify({...holder,release:{...release,buildId:'other-synthetic-build'}}));
-  if(damage==='maintenance-holder')writeFileSync(guardPath,JSON.stringify({...holder,role:'maintenance'}));
   if(damage==='wrong-root-identity')writeFileSync(receiptPath,JSON.stringify({...receipt,rootIdentity:{...receipt.rootIdentity,ino:'0'}}));
   if(damage==='wrong-artifact-identity')writeFileSync(receiptPath,JSON.stringify({...receipt,artifactIdentity:{...receipt.artifactIdentity,ino:'0'}}));
   if(damage==='wrong-source-build')writeFileSync(join(receipt.sourceRoot,'.next','BUILD_ID'),'other-build');

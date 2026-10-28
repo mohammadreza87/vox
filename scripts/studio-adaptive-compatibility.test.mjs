@@ -1,3 +1,4 @@
+import {unitManagedDescriptor,unitFixturePrelude,writeUnitFixtureEpoch} from './fixtures/studio-cli-unit-fixture.mjs';
 import assert from 'node:assert/strict';
 import './pet-storage-admission.test.mjs';
 import Database from 'better-sqlite3';
@@ -19,6 +20,7 @@ const ready = version => ({ version, state: 'ready', rootId: uuid, format: 'sqli
 function fixture(run) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'vox-release-pause-')));
   const env = { STUDIO_DATA_DIR: join(dir, 'data'), STUDIO_ADAPTIVE_FORMAT: 'sqlite-v1' };
+  mkdirSync(env.STUDIO_DATA_DIR,{mode:0o700});
   const managed = join(env.STUDIO_DATA_DIR, 'adaptive.managed');
   mkdirSync(managed, { recursive: true });
   const marker = join(managed, 'format.json');
@@ -198,7 +200,7 @@ function cliFixture(run) {
   fixture(f => {
     const source = fileURLToPath(new URL('.', import.meta.url));
     const project = join(f.dir, 'source'); mkdirSync(join(project, 'scripts'), { recursive: true });
-    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs', 'studio-file-runtime-owner.mjs']) cpSync(join(source, name), join(project, 'scripts', name));
+    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs', 'studio-file-runtime-owner.mjs', 'studio-memory-account-operation.mjs', 'studio-memory-account-time.mjs']) cpSync(join(source, name), join(project, 'scripts', name));
     mkdirSync(join(project, 'scripts', 'native'));
     cpSync(join(source, 'native', 'studio-process-metadata-darwin.c'), join(project, 'scripts', 'native', 'studio-process-metadata-darwin.c'));
     writeFileSync(join(project, '.gitignore'), '.next/\nnode_modules/\n');
@@ -208,13 +210,13 @@ function cliFixture(run) {
     mkdirSync(join(project, '.next', 'standalone', '.next'), { recursive: true });
     writeFileSync(join(project, '.next', 'standalone', 'server.js'), 'throw new Error("must not start");\n');
     for (const dir of [join(project, '.next'), join(project, '.next', 'standalone', '.next')]) writeFileSync(join(dir, 'BUILD_ID'), 'synthetic-build');
-    const runtimeProcessMetadata = syntheticNativeDescriptor(project);
-    writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), buildId: 'synthetic-build', syntheticOnly: true, runtimeProcessMetadata }));
-    const production = join(f.dir, 'production'), bin = join(f.dir, 'bin'); mkdirSync(production, { mode: 0o700 }); mkdirSync(bin);
+    const runtimeProcessMetadata = syntheticNativeDescriptor(project),memoryAccountManagedRuntime=unitManagedDescriptor(project);
+    writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), buildId: 'synthetic-build', syntheticOnly: true, runtimeProcessMetadata,memoryAccountManagedRuntime }));
+    const production = join(f.dir, 'base'), bin = join(f.dir, 'bin'); mkdirSync(production, { mode: 0o700 }); mkdirSync(bin);
     const signal = join(f.dir, 'unexpected-effect');
     writeFileSync(join(bin, 'launchctl'), `#!/bin/sh\nprintf called >> '${signal}'\nexit 1\n`, { mode: 0o700 });
-    const guard = join(f.dir, 'network-guard.mjs');
-    writeFileSync(guard, `import{appendFileSync}from'node:fs';import cp from'node:child_process';import{syncBuiltinESMExports}from'node:module';const deny=()=>{appendFileSync(${JSON.stringify(signal)},'effect');throw new Error('synthetic effect denied')};const original=cp.spawnSync;cp.spawnSync=(command,args,options)=>command==='git'?original(command,args,options):deny();cp.spawn=deny;globalThis.fetch=async()=>deny();syncBuiltinESMExports();`);
+    const guard = join(f.dir, 'mi1-fixture-preload-v1.mjs');
+    writeUnitFixtureEpoch({parent:f.dir,release:releaseMetadata,helpersDirectory:join(project,'scripts'),preloadText:unitFixturePrelude({parent:f.dir,ownerPath:join(project,'scripts','studio-file-runtime-owner.mjs'),selectorText:`VOX_MANAGED_STORAGE_V1:${uuid}\n`})+`import{appendFileSync}from'node:fs';import cp from'node:child_process';import{syncBuiltinESMExports}from'node:module';const deny=()=>{appendFileSync(${JSON.stringify(signal)},'effect');throw new Error('synthetic effect denied')};const original=cp.spawnSync;cp.spawnSync=(command,args,options)=>command==='git'?original(command,args,options):deny();cp.spawn=deny;globalThis.fetch=async()=>deny();syncBuiltinESMExports();`});
     writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='sqlite-v1'\n`, { mode: 0o600 });
     f.setMarker(ready(2));
     const setRelease = (dir, capabilities = {}) => {

@@ -3003,6 +3003,16 @@
         "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
       ],
       "note": "Independent architecture, privacy and technical review accepted the bounded MI1 design for documentation publication. Contract SHA256 fd0edb349ef06981345c95d6038d3fac59c273054c5da794be6166662f53f96f; initial review gaps and corrections remain in external MI1 evidence. Fixed documentation validation and hosted merge gates are recorded separately. This is not runtime implementation, qualified UTC/provider behavior, first marking, migration, physical erasure, activation or a production reinstall. Next: implement and qualify the integrated managed operation and runtime consumers under this contract; AM-05/AM-12 remain in progress."
+    },
+    {
+      "id": "AM-ER1-MANAGED-INIT-RUNTIME-01",
+      "status": "in_progress",
+      "baseline": "97dfcaee3aae24dbbe02cb9d6c080511796c2cde",
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MANAGED_INITIALIZATION.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "note": "Integrated managed initialization/resume remains in progress on draft PR140. Candidate ec5905a passed CI40638747792 (9079 tests/15 skips, compiled owner and55 browser cases) and genuine V5 artifact qualification. Corrected synthetic one-account setup, migration, preservation and restart passed once and was independently accepted (0bdeb721); earlier failures remain retained. Source inspection found that PID/supervisor observations cannot prove complete launch history. The independently reviewed current-process census addendum preserves ABI1 and product authority; its five-file source/test change passed seven focused checks with133 portable tests and13 native skips (f327e1cf). Actual native observation, selector/consumer qualification, crash/stall, killed ATI-owner unknown recovery and retention remain open; historical total attempts remain UNAVAILABLE under the separately named successor accounting scope. New source requires a genuine new artifact and hosted gates. Production remains separately accepted ae1236f/VQF, metadata reconfirmed28October07:41UTC; no merge, installation, first marking, provider experiment, keys/enrollment, migration or physical erasure is claimed. External MI1_RUNTIME_ACTIVE_DELIVERY and exact run receipts retain all candidate/evidence boundaries; AM-05/AM-12 continue."
     }
   ]
 }

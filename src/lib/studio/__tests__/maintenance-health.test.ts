@@ -48,7 +48,7 @@ it('duplicate authority, unsupported committed store, invalid health and aborted
   h.studio.deps.maintenanceHealth = () => unconfiguredMaintenanceHealth();
   const controller = new AbortController(); controller.abort(); expect((await call(ID.superadmin, undefined, 'operations', controller.signal)).status).toBe(409);
   await h.store.update(s => { s.members.push({ ...s.members.find(m => m.telegramId === ID.superadmin)! }); }); expect((await call()).status).toBe(403);
-  h.studio.deps.store = { ...h.store, readCommittedForEffect: undefined } as typeof h.store; expect((await call()).status).toBe(503);
+  h.studio.deps.store = { ...h.store, readCommittedForEffect: undefined } as unknown as typeof h.store; expect((await call()).status).toBe(503);
 });
 it('unsigned requests and global-health query variants do not reach observer', async () => { const { h, call } = await fixture(); expect((await call(ID.superadmin, '')).status).toBe(401); expect((await call(ID.superadmin, undefined, 'operations?space=personal')).status).toBe(400); expect(h.studio.deps.maintenanceHealth).not.toHaveBeenCalled(); });
 

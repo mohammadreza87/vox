@@ -27,10 +27,19 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedAssistantDeliveryControlVersions: Object.freeze([1,2]),
   supportedFileRuntimeOwnerVersions: Object.freeze([1]),
   supportedMemoryAccountLifecycleVersions: Object.freeze([1]),
+  supportedMemoryAccountManagedRuntimeVersions: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
   supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
 });
+/** Managed-only partial scanning reuses the actual canonical validator. */
+export function assertManagedMemoryAccountCanonical(doc,key,{marked,allowLegacy}={}) {
+  const required={canonicalSchemaVersion:1,controlsSchemaVersion:1};
+  if(marked&&Object.hasOwn(doc??{},'memoryLifecycle'))required.memoryAccountLifecycleVersion=1;
+  if(marked&&!allowLegacy&&!Object.hasOwn(doc??{},'memoryLifecycle'))fail();
+  if(doc?.kind==='memory-account-erasing')fail(); // Physical ER1 cleanup remains unavailable.
+  scanCanonical(doc,key,1,required);
+}
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, expected) => object(value) && Object.keys(value).length === expected.length && expected.every(key => Object.hasOwn(value, key));
@@ -672,6 +681,7 @@ function scanAdaptive(env, required, budget) {
           priorMemoryAccount && time.highWaterMs < priorMemoryAccount.highWaterMs) fail();
       memoryAccountRoots().set(rootKey,{highWaterMs:time.highWaterMs});
       required.memoryAccountLifecycleVersion = 1;
+      required.memoryAccountManagedRuntimeVersion = 1;
     }
     if(names.includes(FILE_RUNTIME_OWNER_MARKER)&&!markerInfo)fail();
     if(names.includes(ARC_MARKER)){if(readBounded(join(root,ARC_MARKER),128,budget)!==ARC_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=1;}
@@ -1119,6 +1129,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedAssistantDeliveryControlVersions', 'assistantDeliveryControlVersion', [1,2]],
     ['supportedFileRuntimeOwnerVersions', 'fileRuntimeOwnerVersion', [1]],
     ['supportedMemoryAccountLifecycleVersions', 'memoryAccountLifecycleVersion', [1]],
+    ['supportedMemoryAccountManagedRuntimeVersions', 'memoryAccountManagedRuntimeVersion', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
     ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],

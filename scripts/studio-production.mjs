@@ -4,21 +4,77 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, 
   constants, openSync, closeSync, readSync, lstatSync, fstatSync, fsyncSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath,pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { assertReleaseAdaptiveCompatibility, readInstalledReleaseManifest } from './studio-adaptive-compatibility.mjs';
 import { assertCurrent, assertIdentifiedRuntime, assertReleaseDirectory, guardedBackup, parseExpected, readControlText, readCurrent, readRelease, releaseDirectoryIdentity, transitionRelease, withOperation } from './studio-operation-guard.mjs';
 import { FILE_RUNTIME_OWNER_GUARD, FILE_RUNTIME_OWNER_MARKER, inspectFileRuntimeOwner, acquireFileRuntimeOwner,
-  createMaintenanceAuthorization, retireStoppedFileRuntimeOwner, releaseMaintenanceFileRuntimeOwner } from './studio-file-runtime-owner.mjs';
+  createMaintenanceAuthorization, retireStoppedFileRuntimeOwner, releaseMaintenanceFileRuntimeOwner,inspectFileRuntimeOperationGuard,fileRuntimeFixtureSupervisor,
+  assertFileRuntimeFixture,fileRuntimeFixtureProvenance } from './studio-file-runtime-owner.mjs';
+import { MEMORY_ACCOUNT_MANAGED_HELPERS,assertNoPendingMemoryAccountOperation,readManagedMemoryAccountOperationRecord,readManagedMemoryAccountArtifact,
+  prepareManagedMemoryAccountPreflight,acquireManagedMemoryAccountOperationGuard,prepareManagedMemoryAccountJournal,assertManagedMemoryAccountExpiryDue,
+  createManagedMemoryAccountOperation,markManagedMemoryAccountStarting,finalizeManagedMemoryAccountOperation,assertManagedMemoryAccountStartup,
+  cancelManagedMemoryAccountOperation,expireManagedMemoryAccountOperation,registerSyntheticManagedMemoryAccountQualification,
+  recoverManagedMemoryAccountController,reconcileManagedMemoryAccountJournal,reconcileRunningManagedMemoryAccountOperation,
+  registerManagedMemoryAccountDeadlineAbort,managedMemoryAccountDeadlineExpired,managedMemoryAccountCleanupOnly,holdManagedMemoryAccountOperation,verifyManagedMemoryAccountOperationalHealth } from './studio-memory-account-operation.mjs';
+import { acquireQualifiedMemoryPreflightTime,acquireQualifiedMemoryTime } from './studio-memory-account-time.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 let base = process.env.VOX_PRODUCTION_DIR ?? join(homedir(), 'Library', 'Application Support', 'Vox Studio');
 let envFile = join(base, 'production.env');
-const label = 'io.ludaxis.vox-studio';
+let label = 'io.ludaxis.vox-studio';
 const domain = `gui/${process.getuid()}`;
-const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+let plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`),listenPort=3107,fixtureTopology=null,topologyBinding=null;
+function selectProductionTopology(){
+  const canonicalBase=realpathSync(base),env=config(),canonicalRoot=realpathSync(env.STUDIO_DATA_DIR);
+  const binding={base:canonicalBase,dataRoot:canonicalRoot,baseIdentity:identity(info(canonicalBase)),rootIdentity:identity(info(canonicalRoot)),configuration:metadataFile(envFile,65536)};
+  if(topologyBinding&&!same(binding,topologyBinding))closed('supervisor_topology_rebind_refused');
+  if(fixtureTopology){const actual=fileRuntimeFixtureSupervisor(canonicalRoot);if(!same(actual,fixtureTopology)||canonicalBase!==actual.base)closed('fixture_topology_changed');return fixtureTopology;}
+  if(/^\/(?:private\/)?tmp(?:\/|$)/.test(canonicalBase)||/^\/(?:private\/)?tmp(?:\/|$)/.test(canonicalRoot)){
+    const actual=fileRuntimeFixtureSupervisor(canonicalRoot);if(canonicalBase!==actual.base||process.env.NODE_OPTIONS||!same(process.execArgv,['--import',actual.preload]))closed('fixture_preload_binding_unavailable');
+    fixtureTopology=actual;label=actual.label;plist=actual.plist;listenPort=actual.port;base=actual.base;envFile=join(base,'production.env');
+  }
+  topologyBinding??=binding;
+  return fixtureTopology;
+}
+function assertProductionTopology(){const selected=selectProductionTopology();if(selected&&(process.env.NODE_OPTIONS||!same(process.execArgv,['--import',selected.preload])))closed('fixture_preload_binding_unavailable');return selected;}
+export function managedMemoryAccountHealthUrl(){assertProductionTopology();return `http://127.0.0.1:${listenPort}/api/studio/health`;}
+export function configureManagedMemoryAccountTopology(){return assertProductionTopology();}
+export function qualifyManagedFixtureSupervisorPreflight(){
+  if(!assertProductionTopology())return;
+  const current=readCurrent(base),env=config(),pid=supervisorPid();
+  const result=spawnSync('/usr/sbin/lsof',['-nP',`-iTCP:${listenPort}`,'-sTCP:LISTEN','-t'],{env:{},encoding:'utf8',timeout:2000,maxBuffer:4096,stdio:['ignore','pipe','ignore']});
+  if(result.error||result.signal||![0,1].includes(result.status))closed('fixture_listener_unavailable');
+  if(pid===null){if(result.status!==1||result.stdout!=='')closed('fixture_foreign_listener');return;}
+  if(current.absent||!loadedLaunchBinding(base))closed('fixture_runtime_binding');
+  const receipt=readRuntimeProcessReceipt(base),owner=inspectFileRuntimeOwner(env.STUDIO_DATA_DIR);
+  if(!receipt||receipt.value.phase!=='running'||receipt.value.wrapperPid!==pid||!ownerMatchesReceipt(owner,receipt)||!same(receipt.value.release,tuple(current.release))||!same(receipt.value.artifactIdentity,current.release.identity)||!same(receipt.value.rootIdentity,privateMetadataBase(env.STUDIO_DATA_DIR)))closed('fixture_runtime_binding');
+  const rows=captureRuntimeProcessTree({base,release:current.release,wrapperPid:pid,childPid:receipt.value.childPid,nativeQuery:pid=>nativeProcessQuery(metadataArtifactDirectory(),pid)});
+  if(!rows.some(row=>row.pid===receipt.value.childPid)||result.status!==0||result.stdout!==`${receipt.value.childPid}\n`)closed('fixture_foreign_listener');
+}
+function runtimeArguments(basePath,executable){return fixtureTopology?[executable,'--import',fixtureTopology.preload,join(basePath,'current','studio-runtime.mjs'),'run']:[executable,join(basePath,'current','studio-runtime.mjs'),'run'];}
+function fixtureEnvironment(env){
+  const t=assertProductionTopology();if(!t)return {...process.env,...env};
+  const allowed=new Set(['NODE_ENV','STUDIO_STORAGE','STUDIO_PUBLIC_URL','STUDIO_ONLY','STUDIO_DATA_DIR','STUDIO_ADAPTIVE_FORMAT','STUDIO_BOTS','STUDIO_SECRET','VOXX_BOT_TOKEN','VOXX_BOT_USERNAME','STUDIO_SUPERADMIN_IDS','STUDIO_WEBAPP_URL','STUDIO_ORG_NAME','STUDIO_MAINTENANCE','STUDIO_PET_DISABLED','STUDIO_ASSISTANT_TEXT_DELIVERY','STUDIO_ASSISTANT_TEXT_KEYS_JSON','STUDIO_ADAPTIVE_POLICY_JSON','STUDIO_SCOPED_RELATIONSHIPS','STUDIO_RELATIONSHIPS','ANTHROPIC_API_KEY']);
+  if(Object.keys(env).some(k=>!allowed.has(k))||!['0','1'].includes(env.STUDIO_BOTS)||env.STUDIO_MAINTENANCE&&env.STUDIO_MAINTENANCE!=='0')closed('fixture_environment_unqualified');
+  if(env.NODE_ENV!=='production'||env.STUDIO_STORAGE!=='file'||env.STUDIO_PUBLIC_URL!==''||env.STUDIO_ONLY!=='1')closed('fixture_environment_unqualified');
+  const hex=name=>hash(`mi1-synthetic-${name}:${t.fixtureId}`),fixed={STUDIO_SECRET:hex('secret'),VOXX_BOT_TOKEN:`900000000:${hex('manager').slice(0,32)}`,VOXX_BOT_USERNAME:`mi1_${t.fixtureId.replaceAll('-','').slice(0,20)}_bot`,STUDIO_SUPERADMIN_IDS:'900000002',STUDIO_WEBAPP_URL:'https://mi1.invalid/studio',ANTHROPIC_API_KEY:'mi1-synthetic-no-provider-credential'};
+  for(const [name,value]of Object.entries(fixed))if(env[name]!==undefined&&env[name]!==value)closed('fixture_credential_unqualified');
+  const keyId=`mi1-synthetic-${t.fixtureId}`,keyBase64=createHash('sha256').update(`mi1-synthetic-wire:${t.fixtureId}`).digest('base64'),keys=JSON.stringify({currentKeyId:keyId,keys:[{keyId,keyBase64}]});
+  if(env.STUDIO_ASSISTANT_TEXT_KEYS_JSON!==undefined&&env.STUDIO_ASSISTANT_TEXT_KEYS_JSON!==keys||env.STUDIO_ASSISTANT_TEXT_DELIVERY!==undefined&&!['0','1'].includes(env.STUDIO_ASSISTANT_TEXT_DELIVERY)||env.STUDIO_ASSISTANT_TEXT_DELIVERY==='1'&&(env.STUDIO_BOTS!=='1'||env.STUDIO_ASSISTANT_TEXT_KEYS_JSON!==keys))closed('fixture_ati_unqualified');
+  if(env.STUDIO_SCOPED_RELATIONSHIPS!==undefined&&!['0','1'].includes(env.STUDIO_SCOPED_RELATIONSHIPS)||env.STUDIO_RELATIONSHIPS!==undefined&&env.STUDIO_RELATIONSHIPS!=='off')closed('fixture_relationship_unqualified');
+  if(env.STUDIO_ADAPTIVE_POLICY_JSON!==undefined){
+    const raw=env.STUDIO_ADAPTIVE_POLICY_JSON;if(Buffer.byteLength(raw)>4096)closed('fixture_policy_unqualified');let parsed;try{parsed=JSON.parse(raw);}catch{closed('fixture_policy_unqualified');}
+    const t0=parsed?.approvals?.[0]?.effectiveAt;if(!uint(t0)||!uint(t0+3600000))closed('fixture_policy_unqualified');
+    const version=`mi1-synthetic-${t.fixtureId}`,three=same(parsed?.enabledCapabilities,['core_text','personalization','auto_memory']),capabilities=three?['core_text','personalization','auto_memory']:['core_text'];
+    if(three&&env.STUDIO_SCOPED_RELATIONSHIPS!=='1')closed('fixture_policy_unqualified');
+    const policy={schemaVersion:1,configurationVersion:version,enabledCapabilities:capabilities,accounts:[{accountId:'telegram-account:900000002',jurisdictionKeys:['SYNTHETIC'],allowDeclaredAdult:true}],approvals:capabilities.map(capability=>({schemaVersion:1,id:`mi1-synthetic-${capability==='core_text'?'core':capability}-${t.fixtureId}`,revision:1,createdAt:t0,updatedAt:t0,jurisdiction:'SYNTHETIC',capability,state:'approved',configurationVersion:version,effectiveAt:t0,reviewExpiresAt:t0+3600000,owner:'synthetic-fixture-only',approvalReference:'mi1-unverified-synthetic-prerequisite'}))};
+    if(raw!==JSON.stringify(policy))closed('fixture_policy_unqualified');
+  }
+  return {PATH:dirname(process.execPath),HOME:t.parent,TMPDIR:t.parent,LANG:'C',NODE_ENV:'production',NEXT_TELEMETRY_DISABLED:'1',VOX_PRODUCTION_DIR:t.base,...env,ANTHROPIC_API_KEY:'mi1-synthetic-no-provider-credential'};
+}
 const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_TTS_MODEL', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL', 'STUDIO_GROUP_OBSERVATION',
   'OPENAI_IMAGE_MODEL', 'OPENAI_STT_MODEL', 'STUDIO_WEB_SEARCH', 'STUDIO_DECISIONS_ENABLED', 'STUDIO_SKILL_ROUTING',
   'STUDIO_RELATIONSHIPS', 'STUDIO_RELATIONSHIP_ROLES', 'STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_PEOPLE', 'STUDIO_RELATIONSHIP_WORKER_SECRET',
@@ -37,13 +93,13 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const uint = n => Number.isSafeInteger(n) && n >= 0 && !Object.is(n, -0);
 const positive = n => uint(n) && n > 0;
 const pidNumber = n => positive(n) && n <= 2147483647;
-const uint64 = s => typeof s === 'string' && /^(0|[1-9]\d{0,19})$/.test(s) && BigInt(s) <= 18446744073709551615n;
-const digest = s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
+const uint64 = s => typeof s === 'string' && /^(0|[1-9]\d{0,19})(?![\s\S])/.test(s) && BigInt(s) <= 18446744073709551615n;
+const digest = s => typeof s === 'string' && /^[a-f0-9]{64}(?![\s\S])/.test(s);
 const identity = info => ({ dev: String(info.dev), ino: String(info.ino), birth: String(info.birthtimeNs) });
 const info = path => lstatSync(path, { bigint: true, throwIfNoEntry: false });
 const closed = reason => { throw new Error(`Studio runtime lifecycle unavailable: ${reason}`); };
 const exact = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) && same(Object.keys(value).sort(), [...fields].sort());
-const pathIdentity = value => exact(value, ['dev','ino','birth']) && Object.values(value).every(v => typeof v === 'string' && /^\d+$/.test(v));
+const pathIdentity = value => exact(value, ['dev','ino','birth']) && Object.values(value).every(v => typeof v === 'string' && /^\d+(?![\s\S])/.test(v));
 const releaseIdentity = value => exact(value, ['revision','sourceTree','buildId']) && /^[a-f0-9]{40}$/.test(value.revision) && /^[a-f0-9]{40}$/.test(value.sourceTree) &&
   typeof value.buildId === 'string' && value.buildId.length > 0 && value.buildId.length <= 200 && value.buildId.trim() === value.buildId && !/[\x00-\x1f\x7f]/.test(value.buildId);
 const tuple = release => ({ revision: release.revision, sourceTree: release.sourceTree, buildId: release.buildId });
@@ -225,6 +281,99 @@ export function nativeProcessQuery(artifactRoot, pid,timeout=2000) {
   // separate group. Only self-query removes that exact spawnSync child PID.
   return normalizeProcessObserver(parsed,pid,result.pid);
 }
+
+/** Current synthetic process observation only; never ownership or launch history. */
+export function parseCurrentFixtureCensusDescriptor(value,binarySha256) {
+  if(!digest(binarySha256)||!exact(value,['version','selectorVersion','metadataBinarySha256'])||value.version!==1||value.selectorVersion!==1||value.metadataBinarySha256!==binarySha256)closed('invalid_current_census_descriptor');
+  return {...value};
+}
+export function parseCurrentFixtureCensus(bytes,expected) {
+  try{
+    if(!exact(expected,['uid','baseDevice','baseInode','artifactDevice','artifactInode'])||!uint(expected.uid)||expected.uid>4294967295||
+      !['baseDevice','baseInode','artifactDevice','artifactInode'].every(k=>uint64(expected[k]))||expected.baseInode==='0'||expected.artifactInode==='0'||
+      expected.baseDevice===expected.artifactDevice&&expected.baseInode===expected.artifactInode)closed('invalid_current_census_expected');
+    if(typeof bytes!=='string'&&!Buffer.isBuffer(bytes)&&!(bytes instanceof Uint8Array))closed('invalid_current_census');
+    const raw=typeof bytes==='string'?Buffer.from(bytes):Buffer.from(bytes),text=new TextDecoder('utf-8',{fatal:true}).decode(raw);
+    if(raw.length>16384||!Buffer.from(text).equals(raw))closed('invalid_current_census');
+    const value=JSON.parse(text);
+    if(text!==JSON.stringify(value)+'\n'||value?.version!==1)closed('invalid_current_census');
+    if(['invalid','unavailable','changed','overflow'].includes(value.status)){
+      if(!exact(value,['version','status']))closed('invalid_current_census');
+      return value;
+    }
+    if(!exact(value,['version','status','uid','baseDevice','baseInode','artifactDevice','artifactInode','matches'])||value.status!=='complete'||
+      !Object.keys(expected).every(k=>value[k]===expected[k])||!Array.isArray(value.matches)||value.matches.length>16)closed('invalid_current_census');
+    let prior=0;
+    for(const row of value.matches){
+      const t=row?.identity;
+      if(!exact(row,['identity','cwd'])||!['base','artifact'].includes(row.cwd)||!Array.isArray(t)||t.length!==7||!pidNumber(t[0])||t[0]<=prior||
+        !uint(t[1])||t[1]>2147483647||t[2]!==expected.uid||!pidNumber(t[3])||!t.slice(4).every(uint64)||t[4]==='0'||t[5]==='0'||BigInt(t[6])>=1000000n)closed('invalid_current_census');
+      prior=t[0];
+    }
+    return value;
+  }catch{closed('invalid_current_census');}
+}
+
+/** Metadata-only FRO fixture registration is required, not target-realm,
+ * managed-qualification, owner or clock registration. An outer coordinator can
+ * call this without importing a preload or evaluating an application target. */
+export function nativeCurrentFixtureCensus(artifactRoot,fixtureBinding,timeout=2000) {
+  if(!uint(timeout)||timeout<1||timeout>2000)closed('native_process_deadline_invalid');
+  if(process.platform!=='darwin'||process.arch!=='arm64')closed('native_process_adapter_unsupported');
+  const b=fixtureBinding;
+  if(!exact(b,['version','fixtureId','fixtureReceiptDigest','fixtureReceiptIdentity','source','artifactManifestSha256','base','dataRoot','artifactIdentity','current','configuration','node'])||b.version!==1||
+    typeof b.fixtureId!=='string'||!/^([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})(?![\s\S])/.test(b.fixtureId)||
+    !digest(b.fixtureReceiptDigest)||!pathIdentity(b.fixtureReceiptIdentity)||!digest(b.artifactManifestSha256)||!pathIdentity(b.artifactIdentity)||
+    !exact(b.source,['root','revision','sourceTree','controllerSha256'])||!releaseIdentity({revision:b.source.revision,sourceTree:b.source.sourceTree,buildId:'census-source-binding'})||!digest(b.source.controllerSha256)||
+    ![b.base,b.dataRoot].every(row=>exact(row,['path','identity'])&&typeof row.path==='string'&&pathIdentity(row.identity))||
+    ![b.current,b.configuration].every(row=>exact(row,['digest','identity'])&&digest(row.digest)&&pathIdentity(row.identity))||
+    !exact(b.node,['path','bytes','sha256','identity'])||b.node.path!==process.execPath||!positive(b.node.bytes)||b.node.bytes>64*1024*1024||!digest(b.node.sha256)||!pathIdentity(b.node.identity))closed('invalid_current_census_binding');
+  // Refuse unknown/live paths through the existing provenance registry before
+  // reading caller-supplied source or fixture metadata. No registry root owner
+  // or current time capability is acquired by these assertions.
+  assertFileRuntimeFixture(b.dataRoot.path);
+  const topology=fileRuntimeFixtureSupervisor(b.dataRoot.path),provenance=fileRuntimeFixtureProvenance(b.dataRoot.path);
+  if(!/^\/private\/tmp\/vox-mi1-b-[A-Za-z0-9]{6}(?![\s\S])/.test(topology.parent)||topology.base!==b.base.path||topology.dataRoot!==b.dataRoot.path||
+    topology.artifact!==artifactRoot||b.fixtureId!==provenance.fixtureId||b.fixtureReceiptDigest!==provenance.receiptDigest||
+    topology.parent!==provenance.parent||dirname(artifactRoot)!==topology.parent)closed('current_census_fixture_mismatch');
+  function nodeSnapshot(){
+    if(realpathSync(b.node.path)!==b.node.path)closed('current_census_node_mismatch');
+    const s=info(b.node.path);
+    if(!s?.isFile()||s.isSymbolicLink()||s.nlink!==1n||(s.mode&0o022n)||!(s.mode&0o100n)||s.size!==BigInt(b.node.bytes)||!same(identity(s),b.node.identity))closed('current_census_node_mismatch');
+    const fd=openSync(b.node.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    try{
+      const opened=fstatSync(fd,{bigint:true}),raw=Buffer.alloc(b.node.bytes+1);let length=0,n;
+      do{n=readSync(fd,raw,length,raw.length-length,null);length+=n;}while(n&&length<raw.length);
+      const after=fstatSync(fd,{bigint:true}),named=info(b.node.path),stamp=v=>[identity(v),String(v.mode),String(v.nlink),String(v.size),String(v.ctimeNs),String(v.mtimeNs)];
+      if(!named||length!==b.node.bytes||hash(raw.subarray(0,length))!==b.node.sha256||![opened,after,named].every(v=>same(stamp(v),stamp(s))))closed('current_census_node_mismatch');
+      return stamp(after);
+    }finally{closeSync(fd);}
+  }
+  function snapshot(){
+    assertFileRuntimeFixture(b.dataRoot.path);
+    if(!same(fileRuntimeFixtureSupervisor(b.dataRoot.path),topology)||!same(fileRuntimeFixtureProvenance(b.dataRoot.path),provenance)||
+      !same(privateMetadataBase(b.base.path),b.base.identity)||!same(privateMetadataBase(b.dataRoot.path),b.dataRoot.identity)||
+      !same(privateMetadataBase(artifactRoot),b.artifactIdentity))closed('current_census_fixture_changed');
+    const receipt=metadataFile(join(topology.parent,'file-runtime-owner-fixture-v1.json'),4096),r=JSON.parse(receipt?.text??'null'),pinned=metadataArtifact(artifactRoot),m=pinned.manifest;
+    parseCurrentFixtureCensusDescriptor(m.runtimeCurrentProcessCensus,pinned.binaryHash);
+    if(!receipt||receipt.digest!==b.fixtureReceiptDigest||!same(receipt.identity,b.fixtureReceiptIdentity)||r.sourceRoot!==b.source.root||
+      pinned.manifestFile.digest!==b.artifactManifestSha256||m.revision!==b.source.revision||m.sourceTree!==b.source.sourceTree||
+      m.memoryAccountManagedRuntime?.helpers?.['studio-runtime.mjs']!==b.source.controllerSha256)closed('current_census_source_mismatch');
+    const source=metadataFile(join(b.source.root,'scripts','studio-production.mjs'),2*1024*1024,false),installed=metadataFile(join(artifactRoot,'studio-runtime.mjs'),2*1024*1024,false);
+    const current=readCurrent(b.base.path),configuration=metadataFile(join(b.base.path,'production.env'),65536);
+    if(source?.digest!==b.source.controllerSha256||installed?.digest!==b.source.controllerSha256||current.absent||current.release.path!==artifactRoot||
+      hash(JSON.stringify(current))!==b.current.digest||!same(current.identity,b.current.identity)||configuration?.digest!==b.configuration.digest||
+      !same(configuration.identity,b.configuration.identity)||parseEnv(configuration.text).STUDIO_DATA_DIR!==b.dataRoot.path)closed('current_census_state_changed');
+    return {pinned,source,installed,current,configuration,receipt,node:nodeSnapshot()};
+  }
+  const before=snapshot(),expected={uid:process.geteuid?.()??process.getuid(),baseDevice:b.base.identity.dev,baseInode:b.base.identity.ino,artifactDevice:b.artifactIdentity.dev,artifactInode:b.artifactIdentity.ino};
+  const args=['--current-fixture-census-v1',b.node.path,b.base.path,artifactRoot,expected.baseDevice,expected.baseInode,expected.artifactDevice,expected.artifactInode];
+  const result=spawnSync(before.pinned.path,args,{env:{},cwd:topology.parent,detached:true,shell:false,timeout,maxBuffer:16384,stdio:['ignore','pipe','pipe']});
+  if(result.error||result.signal||!Buffer.isBuffer(result.stderr)||result.stderr.length||!same(snapshot(),before))closed('current_census_query_unavailable');
+  const parsed=parseCurrentFixtureCensus(result.stdout,expected);
+  if(result.status!=={complete:0,unavailable:4,changed:5,invalid:64,overflow:6}[parsed.status])closed('current_census_query_unavailable');
+  return parsed;
+}
 export function normalizeProcessObserver(parsed,targetPid,observerPid,selfPid=process.pid){
   const value=parseProcessMetadata(JSON.stringify(parsed),targetPid);
   if(targetPid===selfPid&&value.status==='ok'){
@@ -243,16 +392,32 @@ export function parseLaunchdList(text, target = label) {
   return Number(matches[0][0]);
 }
 function supervisorPid() {
+  assertProductionTopology();
+  if(fixtureTopology){
+    const service=`${domain}/${label}`,r=spawnSync('/bin/launchctl',['print',service],{env:{},encoding:'utf8',timeout:2000,maxBuffer:65536,stdio:['ignore','pipe','pipe']});
+    if(r.error||r.signal)closed('fixture_supervisor_unavailable');
+    if(r.status!==0){if(r.status===113&&r.stdout===''&&Buffer.byteLength(r.stderr??'')<=2048&&r.stderr.includes(`Could not find service "${label}"`)&&r.stderr.includes(`gui: ${process.getuid()}`))return null;closed('fixture_supervisor_unavailable');}
+    return parseFixtureSupervisorPid(r.stdout,service);
+  }
   const r = spawnSync('/bin/launchctl', ['list'], { encoding:'utf8', timeout:2000, maxBuffer:65536, stdio:['ignore','pipe','ignore'] });
   if (r.status !== 0) closed('supervisor_metadata_unavailable');
   return parseLaunchdList(r.stdout);
+}
+export function parseFixtureSupervisorPid(text,service){
+  if(typeof text!=='string'||Buffer.byteLength(text)>65536||!/^gui\/[0-9]+\/io\.ludaxis\.vox-studio\.fixture\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}(?![\s\S])/.test(service))closed('fixture_supervisor_schema');
+  let depth=0,started=false,ended=false,pid=null;
+  for(const raw of text.split('\n')){const line=raw.trim();if(!line)continue;if(!started){if(line!==`${service} = {`)closed('fixture_supervisor_schema');started=true;depth=1;continue;}if(ended)closed('fixture_supervisor_schema');
+    if(depth===1&&line.startsWith('pid = ')){if(pid!==null||!/^pid = [1-9][0-9]*(?![\s\S])/.test(line))closed('fixture_supervisor_schema');pid=Number(line.slice(6));if(!pidNumber(pid))closed('fixture_supervisor_schema');}
+    if(line==='}'){if(--depth===0)ended=true;}else if(line.endsWith('= {'))depth++;
+  }
+  if(!started||!ended||depth!==0||pid===null)closed('fixture_supervisor_loaded_without_pid');return pid;
 }
 /** Known-label output only. Keep no environment/unrelated values or raw error
  * output. Duplicate, nested, shortened, or changed bindings fail closed. */
 export function parseLoadedLaunchdBinding(text,{service=`${domain}/${label}`,plistPath=plist,basePath,nodeExecutable=process.execPath,wrapperPid}){
   if(typeof text!=='string'||Buffer.byteLength(text)>65536||!pidNumber(wrapperPid)||!isAbsolute(basePath))closed('loaded_launch_binding_unavailable');
   const lines=text.split('\n');if(lines.length>4096)closed('loaded_launch_binding_unavailable');
-  const expectedArguments=[nodeExecutable,join(basePath,'current','studio-runtime.mjs'),'run'],found={},argumentsSeen=[];let depth=0,started=false,ended=false,argumentDepth=0;
+  const expectedArguments=runtimeArguments(basePath,nodeExecutable),found={},argumentsSeen=[];let depth=0,started=false,ended=false,argumentDepth=0;
   for(const raw of lines){
     const line=raw.trim();if(!line)continue;
     if(!started){if(line!==`${service} = {`)closed('loaded_launch_binding_unavailable');started=true;depth=1;continue;}
@@ -261,7 +426,7 @@ export function parseLoadedLaunchdBinding(text,{service=`${domain}/${label}`,pli
       if(argumentDepth===depth){if(!same(argumentsSeen,expectedArguments))closed('loaded_launch_arguments_mismatch');argumentDepth=0;found.arguments=true;}
       if(--depth===0)ended=true;continue;
     }
-    if(argumentDepth){if(depth!==argumentDepth||argumentsSeen.length>=3||line.includes('\0')||line.endsWith('= {'))closed('loaded_launch_arguments_mismatch');argumentsSeen.push(line);continue;}
+    if(argumentDepth){if(depth!==argumentDepth||argumentsSeen.length>=expectedArguments.length||line.includes('\0')||line.endsWith('= {'))closed('loaded_launch_arguments_mismatch');argumentsSeen.push(line);continue;}
     if(depth===1){
       if(line==='arguments = {'){if(found.arguments||argumentsSeen.length)closed('loaded_launch_duplicate');argumentDepth=++depth;continue;}
       for(const [key,expected] of [['path',plistPath],['program',nodeExecutable],['pid',String(wrapperPid)]]){
@@ -274,6 +439,7 @@ export function parseLoadedLaunchdBinding(text,{service=`${domain}/${label}`,pli
   return {pathMatches:true,programMatches:true,argumentsMatch:true,pidMatches:true};
 }
 function loadedLaunchBinding(basePath){
+  assertProductionTopology();
   if(metadataFile(plist,16384)?.text!==launchAgentContents(basePath,process.execPath))closed('launch_plist_binding_mismatch');
   const pid=supervisorPid();if(pid===null)closed('loaded_launch_binding_unavailable');
   const r=spawnSync('/bin/launchctl',['print',`${domain}/${label}`],{env:{},encoding:'utf8',timeout:2000,maxBuffer:65536,stdio:['ignore','pipe','ignore']});
@@ -355,7 +521,8 @@ function privateDir(path) {
 }
 function config() {
   if (!existsSync(envFile)) throw new Error('Run prepare first, then fill in production.env.');
-  return { ...readEnv(envFile), NODE_ENV: 'production', STUDIO_STORAGE: 'file', STUDIO_PUBLIC_URL: '', STUDIO_ONLY: '1', STUDIO_BOTS: '1' };
+  const values=readEnv(envFile),temporary=fixtureTopology||/^\/(?:private\/)?tmp(?:\/|$)/.test(realpathSync(base));
+  return { ...values, NODE_ENV: 'production', STUDIO_STORAGE: 'file', STUDIO_PUBLIC_URL: '', STUDIO_ONLY: '1', STUDIO_BOTS: temporary?values.STUDIO_BOTS:'1' };
 }
 function prepare() {
   privateDir(base);
@@ -381,6 +548,7 @@ function prepare() {
 }
 async function check() {
   const env = config();
+  if(fixtureTopology)fixtureEnvironment(env);
   const missing = ['STUDIO_SECRET', 'VOXX_BOT_TOKEN', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'ANTHROPIC_API_KEY'].filter(k => !env[k]);
   if (missing.length) throw new Error(`Missing production configuration: ${missing.join(', ')}`);
   if (env.STUDIO_SECRET.length < 32) throw new Error('STUDIO_SECRET must have at least 32 characters.');
@@ -449,17 +617,20 @@ async function check() {
   console.log(`Preflight passed for @${bot.result.username} at ${url.origin}/studio.`);
   return env;
 }
-function running() { return spawnSync('/bin/launchctl', ['print', `${domain}/${label}`], { timeout:2000,stdio:'ignore' }).status === 0; }
+function running() { assertProductionTopology();return fixtureTopology?supervisorPid()!==null:spawnSync('/bin/launchctl', ['print', `${domain}/${label}`], { timeout:2000,stdio:'ignore' }).status === 0; }
 function bootout() {
+  assertProductionTopology();
   const result=spawnSync('/bin/launchctl',['bootout',`${domain}/${label}`],{timeout:10000,stdio:'ignore'});
   if (result.status!==0) closed('supervisor_stop_failed');
 }
 function listenerClosed() {
+  assertProductionTopology();
   // PIDs only; never print socket owners, command lines, paths, or environments.
-  const r=spawnSync('/usr/sbin/lsof',['-nP','-iTCP:3107','-sTCP:LISTEN','-t'],{encoding:'utf8',timeout:2000,maxBuffer:4096,stdio:['ignore','pipe','ignore']});
+  const r=spawnSync('/usr/sbin/lsof',['-nP',`-iTCP:${listenPort}`,'-sTCP:LISTEN','-t'],{encoding:'utf8',timeout:2000,maxBuffer:4096,stdio:['ignore','pipe','ignore']});
   if (r.error || r.signal || ![0,1].includes(r.status)) closed('listener_metadata_unavailable');
   return r.status===1 && r.stdout==='';
 }
+export function managedRuntimeExclusionState(){return {supervisorPid:supervisorPid(),listenerClosed:listenerClosed()};}
 function removeReceipt(basePath,expected) {
   privateMetadataBase(basePath);
   if (!expected || !['exited','spawn_failed'].includes(expected.value.phase) || !same(readRuntimeProcessReceipt(basePath),expected)) closed('unretired_runtime_receipt');
@@ -469,14 +640,22 @@ export function readStoppedRuntimeReceipt(basePath){
   privateMetadataBase(basePath);const saved=metadataFile(join(basePath,STOPPED_RECEIPT),16384);if(!saved)return null;
   try{
     const r=JSON.parse(saved.text);
-    if(!exact(r,['version','kind','revision','previousDigest','release','artifactIdentity','currentDigest','rootIdentity','terminalDigest','retiredHolderIdentity','retiredHolderDigest','configurationDigest','operationDigest','createdAt','processProof'])||
+    if(!exact(r,['version','kind','revision','previousDigest','release','artifactIdentity','currentDigest','rootIdentity','terminalDigest','retiredHolderIdentity','retiredHolderDigest','configurationDigest','operationDigest','createdAt','processProof',...(Object.hasOwn(r,'managedMemory')?['managedMemory']:[])])||
       r.version!==1||r.kind!=='studio-stopped-runtime'||!(r.release===null&&r.artifactIdentity===null||releaseIdentity(r.release)&&pathIdentity(r.artifactIdentity))||!digest(r.currentDigest)||!pathIdentity(r.rootIdentity)||!digest(r.terminalDigest)||
-      !uint(r.revision)||r.revision>2||(r.revision===0?r.previousDigest!==null:!digest(r.previousDigest))||
+      !uint(r.revision)||(r.revision===0?r.previousDigest!==null:!digest(r.previousDigest))||
       !(r.retiredHolderIdentity===null&&r.retiredHolderDigest===null||pathIdentity(r.retiredHolderIdentity)&&digest(r.retiredHolderDigest))||!digest(r.configurationDigest)||!digest(r.operationDigest)||!uint(r.createdAt))closed('invalid_stopped_receipt');
     // Reuse the exact strict native-row ABI, without accepting receipt strings
     // as runtime or maintenance authority.
     const terminal=readRuntimeProcessReceipt(basePath);if(!terminal||!['exited','spawn_failed'].includes(terminal.value.phase)||terminal.digest!==r.terminalDigest)closed('stopped_terminal_mismatch');
     parseRuntimeProcessReceipt(JSON.stringify({...terminal.value,processProof:r.processProof}));
+    if(Object.hasOwn(r,'managedMemory')){
+      const m=r.managedMemory;
+      if(!exact(m,['version','operationId','controllerIdentity','operationGuardIdentity','operationGuardDigest','createdAt','retainUntil'])||m.version!==1||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}(?![\s\S])/.test(m.operationId)||!digest(m.operationGuardDigest)||
+        !exact(m.operationGuardIdentity,['directory','owner'])||!pathIdentity(m.operationGuardIdentity.directory)||!pathIdentity(m.operationGuardIdentity.owner)||
+        !uint(m.createdAt)||m.retainUntil!==m.createdAt+86400000)closed('invalid_managed_stopped_receipt');
+      parseRuntimeProcessReceipt(JSON.stringify({...terminal.value,processProof:[m.controllerIdentity]}));
+    }
     const wrapper=r.processProof.find(row=>row[0]===terminal.value.wrapperPid),originalWrapper=terminal.value.processProof.find(row=>row[0]===terminal.value.wrapperPid);
     if(!same(r.rootIdentity,terminal.value.rootIdentity)||!same(r.retiredHolderIdentity,terminal.value.holderIdentity)||r.retiredHolderDigest!==terminal.value.holderDigest||!wrapper||wrapper[3]!==terminal.value.wrapperPid||!same(wrapper,originalWrapper))closed('stopped_terminal_identity_mismatch');
     return {...saved,value:r};
@@ -490,6 +669,18 @@ function publishStoppedReceipt(basePath,value){
 function removeStoppedReceipt(basePath,expected){
   if(!expected||!same(readStoppedRuntimeReceipt(basePath),expected))closed('stopped_receipt_changed');
   unlinkSync(join(basePath,STOPPED_RECEIPT));syncDirectory(basePath);
+}
+export function redactManagedStoppedRuntimeReceipt(basePath,expected,operationIdentity){
+  const current=readStoppedRuntimeReceipt(basePath);if(!current||!same(current,expected)||!current.value.managedMemory)closed('managed_redaction_expected');
+  const m=current.value.managedMemory,query=pid=>nativeProcessQuery(metadataArtifactDirectory(),pid);
+  if(supervisorPid()!==null||!listenerClosed())closed('managed_redaction_runtime_live');
+  const terminal=readRuntimeProcessReceipt(basePath);
+  for(const row of terminal.value.processProof){const p=query(row[0]);if(p.status!=='absent'||row[0]===terminal.value.wrapperPid&&p.processGroupPids.length)closed('managed_redaction_process_live');}
+  if(operationIdentity){const g=inspectFileRuntimeOperationGuard(operationIdentity);if(g.base!==basePath||g.digest!==m.operationGuardDigest)closed('managed_redaction_guard');}
+  else {const p=query(m.controllerIdentity[0]);if(p.status!=='absent'||p.processGroupPids.length)closed('managed_redaction_controller_live');}
+  if(!same(readStoppedRuntimeReceipt(basePath),current))closed('managed_redaction_changed');
+  const next={...current.value,revision:current.value.revision+1,previousDigest:current.digest};delete next.managedMemory;
+  atomicControl(basePath,STOPPED_RECEIPT,receiptFile(current),JSON.stringify(next)+'\n',16384);return readStoppedRuntimeReceipt(basePath);
 }
 function ownerMatchesReceipt(owner,receipt) {
   const r=receipt.value;
@@ -532,6 +723,22 @@ export function createRuntimeHandoff({base:basePath,dataRoot,guard,maintenanceRe
       atomicControl(basePath,STOPPED_RECEIPT,receiptFile(old),JSON.stringify(next)+'\n',16384);stoppedReceipt=readStoppedRuntimeReceipt(basePath);
     }
     assertStopped();
+  };
+  const persistStopped=()=>{
+    if(!proof.terminal)return;
+    const operation=metadataFile(join(basePath,'.studio-operation.lock','owner.json')),g=inspectFileRuntimeOperationGuard(guard.operationIdentity),m=g.record.managedMemory;
+    if(!operation||!digest(configurationDigest))closed('stopped_operation_binding_unavailable');
+    const managedMemory=m?{version:1,operationId:m.operationId,controllerIdentity:m.controllerIdentity,operationGuardIdentity:{directory:g.directoryIdentity,owner:g.ownerIdentity},operationGuardDigest:g.digest,createdAt:m.createdAt,retainUntil:m.retainUntil}:undefined;
+    if(stoppedReceipt){
+      if(managedMemory&&!same(stoppedReceipt.value.managedMemory,managedMemory)){
+        const old=stoppedReceipt,next={...old.value,revision:old.value.revision+1,previousDigest:old.digest,managedMemory};
+        atomicControl(basePath,STOPPED_RECEIPT,receiptFile(old),JSON.stringify(next)+'\n',16384);stoppedReceipt=readStoppedRuntimeReceipt(basePath);
+      }
+      return;
+    }
+    const current=readCurrent(basePath),processProof=proof.tree.rows.map(row=>Array.isArray(row)?row:processIdentity(row));
+    stoppedReceipt=publishStoppedReceipt(basePath,{version:1,kind:'studio-stopped-runtime',revision:0,previousDigest:null,release:current.absent?null:tuple(current.release),artifactIdentity:current.absent?null:current.release.identity,currentDigest:hash(JSON.stringify(current)),rootIdentity,
+      terminalDigest:proof.terminal.digest,retiredHolderIdentity:proof.owner?.guardIdentity??null,retiredHolderDigest:proof.owner?.digest??null,configurationDigest,operationDigest:operation.digest,createdAt:m?.createdAt??Date.now(),processProof,...(managedMemory?{managedMemory}:{})});
   };
   return Object.freeze({
     assertStopped,
@@ -588,25 +795,22 @@ export function createRuntimeHandoff({base:basePath,dataRoot,guard,maintenanceRe
       if(proof.owner&&!retired){retireStoppedFileRuntimeOwner({dataRoot,expected:proof.owner,authorization,assertStopped});retired=true;}
       if(inspectFileRuntimeOwner(dataRoot)!==null)closed('unexpected_stopped_holder');
       maintenance=acquireFileRuntimeOwner({dataRoot,release:tuple(maintenanceRelease),role:'maintenance',authorization});assertStopped();
+      if(inspectFileRuntimeOperationGuard(guard.operationIdentity).record.managedMemory){persistStopped();assertStopped();}
     },
+    maintenanceContext(){assertStopped();if(!maintenance)closed('maintenance_required');return {owner:maintenance,authorization};},
     releaseStopped(){
       assertStopped();if(!maintenance)return;
-      if(proof.terminal&&!stoppedReceipt){
-        const operation=metadataFile(join(basePath,'.studio-operation.lock','owner.json'));
-        if(!operation||!digest(configurationDigest))closed('stopped_operation_binding_unavailable');
-        const processProof=proof.tree.rows.map(row=>Array.isArray(row)?row:processIdentity(row));
-        const current=readCurrent(basePath);
-        stoppedReceipt=publishStoppedReceipt(basePath,{version:1,kind:'studio-stopped-runtime',revision:0,previousDigest:null,release:current.absent?null:tuple(current.release),artifactIdentity:current.absent?null:current.release.identity,currentDigest:hash(JSON.stringify(current)),rootIdentity,
-          terminalDigest:proof.terminal.digest,retiredHolderIdentity:proof.owner?.guardIdentity??null,retiredHolderDigest:proof.owner?.digest??null,
-          configurationDigest,operationDigest:operation.digest,createdAt:Date.now(),processProof});
-      }
+      persistStopped();
       releaseMaintenanceFileRuntimeOwner(maintenance,authorization);maintenance=null;retired=true;assertStopped();
     },
     beforeStart(){
       assertStopped();if(maintenance)closed('maintenance_held_during_start');
       if(inspectFileRuntimeOwner(dataRoot)!==null)closed('runtime_holder_not_retired');
-      if(stoppedReceipt){removeStoppedReceipt(basePath,stoppedReceipt);stoppedReceipt=null;}
-      if(proof.terminal)removeReceipt(basePath,proof.terminal);
+      const managed=stoppedReceipt?.value.managedMemory;
+      if(!managed){if(stoppedReceipt)removeStoppedReceipt(basePath,stoppedReceipt);if(proof.terminal)removeReceipt(basePath,proof.terminal);}
+      // MI1's real wrapper consumes these exact witnesses after validating the
+      // captured guard directory/owner inode, before it may spawn a writer.
+      stoppedReceipt=null;
       const current=readCurrent(basePath),operation=metadataFile(join(basePath,'.studio-operation.lock','owner.json'));
       if(current.absent||!operation)closed('launch_expectation_unavailable');
       launchExpectation={current,operationDigest:operation.digest};
@@ -661,6 +865,7 @@ export function parseRuntimeRecoveryExpected(args){
   return {baseline,root,rootIdentity,holderIdentity,holderDigest:noHolder?null:flags['--expect-holder-digest'],receiptDigest:flags['--expect-receipt-digest']};
 }
 function start() {
+  assertProductionTopology();
   const result = spawnSync('/bin/launchctl', ['bootstrap', domain, plist], { timeout:10000,stdio:'ignore' });
   if (result.status !== 0) throw new Error('Could not start launch agent; inspect launchctl status.');
 }
@@ -691,7 +896,7 @@ function xml(value) { return String(value).replace(/[<>&"']/g, x => ({ '<': '&lt
 export function launchAgentContents(base, executable) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
 <key>Label</key><string>${label}</string>
-<key>ProgramArguments</key><array><string>${xml(executable)}</string><string>${xml(join(base, 'current', 'studio-runtime.mjs'))}</string><string>run</string></array>
+<key>ProgramArguments</key><array>${runtimeArguments(base,executable).map(argument=>`<string>${xml(argument)}</string>`).join('')}</array>
 <key>EnvironmentVariables</key><dict><key>VOX_PRODUCTION_DIR</key><string>${xml(base)}</string></dict>
 <key>WorkingDirectory</key><string>${xml(base)}</string>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer><key>Umask</key><integer>63</integer>
@@ -700,8 +905,9 @@ export function launchAgentContents(base, executable) {
 </dict></plist>\n`;
 }
 function installPlist() {
+  assertProductionTopology();
   privateDir(join(base, 'logs'));
-  mkdirSync(dirname(plist), { recursive: true });
+  if(fixtureTopology)privateDir(dirname(plist));else mkdirSync(dirname(plist), { recursive: true });
   const contents=launchAgentContents(base,process.execPath);
   const temporary = `${plist}.${process.pid}.tmp`;
   try {
@@ -722,10 +928,10 @@ async function ready(revision, checkpoint) {
   const env=config(),operation=metadataFile(join(base,'.studio-operation.lock','owner.json'));
   for (let attempt = 0; attempt < 15; attempt++) {
     checkpoint();
-    const response = await fetch('http://127.0.0.1:3107/api/studio/health', { signal: AbortSignal.timeout(2000) }).catch(() => null);
+    const response = await fetch(managedMemoryAccountHealthUrl(), { signal: AbortSignal.timeout(2000) }).catch(() => null);
     const health = response?.ok ? await response.json().catch(() => null) : null;
     checkpoint();
-    if(health?.status==='healthy'&&health.bots&&health.revision===revision){
+    if(health?.status==='healthy'&&(fixtureTopology?health.bots===(env.STUDIO_BOTS==='1'):health.bots)&&health.revision===revision){
       if(current.release.revision===LEGACY_REVISION){
         assertReleaseAdaptiveCompatibility(env,readInstalledReleaseManifest(current.release.path));
         if(inspectFileRuntimeOwner(env.STUDIO_DATA_DIR)||readRuntimeProcessReceipt(base))closed('legacy_readiness_owner_mismatch');
@@ -747,6 +953,7 @@ function transitionOperations(guard,baseline,target=baseline?.release) {
   const handoff=createRuntimeHandoff({base,dataRoot,guard,maintenanceRelease:target,nativeQuery:pid=>nativeProcessQuery(metadataArtifactRoot,pid),checkpoint,configurationDigest:configuration?.digest});
   return {
     running, stop:handoff.stop, acquireStopped:handoff.acquireStopped,releaseStopped:handoff.releaseStopped,
+    maintenanceContext:handoff.maintenanceContext,
     start:()=>{handoff.beforeStart();start();},snapshot:()=>{handoff.assertStopped();snapshot();handoff.assertStopped();},pointTo:handoff.pointTo,ready,
     clearCurrent:handoff.clearCurrent,
     compatible: release => {handoff.assertStopped();assertReleaseAdaptiveCompatibility(env,readInstalledReleaseManifest(release.path));handoff.assertStopped();},
@@ -754,6 +961,7 @@ function transitionOperations(guard,baseline,target=baseline?.release) {
 }
 async function install(guard, baseline) {
   guard.check(); assertCurrent(base, baseline);
+  assertNoPendingMemoryAccountOperation(base);
   const env = config();
   const artifact = join(root, '.next', 'standalone');
   if (!existsSync(join(artifact, 'server.js'))) throw new Error('Run npm run build first; standalone/server.js is missing.');
@@ -766,6 +974,7 @@ async function install(guard, baseline) {
   if (!manifest || manifest.revision !== revision || manifest.sourceTree !== sourceTree || manifest.buildId !== buildId || buildId !== readFileSync(join(root, '.next', 'BUILD_ID'), 'utf8').trim()) {
     throw new Error('Build provenance does not match this committed source. Run npm run studio:build.');
   }
+  const managedArtifact=readManagedMemoryAccountArtifact(join(root,'.next'),manifest,{helpersDirectory:join(root,'scripts')});
   const nativeArtifact=manifest.runtimeProcessMetadata?.available===true?metadataArtifact(join(root,'.next')):null;
   if(nativeArtifact&&(!same(nativeArtifact.manifest,manifest)||hash(readFileSync(join(root,'scripts','native','studio-process-metadata-darwin.c')))!==manifest.runtimeProcessMetadata.sourceSha256))closed('native_process_artifact_changed');
   if(process.platform==='darwin'&&!nativeArtifact)closed('native_process_artifact_unavailable');
@@ -783,6 +992,8 @@ async function install(guard, baseline) {
   cpSync(new URL('./studio-adaptive-compatibility.mjs', import.meta.url), join(release, 'studio-adaptive-compatibility.mjs'));
   cpSync(new URL('./studio-operation-guard.mjs', import.meta.url), join(release, 'studio-operation-guard.mjs'));
   cpSync(new URL('./studio-file-runtime-owner.mjs', import.meta.url), join(release, 'studio-file-runtime-owner.mjs'));
+  for(const [name,source] of Object.entries(MEMORY_ACCOUNT_MANAGED_HELPERS))cpSync(join(root,'scripts',source),join(release,name));
+  cpSync(managedArtifact.path,join(release,'studio-memory-account-maintenance.mjs'));
   if(manifest.runtimeProcessMetadata?.available===true){
     const metadata=manifest.runtimeProcessMetadata,path=nativeArtifact.path,s=info(path);
     if(metadata.version!==1||metadata.abi!==1||metadata.platform!=='darwin'||metadata.arch!=='arm64'||metadata.file!=='studio-process-metadata'||
@@ -792,6 +1003,7 @@ async function install(guard, baseline) {
     if(hash(readFileSync(join(release,'studio-process-metadata')))!==metadata.binarySha256)closed('native_process_copy_changed');
   }else if(process.platform==='darwin')closed('native_process_artifact_unavailable');
   cpSync(join(root, '.next', 'studio-release.json'), join(release, 'studio-release.json'));
+  readManagedMemoryAccountArtifact(release,manifest);
   writeFileSync(join(release, 'revision'), revision + '\n');
   assertReleaseDirectory(release, createdIdentity);
   const target = readRelease(release);
@@ -805,6 +1017,7 @@ async function install(guard, baseline) {
 }
 async function rollback(guard, baseline) {
   guard.check(); assertCurrent(base, baseline);
+  assertNoPendingMemoryAccountOperation(base);
   const previous = readControlText(join(base, 'previous'));
   if (!existsSync(join(previous, 'server.js'))) throw new Error('Previous release is unavailable.');
   const target = readRelease(previous);
@@ -814,8 +1027,8 @@ async function rollback(guard, baseline) {
 }
 async function status() {
   console.log(`Launch agent: ${running() ? 'loaded' : 'not loaded'}`);
-  const response = await fetch('http://127.0.0.1:3107/api/studio/health', { signal: AbortSignal.timeout(10_000) }).catch(() => null);
-  if (!response) throw new Error('Studio is not reachable on 127.0.0.1:3107.');
+  const response = await fetch(managedMemoryAccountHealthUrl(), { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+  if (!response) throw new Error('Studio is not reachable on its configured loopback health endpoint.');
   const body = await response.json().catch(() => null);
   console.log(JSON.stringify(body));
   const expected = readFileSync(join(base, 'current', 'revision'), 'utf8').trim();
@@ -872,23 +1085,125 @@ export function attachRuntimeProcessLifecycle({child,lifecycle,query,wrapper,bas
   return Object.freeze({settled,signal(signal){if(!['SIGTERM','SIGINT'].includes(signal))closed('invalid_runtime_signal');stoppingSignal=signal;child.kill(signal);}});
 }
 export function run() {
-  const env = config();
+  const env = config();assertProductionTopology();
   const installed=readCurrent(base);if(installed.absent)closed('missing_runtime_release');
   const current=installed.release.path,revision=installed.release.revision;
   const baseIdentity=privateMetadataBase(base);privateMetadataBase(env.STUDIO_DATA_DIR);
-  if(metadataFile(join(base,STOPPED_RECEIPT),16384))closed('unconsumed_stopped_receipt');
+  const pending=readManagedMemoryAccountOperationRecord(base);
+  if(metadataFile(join(base,STOPPED_RECEIPT),16384)&&pending?.value.phase!=='starting')closed('unconsumed_stopped_receipt');
   if(inspectFileRuntimeOwner(env.STUDIO_DATA_DIR))closed('runtime_holder_already_exists');
   const query=(pid,timeout=2000)=>nativeProcessQuery(current,pid,timeout),wrapper=query(process.pid);
   if(wrapper.status!=='ok'||wrapper.pgid!==process.pid||!cwdMatches(wrapper,base,baseIdentity)||wrapper.executablePath!==process.execPath||wrapper.childPids.length||!same(wrapper.processGroupPids,[process.pid]))closed('wrapper_process_identity_unavailable');
+  const ticket=assertManagedMemoryAccountStartup({base,dataRoot:env.STUDIO_DATA_DIR,release:installed.release,nativeQuery:query});
+  assertReleaseAdaptiveCompatibility(env,readInstalledReleaseManifest(current));
+  if(ticket){const stopped=readStoppedRuntimeReceipt(base),terminal=readRuntimeProcessReceipt(base);if(stopped?.digest!==ticket.stoppedDigest||terminal?.digest!==ticket.terminalDigest)closed('managed_start_ticket_changed');removeStoppedReceipt(base,stopped);removeReceipt(base,terminal);}
   if(!same(privateMetadataBase(base),baseIdentity))closed('wrapper_base_identity_changed');
   assertCurrent(base,installed);assertReleaseDirectory(current,installed.release.identity);
   const operation=info(join(base,'.studio-operation.lock'))?metadataFile(join(base,'.studio-operation.lock','owner.json')):null;
   if(info(join(base,'.studio-operation.lock'))&&!operation)closed('operation_metadata_unavailable');
   const lifecycle=createRuntimeProcessLifecycle({base,release:installed.release,dataRoot:env.STUDIO_DATA_DIR,operationDigest:operation?.digest??null,processProof:[processIdentity(wrapper)]});
   process.umask(0o077);
-  const child=spawn(process.execPath,[join(current,'server.js')],{cwd:current,stdio:'inherit',env:{...process.env,...env,HOSTNAME:'127.0.0.1',PORT:'3107',STUDIO_REVISION:revision}});
+  const args=fixtureTopology?['--import',fixtureTopology.preload,join(current,'server.js')]:[join(current,'server.js')];
+  const child=spawn(process.execPath,args,{cwd:current,stdio:'inherit',env:{...fixtureEnvironment(env),HOSTNAME:'127.0.0.1',PORT:String(listenPort),STUDIO_REVISION:revision}});
   const attached=attachRuntimeProcessLifecycle({child,lifecycle,query,wrapper,base,release:installed.release,dataRoot:env.STUDIO_DATA_DIR});
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>attached.signal(signal));
+}
+
+export function parseManagedMemoryAccountExpected(args){
+  const extra=['--expect-operation-absent','--expect-operation-digest','--expect-stopped-digest',...['directory','owner'].flatMap(kind=>['dev','ino','birth'].map(part=>`--expect-operation-${kind}-${part}`))];
+  const flags={},rest=[];for(let i=0;i<args.length;i++){const key=args[i];if(!extra.includes(key)){rest.push(key);if(key!=='--expect-no-holder'&&args[i+1]&&!args[i+1].startsWith('--'))rest.push(args[++i]);continue;}if(Object.hasOwn(flags,key))closed('invalid_managed_expected');if(key==='--expect-operation-absent'){flags[key]=true;continue;}if(!args[i+1]||args[i+1].startsWith('--'))closed('invalid_managed_expected');flags[key]=args[++i];}
+  if(!Object.keys(flags).length)return {baseline:parseExpected(rest,'resume-memory-account'),recovery:null};
+  const recovery=parseRuntimeRecoveryExpected(rest),operationDirectoryIdentity=Object.fromEntries(['dev','ino','birth'].map(k=>[k,flags[`--expect-operation-directory-${k}`]])),operationOwnerIdentity=Object.fromEntries(['dev','ino','birth'].map(k=>[k,flags[`--expect-operation-owner-${k}`]]));
+  if(flags['--expect-operation-absent']){if(Object.keys(flags).length!==2||!digest(flags['--expect-stopped-digest']))closed('invalid_managed_expected');return {baseline:recovery.baseline,recovery:{...recovery,operationAbsent:true,stoppedDigest:flags['--expect-stopped-digest']}};}
+  if(Object.keys(flags).length!==extra.length-1||!digest(flags['--expect-operation-digest'])||!digest(flags['--expect-stopped-digest'])||!pathIdentity(operationDirectoryIdentity)||!pathIdentity(operationOwnerIdentity))closed('invalid_managed_expected');
+  return {baseline:recovery.baseline,recovery:{...recovery,operationDigest:flags['--expect-operation-digest'],stoppedDigest:flags['--expect-stopped-digest'],operationDirectoryIdentity,operationOwnerIdentity}};
+}
+async function managedMemoryAccount(guard,baseline,{action,binding,preflight,recovered}){
+  const raw=guard.operationIdentity,env=config(),configuration=metadataFile(envFile,65536),artifact=readManagedMemoryAccountArtifact(baseline.release.path,readInstalledReleaseManifest(baseline.release.path));
+  const cleanupOnly=managedMemoryAccountCleanupOnly(raw);
+  const checkpoint=()=>{if(cleanupOnly)guard.assertOwned();else guard.check();assertCurrent(base,baseline);if(!same(metadataFile(envFile,65536),configuration))closed('managed_configuration_changed');};
+  if(recovered?.holder){const authorization=createMaintenanceAuthorization(raw);retireStoppedFileRuntimeOwner({dataRoot:env.STUDIO_DATA_DIR,expected:recovered.holder,authorization,assertStopped:recovered.assertStopped});}
+  const prior=readManagedMemoryAccountOperationRecord(base);
+  if(!cleanupOnly&&action!=='expire'&&(action==='initialize'||!prior))prepareManagedMemoryAccountJournal({guard:raw,preflight});
+  const ops=transitionOperations(guard,baseline);let stopped=false,context,starting,metadataFinalizing=false;
+  registerManagedMemoryAccountDeadlineAbort(raw,()=>guard.cancelForDeadline());
+  try{
+    checkpoint();await ops.stop();stopped=true;checkpoint();await ops.acquireStopped();checkpoint();
+    const {owner,authorization}=ops.maintenanceContext(),time=await acquireQualifiedMemoryTime({dataRoot:env.STUDIO_DATA_DIR,owner,artifactDigest:hash(readFileSync(join(baseline.release.path,'studio-release.json'))),purpose:action==='initialize'?'initialize':'resume',signal:cleanupOnly?undefined:guard.signal});checkpoint();
+    if(action==='expire'||cleanupOnly){
+      const result=expireManagedMemoryAccountOperation({guard:raw,owner,authorization,time});await ops.releaseStopped();const receipt=readStoppedRuntimeReceipt(base);if(receipt?.value.managedMemory)redactManagedStoppedRuntimeReceipt(base,receipt,raw);return JSON.stringify(result);
+    }
+    if(prior)reconcileManagedMemoryAccountJournal({guard:raw,owner,authorization,time,preflight});
+    context=createManagedMemoryAccountOperation({guard:raw,owner,authorization,time,action});
+    const maintenance=await import(pathToFileURL(artifact.path).href);checkpoint();
+    if(maintenance.memoryAccountMaintenanceVersion!==1||typeof maintenance.runManagedMemoryAccountMaintenance!=='function')closed('managed_entry_interface');
+    await maintenance.runManagedMemoryAccountMaintenance({operation:context});checkpoint();await ops.compatible(baseline.release);checkpoint();
+    starting=markManagedMemoryAccountStarting(context);await ops.releaseStopped();checkpoint();await ops.start();checkpoint();
+    // The first health request initializes the lazy Studio FILE owner. Establish
+    // ordinary runtime readiness before requiring the stricter marked health.
+    await ops.ready(baseline.release.revision,checkpoint);checkpoint();
+    let healthy=false;for(let attempt=0;attempt<15;attempt++){checkpoint();try{await verifyManagedMemoryAccountOperationalHealth(binding,inspectFileRuntimeOperationGuard(raw).digest);healthy=true;break;}catch{checkpoint();}await new Promise(done=>setTimeout(done,2000));}
+    if(!healthy)closed('managed_protective_readiness_failed');checkpoint();
+    metadataFinalizing=true;
+    const finalBinding=await prepareManagedMemoryAccountPreflight({base,action:'finalize'}),finalTime=await acquireQualifiedMemoryPreflightTime({binding:finalBinding,purpose:'resume',signal:guard.signal});checkpoint();
+    return JSON.stringify(await finalizeManagedMemoryAccountOperation({guard:raw,preflight:finalTime,expectedRecord:starting}));
+  }catch(error){
+    // No automatic old-code fallback or unknown-effect replay after a control write.
+    guard.assertOwned();assertCurrent(base,baseline);
+    if(metadataFinalizing){
+      let verified=false;try{await verifyManagedMemoryAccountOperationalHealth(binding,inspectFileRuntimeOperationGuard(raw).digest);verified=true;}catch{/* Failed current readiness still requires the actual stopped handoff below. */}
+      if(verified)throw new Error(managedMemoryAccountDeadlineExpired(raw)?'Memory account retention_overdue breach; verified current runtime is preserved and metadata cleanup remains held.':'Managed metadata completion is unknown; verified current runtime is preserved for explicit reconciliation.');
+    }
+    if(managedMemoryAccountDeadlineExpired(raw)){
+      if(starting&&running())await ops.stop();
+      if(stopped){await ops.acquireStopped();const cleanup=ops.maintenanceContext(),fresh=await acquireQualifiedMemoryTime({dataRoot:env.STUDIO_DATA_DIR,owner:cleanup.owner,artifactDigest:hash(readFileSync(join(baseline.release.path,'studio-release.json'))),purpose:'resume'});expireManagedMemoryAccountOperation({guard:raw,...cleanup,time:fresh});await ops.releaseStopped();const saved=readStoppedRuntimeReceipt(base);if(saved?.value.managedMemory)redactManagedStoppedRuntimeReceipt(base,saved,raw);}
+      throw new Error('Memory account operational retention deadline reached; current controls are held for explicit recovery.');
+    }
+    if(context&&!starting)try{holdManagedMemoryAccountOperation(context,guard.signal.aborted?'cancelled':'io_unknown');}catch{/* Preserve original unknown state if current proof is unavailable. */}
+    const rootControls=[join(env.STUDIO_DATA_DIR,'adaptive','memory-account-time-v1.json'),join(env.STUDIO_DATA_DIR,'adaptive','memory-account-lifecycle-v1.json')];
+    if(stopped&&!rootControls.some(existsSync)){
+      cancelManagedMemoryAccountOperation({guard:raw,preflight});await ops.releaseStopped();await ops.start();await ops.ready(baseline.release.revision,()=>guard.assertOwned());
+    }else if(starting){
+      await ops.stop();await ops.acquireStopped(); // exact actual exit proof before leaving stopped
+      await ops.releaseStopped();
+    }else if(stopped){await ops.releaseStopped();}
+    const receipt=readStoppedRuntimeReceipt(base);if(receipt?.value.managedMemory)redactManagedStoppedRuntimeReceipt(base,receipt,raw);
+    throw error;
+  }
+}
+async function managedControllerMain(command,args){
+  const action=command==='initialize-memory-account'?'initialize':command==='expire-memory-account-operation'?'expire':'resume',expected=parseManagedMemoryAccountExpected(args);
+  const binding=await prepareManagedMemoryAccountPreflight({base:resolve(base),action});
+  const preflight=await acquireQualifiedMemoryPreflightTime({binding,purpose:action==='initialize'?'initialize':'resume'});
+  const qualification=registerSyntheticManagedMemoryAccountQualification({binding,preflight});
+  const current=readCurrent(base);if(current.absent||expected.baseline.absent||current.release.path!==expected.baseline.path||current.release.revision!==expected.baseline.revision||current.release.buildId!==expected.baseline.buildId)closed('managed_expected_current');
+  if(action==='resume'){const observed=await reconcileRunningManagedMemoryAccountOperation(binding);if(observed)return JSON.stringify(observed);}
+  if(action==='expire')assertManagedMemoryAccountExpiryDue(binding,preflight);
+  const old=readManagedMemoryAccountOperationRecord(base),cleanupOnly=action==='expire'||old!==null&&preflight.sampleNow().utcUpperMs>=old.value.retainUntil;
+  if(!cleanupOnly){
+    // Exact build-emitted repository/storage validation occurs before guard, journal, stop or controls.
+    const artifact=readManagedMemoryAccountArtifact(current.release.path,readInstalledReleaseManifest(current.release.path));
+    const maintenance=await import(pathToFileURL(artifact.path).href);
+    if(maintenance.memoryAccountMaintenanceVersion!==1||typeof maintenance.preflightManagedMemoryAccountMigration!=='function')closed('managed_preflight_interface');
+    const prospective=maintenance.preflightManagedMemoryAccountMigration({binding,preflight});
+    if(!prospective||prospective.version!==1||prospective.status!=='eligible'||typeof prospective.inventoryDigest!=='string'||!/^[a-f0-9]{64}(?![\s\S])/.test(prospective.inventoryDigest))closed('managed_preflight_unavailable');
+  }
+  const recovered=expected.recovery?recoverManagedMemoryAccountController(binding,expected.recovery):null;
+  const operationGuard=acquireManagedMemoryAccountOperationGuard(binding,preflight,qualification);
+  return withOperation(operationGuard.base,command,expected.baseline,async(guard,baseline)=>{base=guard.base;envFile=join(base,'production.env');return managedMemoryAccount(guard,baseline,{action,binding,preflight,recovered});},{operationGuard,onCancel:signal=>{process.exitCode=signal==='SIGINT'?130:143;}});
+}
+/** The bootstrap has no operation/FILE authority; exactly one dedicated controller runs. */
+export async function bootstrapManagedMemoryAccount(command,args){
+  const expected=parseManagedMemoryAccountExpected(args),topology=assertProductionTopology(),current=readCurrent(base);
+  if(current.absent||expected.baseline.absent||current.release.path!==expected.baseline.path||current.release.revision!==expected.baseline.revision||current.release.buildId!==expected.baseline.buildId)closed('managed_expected_current');
+  readManagedMemoryAccountArtifact(current.release.path,readInstalledReleaseManifest(current.release.path));
+  const entry=join(current.release.path,'studio-runtime.mjs'),nodeArgs=topology?['--import',topology.preload,entry]:[entry];
+  const child=spawn(process.execPath,[...nodeArgs,'managed-memory-account-controller',command,...args],{cwd:realpathSync(base),detached:true,stdio:'inherit',env:topology?fixtureEnvironment(config()):{...process.env,VOX_PRODUCTION_DIR:realpathSync(base)}});
+  let forwardUnknown=false;
+  const forward=signal=>{if(child.pid)try{process.kill(child.pid,signal);}catch{forwardUnknown=true;}};
+  const interrupt=()=>forward('SIGINT'),terminate=()=>forward('SIGTERM');process.on('SIGINT',interrupt);process.on('SIGTERM',terminate);
+  try{return await new Promise((resolveChild,reject)=>{child.once('error',()=>reject(new Error('Managed controller spawn failed; no automatic retry.')));child.once('exit',(code,signal)=>{if(code===0&&!signal&&!forwardUnknown)resolveChild();else reject(new Error('Managed controller did not complete; reconcile current state before explicit resume.'));});});}
+  finally{process.off('SIGINT',interrupt);process.off('SIGTERM',terminate);}
 }
 
 async function dispatch(command, guard, baseline) {
@@ -906,7 +1221,7 @@ async function dispatch(command, guard, baseline) {
       guard.check(); assertCurrent(base, current); break;
     }
     case 'run': run(); break;
-    case 'backup': {const current=readCurrent(base);await guardedBackup(guard,transitionOperations(guard,current));break;}
+    case 'backup': {assertNoPendingMemoryAccountOperation(base);const current=readCurrent(base);await guardedBackup(guard,transitionOperations(guard,current));break;}
     case 'rollback': return rollback(guard, baseline);
     case 'recover-runtime-owner': {
       const expected=parseRuntimeRecoveryExpected(process.argv.slice(3)),env=config(),configuration=metadataFile(envFile,65536);
@@ -921,6 +1236,12 @@ async function dispatch(command, guard, baseline) {
 export async function productionMain() {
 try {
   const command = process.argv[2];
+  if(['check','install','status','stop','backup','rollback','run','recover-runtime-owner','initialize-memory-account','resume-memory-account','expire-memory-account-operation','managed-memory-account-controller'].includes(command))assertProductionTopology();
+  if(['initialize-memory-account','resume-memory-account','expire-memory-account-operation'].includes(command)){await bootstrapManagedMemoryAccount(command,process.argv.slice(3));return;}
+  if(command==='managed-memory-account-controller'){
+    const managed=process.argv[3];if(!['initialize-memory-account','resume-memory-account','expire-memory-account-operation'].includes(managed))closed('managed_controller_command');
+    const receipt=await managedControllerMain(managed,process.argv.slice(4));if(receipt)console.log(receipt);return;
+  }
   if (['prepare', 'install', 'stop', 'backup', 'rollback','recover-runtime-owner'].includes(command)) {
     const expected = command==='recover-runtime-owner'?parseRuntimeRecoveryExpected(process.argv.slice(3)).baseline:['install', 'rollback'].includes(command) ? parseExpected(process.argv.slice(3), command) : undefined;
     const receipt = await withOperation(base, command, expected, async (guard, baseline) => {
@@ -935,4 +1256,12 @@ try {
 } catch (error) { console.error(error.message); process.exitCode ||= 1; }
 }
 // launchd invokes current/studio-runtime.mjs through the managed symlink.
-if(process.argv[1]&&existsSync(process.argv[1])&&realpathSync(resolve(process.argv[1]))===fileURLToPath(import.meta.url))await productionMain();
+// Do not keep this module evaluating while the managed preflight imports its
+// exact controller ABI namespace. productionMain catches and records failures;
+// its actual child/provider/readiness handles retain the process while pending.
+if(process.argv[1]&&existsSync(process.argv[1])&&realpathSync(resolve(process.argv[1]))===fileURLToPath(import.meta.url)){
+  let settled=false;
+  const incomplete=()=>{if(!settled)process.exitCode||=1;};
+  process.on('beforeExit',incomplete);
+  void productionMain().finally(()=>{settled=true;process.off('beforeExit',incomplete);}).catch(()=>{process.exitCode||=1;});
+}

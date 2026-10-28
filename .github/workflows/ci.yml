@@ -88,6 +88,9 @@ jobs:
       - name: Verify guest browser fixture build provenance
         run: node --test e2e/guest-fixture-build.test.mjs
 
+      - name: Verify managed memory time and portable admission
+        run: node --test --test-concurrency=1 scripts/studio-memory-account-time.test.mjs scripts/studio-memory-account-operation.test.mjs scripts/studio-memory-account-runtime.test.mjs
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

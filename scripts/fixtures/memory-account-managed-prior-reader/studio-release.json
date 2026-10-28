@@ -1,0 +1,101 @@
+{
+  "revision": "ae1236f4794dac65d1c62e5661885764437e493c",
+  "sourceTree": "763639f4206cbec7aec5dd21a33fdfdcca51b167",
+  "buildId": "VQF-zxo_FVZseGtLjYxN1",
+  "builtAt": "2026-10-27T17:21:53.221Z",
+  "supportedAdaptiveDataSchemas": [
+    1,
+    2,
+    3
+  ],
+  "supportedAdaptiveControlSchemas": [
+    1,
+    2,
+    3
+  ],
+  "productPauseEnforcementVersion": 1,
+  "rightsUseHoldEnforcementVersion": 1,
+  "supportedFileAuthorityProjectionVersions": [
+    1,
+    2
+  ],
+  "supportedObserverClientExperienceVersions": [
+    1
+  ],
+  "supportedRightsLedgerVersions": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "supportedExperimentLedgerSchemas": [
+    1
+  ],
+  "supportedGuestRightsLedgerSchemas": [
+    1
+  ],
+  "supportedImprovementWorkflowSchemas": [
+    1,
+    2
+  ],
+  "supportedPetCareSchemas": [
+    1
+  ],
+  "supportedPetPlaySchemas": [
+    1
+  ],
+  "supportedPetGrowthSchemas": [
+    1
+  ],
+  "supportedPetCheckinSchemas": [
+    1
+  ],
+  "supportedConnectionRecordSchemas": [
+    1,
+    2
+  ],
+  "supportedSelfServiceMcpSchemas": [
+    1
+  ],
+  "supportedReplyUseSchemas": [
+    1
+  ],
+  "supportedProviderTemplateSchemas": [
+    1
+  ],
+  "supportedAssistantDeliveryControlVersions": [
+    1,
+    2
+  ],
+  "supportedFileRuntimeOwnerVersions": [
+    1
+  ],
+  "supportedMemoryAccountLifecycleVersions": [
+    1
+  ],
+  "supportedTelegramArchiveSchemas": [
+    1
+  ],
+  "supportedTelegramArchiveSourceSuppressionVersions": [
+    1
+  ],
+  "supportedTelegramArchiveSnapshotPublicationVersions": [
+    1
+  ],
+  "runtimeProcessMetadata": {
+    "version": 1,
+    "abi": 1,
+    "available": true,
+    "platform": "darwin",
+    "arch": "arm64",
+    "file": "studio-process-metadata",
+    "bytes": 50952,
+    "binarySha256": "0747a5617932cef4d005e0e83b2288c61cc87081daf47f47123f33e86d47da87",
+    "sourceSha256": "f48fda9624d30259a14105659a58eb7e4ef2dbef391dccb85e3fbca83c338e91",
+    "compilerPath": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang",
+    "compilerSha256": "ee029330bf58ab6e481385f4237cc54602eaa8b81526242e5c5ab5b76e8c5a7e",
+    "compilerVersionSha256": "4e8a77bcb032deb6591b0db384ff9808d01d9030f00e2d877394df88a12a2536",
+    "sdkVersion": "27.0",
+    "deploymentTarget": "11.0"
+  }
+}

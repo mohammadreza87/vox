@@ -2,7 +2,7 @@
 import { constants, closeSync, fstatSync, lstatSync, openSync, readlinkSync, readSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
-import { acquireFileRuntimeOperationGuard } from './studio-file-runtime-owner.mjs';
+import { acquireFileRuntimeOperationGuard, inspectFileRuntimeOperationGuard } from './studio-file-runtime-owner.mjs';
 
 const fail = message => { throw new Error(message); };
 const identity = stat => ({ dev: String(stat.dev), ino: String(stat.ino), birth: String(stat.birthtimeNs) });
@@ -117,14 +117,16 @@ export function acquireOperation(input, operation) {
   return acquireFileRuntimeOperationGuard(input, operation);
 }
 
-export async function withOperation(base, operation, expected, task, { signals = process, onCancel = () => {} } = {}) {
-  const lock = acquireOperation(base, operation), controller = new AbortController();
+export async function withOperation(base, operation, expected, task, { signals = process, onCancel = () => {}, operationGuard } = {}) {
+  const lock = operationGuard ?? acquireOperation(base, operation), controller = new AbortController();
+  if(operationGuard){const actual=inspectFileRuntimeOperationGuard(operationGuard);if(actual.base!==base||actual.operation!==operation)fail('Managed operation identity mismatch.');}
   const cancel = signal => {
     if (!controller.signal.aborted) { controller.abort(new Error('Studio operation cancelled.')); onCancel(signal); }
   };
   const interrupt = () => cancel('SIGINT'), terminate = () => cancel('SIGTERM');
   signals.on('SIGINT', interrupt); signals.on('SIGTERM', terminate);
   const guard = { base: lock.base, operationIdentity: lock, signal: controller.signal, assertOwned: lock.assertOwned,
+    cancelForDeadline(){lock.assertOwned();controller.abort(new Error('Memory account operational retention breach: retention_overdue.'));},
     check() { lock.assertOwned(); controller.signal.throwIfAborted(); } };
   try {
     // Cancellation never races the task: wait for its operation/children and recovery to settle.
