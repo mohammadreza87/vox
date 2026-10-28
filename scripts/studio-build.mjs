@@ -74,13 +74,14 @@ export async function buildStudio() {
   });
   if (build.status !== 0) throw new Error('Production build failed.');
   const runtimeProcessMetadata = buildRuntimeProcessMetadata();
+  const runtimeCurrentProcessCensus=runtimeProcessMetadata.available===true?{version:1,selectorVersion:1,metadataBinarySha256:runtimeProcessMetadata.binarySha256}:undefined;
   const memoryAccountManagedRuntime=await buildMemoryAccountMaintenance();
   if (git('status', '--porcelain') || git('rev-parse', 'HEAD') !== revision) throw new Error('Source changed during the build. Rebuild the committed release.');
   const buildId = readFileSync(join(root, '.next', 'BUILD_ID'), 'utf8').trim();
   const artifactId = readFileSync(join(root, '.next', 'standalone', '.next', 'BUILD_ID'), 'utf8').trim();
   if (buildId !== artifactId || !existsSync(join(root, '.next', 'standalone', 'server.js'))) throw new Error('Standalone artifact is incomplete.');
   writeFileSync(join(root, '.next', 'studio-release.json'), JSON.stringify({ revision, sourceTree, buildId,
-    builtAt: new Date().toISOString(), ...ADAPTIVE_RELEASE_CAPABILITIES, runtimeProcessMetadata,memoryAccountManagedRuntime }, null, 2) + '\n');
+    builtAt: new Date().toISOString(), ...ADAPTIVE_RELEASE_CAPABILITIES, runtimeProcessMetadata,runtimeCurrentProcessCensus,memoryAccountManagedRuntime }, null, 2) + '\n');
   console.log(`Production artifact verified for ${revision}.`);
 }
 if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {

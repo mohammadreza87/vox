@@ -11,7 +11,8 @@ import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { assertReleaseAdaptiveCompatibility, readInstalledReleaseManifest } from './studio-adaptive-compatibility.mjs';
 import { assertCurrent, assertIdentifiedRuntime, assertReleaseDirectory, guardedBackup, parseExpected, readControlText, readCurrent, readRelease, releaseDirectoryIdentity, transitionRelease, withOperation } from './studio-operation-guard.mjs';
 import { FILE_RUNTIME_OWNER_GUARD, FILE_RUNTIME_OWNER_MARKER, inspectFileRuntimeOwner, acquireFileRuntimeOwner,
-  createMaintenanceAuthorization, retireStoppedFileRuntimeOwner, releaseMaintenanceFileRuntimeOwner,inspectFileRuntimeOperationGuard,fileRuntimeFixtureSupervisor } from './studio-file-runtime-owner.mjs';
+  createMaintenanceAuthorization, retireStoppedFileRuntimeOwner, releaseMaintenanceFileRuntimeOwner,inspectFileRuntimeOperationGuard,fileRuntimeFixtureSupervisor,
+  assertFileRuntimeFixture,fileRuntimeFixtureProvenance } from './studio-file-runtime-owner.mjs';
 import { MEMORY_ACCOUNT_MANAGED_HELPERS,assertNoPendingMemoryAccountOperation,readManagedMemoryAccountOperationRecord,readManagedMemoryAccountArtifact,
   prepareManagedMemoryAccountPreflight,acquireManagedMemoryAccountOperationGuard,prepareManagedMemoryAccountJournal,assertManagedMemoryAccountExpiryDue,
   createManagedMemoryAccountOperation,markManagedMemoryAccountStarting,finalizeManagedMemoryAccountOperation,assertManagedMemoryAccountStartup,
@@ -279,6 +280,99 @@ export function nativeProcessQuery(artifactRoot, pid,timeout=2000) {
   // The completed, hash-pinned observer is this wrapper's actual child, in a
   // separate group. Only self-query removes that exact spawnSync child PID.
   return normalizeProcessObserver(parsed,pid,result.pid);
+}
+
+/** Current synthetic process observation only; never ownership or launch history. */
+export function parseCurrentFixtureCensusDescriptor(value,binarySha256) {
+  if(!digest(binarySha256)||!exact(value,['version','selectorVersion','metadataBinarySha256'])||value.version!==1||value.selectorVersion!==1||value.metadataBinarySha256!==binarySha256)closed('invalid_current_census_descriptor');
+  return {...value};
+}
+export function parseCurrentFixtureCensus(bytes,expected) {
+  try{
+    if(!exact(expected,['uid','baseDevice','baseInode','artifactDevice','artifactInode'])||!uint(expected.uid)||expected.uid>4294967295||
+      !['baseDevice','baseInode','artifactDevice','artifactInode'].every(k=>uint64(expected[k]))||expected.baseInode==='0'||expected.artifactInode==='0'||
+      expected.baseDevice===expected.artifactDevice&&expected.baseInode===expected.artifactInode)closed('invalid_current_census_expected');
+    if(typeof bytes!=='string'&&!Buffer.isBuffer(bytes)&&!(bytes instanceof Uint8Array))closed('invalid_current_census');
+    const raw=typeof bytes==='string'?Buffer.from(bytes):Buffer.from(bytes),text=new TextDecoder('utf-8',{fatal:true}).decode(raw);
+    if(raw.length>16384||!Buffer.from(text).equals(raw))closed('invalid_current_census');
+    const value=JSON.parse(text);
+    if(text!==JSON.stringify(value)+'\n'||value?.version!==1)closed('invalid_current_census');
+    if(['invalid','unavailable','changed','overflow'].includes(value.status)){
+      if(!exact(value,['version','status']))closed('invalid_current_census');
+      return value;
+    }
+    if(!exact(value,['version','status','uid','baseDevice','baseInode','artifactDevice','artifactInode','matches'])||value.status!=='complete'||
+      !Object.keys(expected).every(k=>value[k]===expected[k])||!Array.isArray(value.matches)||value.matches.length>16)closed('invalid_current_census');
+    let prior=0;
+    for(const row of value.matches){
+      const t=row?.identity;
+      if(!exact(row,['identity','cwd'])||!['base','artifact'].includes(row.cwd)||!Array.isArray(t)||t.length!==7||!pidNumber(t[0])||t[0]<=prior||
+        !uint(t[1])||t[1]>2147483647||t[2]!==expected.uid||!pidNumber(t[3])||!t.slice(4).every(uint64)||t[4]==='0'||t[5]==='0'||BigInt(t[6])>=1000000n)closed('invalid_current_census');
+      prior=t[0];
+    }
+    return value;
+  }catch{closed('invalid_current_census');}
+}
+
+/** Metadata-only FRO fixture registration is required, not target-realm,
+ * managed-qualification, owner or clock registration. An outer coordinator can
+ * call this without importing a preload or evaluating an application target. */
+export function nativeCurrentFixtureCensus(artifactRoot,fixtureBinding,timeout=2000) {
+  if(!uint(timeout)||timeout<1||timeout>2000)closed('native_process_deadline_invalid');
+  if(process.platform!=='darwin'||process.arch!=='arm64')closed('native_process_adapter_unsupported');
+  const b=fixtureBinding;
+  if(!exact(b,['version','fixtureId','fixtureReceiptDigest','fixtureReceiptIdentity','source','artifactManifestSha256','base','dataRoot','artifactIdentity','current','configuration','node'])||b.version!==1||
+    typeof b.fixtureId!=='string'||!/^([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})(?![\s\S])/.test(b.fixtureId)||
+    !digest(b.fixtureReceiptDigest)||!pathIdentity(b.fixtureReceiptIdentity)||!digest(b.artifactManifestSha256)||!pathIdentity(b.artifactIdentity)||
+    !exact(b.source,['root','revision','sourceTree','controllerSha256'])||!releaseIdentity({revision:b.source.revision,sourceTree:b.source.sourceTree,buildId:'census-source-binding'})||!digest(b.source.controllerSha256)||
+    ![b.base,b.dataRoot].every(row=>exact(row,['path','identity'])&&typeof row.path==='string'&&pathIdentity(row.identity))||
+    ![b.current,b.configuration].every(row=>exact(row,['digest','identity'])&&digest(row.digest)&&pathIdentity(row.identity))||
+    !exact(b.node,['path','bytes','sha256','identity'])||b.node.path!==process.execPath||!positive(b.node.bytes)||b.node.bytes>64*1024*1024||!digest(b.node.sha256)||!pathIdentity(b.node.identity))closed('invalid_current_census_binding');
+  // Refuse unknown/live paths through the existing provenance registry before
+  // reading caller-supplied source or fixture metadata. No registry root owner
+  // or current time capability is acquired by these assertions.
+  assertFileRuntimeFixture(b.dataRoot.path);
+  const topology=fileRuntimeFixtureSupervisor(b.dataRoot.path),provenance=fileRuntimeFixtureProvenance(b.dataRoot.path);
+  if(!/^\/private\/tmp\/vox-mi1-b-[A-Za-z0-9]{6}(?![\s\S])/.test(topology.parent)||topology.base!==b.base.path||topology.dataRoot!==b.dataRoot.path||
+    topology.artifact!==artifactRoot||b.fixtureId!==provenance.fixtureId||b.fixtureReceiptDigest!==provenance.receiptDigest||
+    topology.parent!==provenance.parent||dirname(artifactRoot)!==topology.parent)closed('current_census_fixture_mismatch');
+  function nodeSnapshot(){
+    if(realpathSync(b.node.path)!==b.node.path)closed('current_census_node_mismatch');
+    const s=info(b.node.path);
+    if(!s?.isFile()||s.isSymbolicLink()||s.nlink!==1n||(s.mode&0o022n)||!(s.mode&0o100n)||s.size!==BigInt(b.node.bytes)||!same(identity(s),b.node.identity))closed('current_census_node_mismatch');
+    const fd=openSync(b.node.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    try{
+      const opened=fstatSync(fd,{bigint:true}),raw=Buffer.alloc(b.node.bytes+1);let length=0,n;
+      do{n=readSync(fd,raw,length,raw.length-length,null);length+=n;}while(n&&length<raw.length);
+      const after=fstatSync(fd,{bigint:true}),named=info(b.node.path),stamp=v=>[identity(v),String(v.mode),String(v.nlink),String(v.size),String(v.ctimeNs),String(v.mtimeNs)];
+      if(!named||length!==b.node.bytes||hash(raw.subarray(0,length))!==b.node.sha256||![opened,after,named].every(v=>same(stamp(v),stamp(s))))closed('current_census_node_mismatch');
+      return stamp(after);
+    }finally{closeSync(fd);}
+  }
+  function snapshot(){
+    assertFileRuntimeFixture(b.dataRoot.path);
+    if(!same(fileRuntimeFixtureSupervisor(b.dataRoot.path),topology)||!same(fileRuntimeFixtureProvenance(b.dataRoot.path),provenance)||
+      !same(privateMetadataBase(b.base.path),b.base.identity)||!same(privateMetadataBase(b.dataRoot.path),b.dataRoot.identity)||
+      !same(privateMetadataBase(artifactRoot),b.artifactIdentity))closed('current_census_fixture_changed');
+    const receipt=metadataFile(join(topology.parent,'file-runtime-owner-fixture-v1.json'),4096),r=JSON.parse(receipt?.text??'null'),pinned=metadataArtifact(artifactRoot),m=pinned.manifest;
+    parseCurrentFixtureCensusDescriptor(m.runtimeCurrentProcessCensus,pinned.binaryHash);
+    if(!receipt||receipt.digest!==b.fixtureReceiptDigest||!same(receipt.identity,b.fixtureReceiptIdentity)||r.sourceRoot!==b.source.root||
+      pinned.manifestFile.digest!==b.artifactManifestSha256||m.revision!==b.source.revision||m.sourceTree!==b.source.sourceTree||
+      m.memoryAccountManagedRuntime?.helpers?.['studio-runtime.mjs']!==b.source.controllerSha256)closed('current_census_source_mismatch');
+    const source=metadataFile(join(b.source.root,'scripts','studio-production.mjs'),2*1024*1024,false),installed=metadataFile(join(artifactRoot,'studio-runtime.mjs'),2*1024*1024,false);
+    const current=readCurrent(b.base.path),configuration=metadataFile(join(b.base.path,'production.env'),65536);
+    if(source?.digest!==b.source.controllerSha256||installed?.digest!==b.source.controllerSha256||current.absent||current.release.path!==artifactRoot||
+      hash(JSON.stringify(current))!==b.current.digest||!same(current.identity,b.current.identity)||configuration?.digest!==b.configuration.digest||
+      !same(configuration.identity,b.configuration.identity)||parseEnv(configuration.text).STUDIO_DATA_DIR!==b.dataRoot.path)closed('current_census_state_changed');
+    return {pinned,source,installed,current,configuration,receipt,node:nodeSnapshot()};
+  }
+  const before=snapshot(),expected={uid:process.geteuid?.()??process.getuid(),baseDevice:b.base.identity.dev,baseInode:b.base.identity.ino,artifactDevice:b.artifactIdentity.dev,artifactInode:b.artifactIdentity.ino};
+  const args=['--current-fixture-census-v1',b.node.path,b.base.path,artifactRoot,expected.baseDevice,expected.baseInode,expected.artifactDevice,expected.artifactInode];
+  const result=spawnSync(before.pinned.path,args,{env:{},cwd:topology.parent,detached:true,shell:false,timeout,maxBuffer:16384,stdio:['ignore','pipe','pipe']});
+  if(result.error||result.signal||!Buffer.isBuffer(result.stderr)||result.stderr.length||!same(snapshot(),before))closed('current_census_query_unavailable');
+  const parsed=parseCurrentFixtureCensus(result.stdout,expected);
+  if(result.status!=={complete:0,unavailable:4,changed:5,invalid:64,overflow:6}[parsed.status])closed('current_census_query_unavailable');
+  return parsed;
 }
 export function normalizeProcessObserver(parsed,targetPid,observerPid,selfPid=process.pid){
   const value=parseProcessMetadata(JSON.stringify(parsed),targetPid);

@@ -6,7 +6,7 @@ import { lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { parseProcessMetadata } from './studio-production.mjs';
+import { parseProcessMetadata, parseCurrentFixtureCensus } from './studio-production.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const MAX64 = '18446744073709551615';
@@ -183,3 +183,140 @@ test('Darwin actual production observer and ChildProcess adapter publish termina
     console.info('FRO1_NATIVE_WRAPPER_RETAINED_EVIDENCE',parent);
   }
 });
+
+// Census is a present-only ABI. Its independent switch never piggybacks on the
+// older FRO1 binary gate, and portable fixtures are not kernel observations.
+const censusExpected = { uid: 501, baseDevice: '1', baseInode: '9007199254740993', artifactDevice: '1', artifactInode: '9007199254740995' };
+const censusWire = value => Buffer.from(JSON.stringify(value) + '\n');
+const censusRow = (pid = 701, cwd = 'base') => ({ identity: [pid, 1, 501, pid, '9007199254740993', '1793016000', '999999'], cwd });
+const censusComplete = (matches = []) => ({ version: 1, status: 'complete', ...censusExpected, matches });
+
+test('MI1 current census portable empty and matching outputs preserve present-only scope and uint64 precision', () => {
+  for (const matches of [[], [censusRow()], Array.from({ length: 16 }, (_, i) => censusRow(701 + i, i % 2 ? 'artifact' : 'base'))]) {
+    const expected = censusComplete(matches);
+    assert.deepEqual(parseCurrentFixtureCensus(censusWire(expected), censusExpected), expected);
+  }
+  const maximum = censusComplete([{ ...censusRow(), identity: [701, 1, 501, 701, MAX64, MAX64, '999999'] }]);
+  assert.deepEqual(parseCurrentFixtureCensus(censusWire(maximum), censusExpected), maximum);
+});
+
+for (const status of ['invalid', 'unavailable', 'changed', 'overflow']) test(`MI1 current census portable ${status} cannot become an empty proof`, () => {
+  const failure = { version: 1, status };
+  const parsed = parseCurrentFixtureCensus(censusWire(failure), censusExpected);
+  assert.deepEqual(parsed, failure); assert.equal(Object.hasOwn(parsed, 'matches'), false);
+  assert.throws(() => parseCurrentFixtureCensus(censusWire({ ...failure, matches: [] }), censusExpected));
+});
+
+const censusDamage = {
+  'extra history assertion': row => { row.totalAttempts = 0; },
+  'foreign uid': row => { row.uid++; },
+  'base device': row => { row.baseDevice = '2'; },
+  'base inode': row => { row.baseInode = '9007199254740992'; },
+  'artifact inode': row => { row.artifactInode = '8'; },
+  'numeric inode rounding': row => { row.baseInode = 9007199254740992; },
+  'noncanonical inode': row => { row.baseInode = '01'; },
+  'uint64 overflow': row => { row.artifactInode = '18446744073709551616'; },
+  'seventeen matches': row => { row.matches = Array.from({ length: 17 }, (_, i) => censusRow(701 + i)); },
+  'duplicate pid with different birth': row => { row.matches.push({ ...censusRow(), identity: [701, 1, 501, 701, '2', '1793016000', '999999'] }); },
+  'unsorted pids': row => { row.matches = [censusRow(702), censusRow(701)]; },
+  'tuple uid': row => { row.matches[0].identity[2]++; },
+  'zero pid': row => { row.matches[0].identity[0] = 0; },
+  'pid overflow': row => { row.matches[0].identity[0] = 2147483648; },
+  'parent overflow': row => { row.matches[0].identity[1] = 2147483648; },
+  'zero pgid': row => { row.matches[0].identity[3] = 0; },
+  'numeric birth rounding': row => { row.matches[0].identity[4] = 9007199254740992; },
+  'zero birth': row => { row.matches[0].identity[4] = '0'; },
+  'invalid microseconds': row => { row.matches[0].identity[6] = '1000000'; },
+  'extra tuple field': row => { row.matches[0].identity.push('unrelated'); },
+  'foreign cwd role': row => { row.matches[0].cwd = 'elsewhere'; },
+  'unrelated path disclosure': row => { row.matches[0].cwdPath = '/unrelated/private/path'; },
+};
+for (const [name, mutate] of Object.entries(censusDamage)) test(`MI1 current census portable refuses ${name}`, () => {
+  const value = censusComplete([censusRow()]); mutate(value);
+  assert.throws(() => parseCurrentFixtureCensus(censusWire(value), censusExpected));
+});
+
+test('MI1 current census portable rejects malformed wire and invalid expected selector before returning a proof', () => {
+  for (const bytes of [Buffer.from([0xc3, 0x28]), Buffer.from('{'), Buffer.alloc(16385, 32),
+    Buffer.from(JSON.stringify(censusComplete())), Buffer.from(JSON.stringify(censusComplete()) + '\n '),
+    Buffer.from('{"version":1,"version":1,"status":"invalid"}\n')]) {
+    assert.throws(() => parseCurrentFixtureCensus(bytes, censusExpected));
+  }
+  for (const expected of [null, { ...censusExpected, arbitrarySelector: '/elsewhere' }, { ...censusExpected, uid: -1 },
+    { ...censusExpected, uid: 4294967296 }, { ...censusExpected, baseInode: 9007199254740992 }]) {
+    assert.throws(() => parseCurrentFixtureCensus(censusWire(censusComplete()), expected));
+  }
+});
+
+const censusBinary = process.env.MI1_CENSUS_NATIVE_TEST_BINARY;
+const censusBinaryHash = process.env.MI1_CENSUS_NATIVE_TEST_SHA256;
+const censusNodeHash = process.env.MI1_CENSUS_NATIVE_NODE_SHA256;
+const censusNativeAvailable = process.platform === 'darwin' && process.arch === 'arm64' && Boolean(censusBinary && censusBinaryHash && censusNodeHash);
+const censusNativeSkip = censusNativeAvailable ? false : 'UNAVAILABLE: explicit frozen census Darwin arm64 binary/hash and Node hash required; portable results are separate';
+
+function censusNativeCall(args) {
+  assert.ok(censusBinary && isAbsolute(censusBinary)); assert.match(censusBinaryHash ?? '', /^[a-f0-9]{64}$/); assert.match(censusNodeHash ?? '', /^[a-f0-9]{64}$/);
+  assert.equal(createHash('sha256').update(readFileSync(realpathSync(process.execPath))).digest('hex'), censusNodeHash);
+  const stamp = path => { const s = lstatSync(path, { bigint: true }); return [String(s.dev), String(s.ino), String(s.birthtimeNs), String(s.size), String(s.mtimeNs), String(s.ctimeNs)]; };
+  const stat = lstatSync(censusBinary); assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.uid === process.getuid() && !(stat.mode & 0o077) && (stat.mode & 0o100));
+  const before = stamp(censusBinary); assert.equal(createHash('sha256').update(readFileSync(censusBinary)).digest('hex'), censusBinaryHash);
+  const result = spawnSync(censusBinary, args, { env: {}, timeout: 2000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(result.error, undefined); assert.equal(result.signal, null); assert.equal(result.stderr.length, 0);
+  assert.deepEqual(stamp(censusBinary), before); assert.equal(createHash('sha256').update(readFileSync(censusBinary)).digest('hex'), censusBinaryHash);
+  return result;
+}
+
+async function censusNativeFixture(run) {
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'vox-mi1-b-'))), base = join(parent, 'base'), artifact = join(parent, 'artifact'), unrelated = join(parent, 'unrelated');
+  for (const directory of [base, artifact, unrelated]) mkdirSync(directory, { mode: 0o700 });
+  const b = lstatSync(base, { bigint: true }), a = lstatSync(artifact, { bigint: true });
+  const expected = { uid: process.getuid(), baseDevice: String(b.dev), baseInode: String(b.ino), artifactDevice: String(a.dev), artifactInode: String(a.ino) };
+  const args = ['--current-fixture-census-v1', realpathSync(process.execPath), base, artifact, expected.baseDevice, expected.baseInode, expected.artifactDevice, expected.artifactInode];
+  const children = [];
+  const start = async cwd => {
+    const child = spawn(process.execPath, ['-e', "process.title='next-server (census synthetic title)';process.on('message',()=>process.exit(0));setTimeout(()=>process.exit(0),8000);process.send('ready');"], { cwd, detached: true, env: {}, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    children.push(child); await new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); child.once('exit', () => reject(Error('census_fixture_exited_before_ready'))); });
+    return child;
+  };
+  const stop = async child => { if (child.exitCode === null && child.signalCode === null) await new Promise(resolve => { child.once('exit', resolve); child.kill('SIGTERM'); }); };
+  let failure;
+  try { await run({ parent, base, artifact, unrelated, expected, args, start, stop }); }
+  catch (error) { failure = error; }
+  try {
+    await Promise.all(children.map(stop));
+    // This is one additional real census request, included in the future
+    // packet's native-call denominator. Never replace the first test failure.
+    const result = censusNativeCall(args), census = parseCurrentFixtureCensus(result.stdout, expected);
+    assert.equal(result.status, 0); assert.equal(census.status, 'complete'); assert.deepEqual(census.matches, []);
+    rmSync(parent, { recursive: true, force: true });
+  }
+  catch (error) {
+    console.info('MI1_CENSUS_NATIVE_RETAINED_UNSETTLED_FIXTURE', parent);
+    failure = failure ? new AggregateError([failure, error], 'census test failed; subsequent teardown proof also failed') : error;
+  }
+  if (failure) throw failure;
+}
+
+test('MI1 current census Darwin actual renamed base/artifact Node matches exclude unrelated cwd and become empty after shutdown', { skip: censusNativeSkip, timeout: 15000 }, () => censusNativeFixture(async f => {
+  const base = await f.start(f.base), artifact = await f.start(f.artifact), unrelated = await f.start(f.unrelated);
+  const result = censusNativeCall(f.args); assert.equal(result.status, 0);
+  const value = parseCurrentFixtureCensus(result.stdout, f.expected);
+  assert.equal(value.status, 'complete'); assert.deepEqual(value.matches.map(row => row.identity[0]), [base.pid, artifact.pid].sort((x, y) => x - y));
+  for (const [child, cwd] of [[base, 'base'], [artifact, 'artifact']]) {
+    const row = value.matches.find(row => row.identity[0] === child.pid); assert.equal(row.cwd, cwd); assert.equal(row.identity[1], process.pid); assert.equal(row.identity[2], process.getuid()); assert.equal(row.identity[3], child.pid);
+  }
+  assert.ok(!result.stdout.includes(Buffer.from(f.unrelated))); assert.ok(!result.stdout.includes(Buffer.from('executablePath'))); assert.ok(!value.matches.some(row => row.identity[0] === unrelated.pid));
+  await f.stop(base); await f.stop(artifact);
+  const emptyResult = censusNativeCall(f.args); assert.equal(emptyResult.status, 0);
+  assert.deepEqual(parseCurrentFixtureCensus(emptyResult.stdout, f.expected).matches, []);
+}));
+
+test('MI1 current census Darwin actual invalid selector identities and extra arguments return no partial matches', { skip: censusNativeSkip, timeout: 10000 }, () => censusNativeFixture(async f => {
+  await f.start(f.base);
+  for (const [args, status, exit] of [[[...f.args, 'extra'], 'invalid', 64],
+    [f.args.map((arg, index) => index === 5 ? '18446744073709551615' : arg), 'changed', 5],
+    [f.args.map((arg, index) => index === 1 ? join(f.parent, 'missing-node') : arg), 'unavailable', 4]]) {
+    const result = censusNativeCall(args); assert.equal(result.status, exit);
+    const value = parseCurrentFixtureCensus(result.stdout, f.expected); assert.deepEqual(value, { version: 1, status }); assert.equal(Object.hasOwn(value, 'matches'), false);
+  }
+}));

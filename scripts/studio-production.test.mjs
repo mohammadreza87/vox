@@ -1,6 +1,6 @@
 import {unitManagedDescriptor,unitFixturePrelude,writeUnitFixtureEpoch,assertUnitEpochClosed,renderUnitLaunchPlist,captureUnitRuntimeBoundary,assertUnitRuntimeBoundary} from './fixtures/studio-cli-unit-fixture.mjs';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -13,7 +13,8 @@ import { ADAPTIVE_RELEASE_CAPABILITIES } from './studio-adaptive-compatibility.m
 import { createHash,randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRuntimeProcessLifecycle, readRuntimeProcessReceipt, parseRuntimeProcessReceipt, commitRuntimeProcessReceipt,
-  createRuntimeHandoff, attachRuntimeProcessLifecycle, normalizeProcessObserver } from './studio-production.mjs';
+  createRuntimeHandoff, attachRuntimeProcessLifecycle, normalizeProcessObserver, parseCurrentFixtureCensusDescriptor,
+  nativeCurrentFixtureCensus } from './studio-production.mjs';
 import { FILE_RUNTIME_OWNER_GUARD, FILE_RUNTIME_OWNER_MARKER, FILE_RUNTIME_OWNER_MARKER_BYTES } from './studio-file-runtime-owner.mjs';
 
 const script = fileURLToPath(new URL('./studio-production.mjs', import.meta.url));
@@ -909,3 +910,100 @@ test('actual synthetic backup checks the restarted baseline revision before comp
   assert.deepEqual(readFileSync(f.effects, 'utf8').split('\n').filter(x => x.startsWith('health:')), [`health:${f.old.revision}`]);
   assert.equal(existsSync(f.lockPath), false);
 }));
+
+test('MI1 current census portable descriptor requires its exact own version and pinned ABI1 binary digest', () => {
+  const hash = 'a'.repeat(64), descriptor = { version: 1, selectorVersion: 1, metadataBinarySha256: hash };
+  assert.deepEqual(parseCurrentFixtureCensusDescriptor(descriptor, hash), descriptor);
+  for (const value of [undefined, null, { ...descriptor, version: 2 }, { ...descriptor, selectorVersion: 0 },
+    { ...descriptor, metadataBinarySha256: 'b'.repeat(64) }, { ...descriptor, available: true }]) {
+    assert.throws(() => parseCurrentFixtureCensusDescriptor(value, hash));
+  }
+  assert.throws(() => parseCurrentFixtureCensusDescriptor(descriptor, hash.toUpperCase()));
+});
+
+test('MI1 current census portable adapter invalid deadline refuses before reading any caller path or spawning', () => {
+  for (const timeout of [0, -1, 2001, 1.5, NaN, Infinity]) assert.throws(() => nativeCurrentFixtureCensus('/unread-caller-artifact', null, timeout), /native_process_deadline_invalid/);
+});
+
+/** Deterministic adapter failure model. The only native-shaped spawn is
+ * intercepted before source import; no binary, service, listener or provider
+ * executes. Actual Darwin cases live behind a different explicit binary gate. */
+async function currentCensusAdapterModel(config) {
+  const assert = (await import('node:assert/strict')).default, fs = await import('node:fs');
+  const cp = (await import('node:child_process')).default, { syncBuiltinESMExports } = await import('node:module');
+  const { createHash } = await import('node:crypto'), { join } = await import('node:path');
+  const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+  const identity = path => { const s = fs.lstatSync(path, { bigint: true }); return { dev: String(s.dev), ino: String(s.ino), birth: String(s.birthtimeNs) }; };
+  Object.defineProperty(process, 'platform', { value: 'darwin' }); Object.defineProperty(process, 'arch', { value: 'arm64' });
+  let calls = 0;
+  const deny = () => { throw Error('CENSUS_MODEL_UNEXPECTED_EFFECT'); };
+  cp.spawn = deny; cp.exec = deny; cp.execSync = deny; cp.execFile = deny; cp.execFileSync = deny; cp.fork = deny;
+  cp.spawnSync = (file, args, options) => {
+    calls++; assert.equal(file, join(config.topology.artifact, 'studio-process-metadata'));
+    assert.deepEqual(args, ['--current-fixture-census-v1', process.execPath, config.topology.base, config.topology.artifact,
+      binding.base.identity.dev, binding.base.identity.ino, binding.artifactIdentity.dev, binding.artifactIdentity.ino]);
+    assert.deepEqual(options, { env: {}, cwd: config.topology.parent, detached: true, shell: false, timeout: 1234, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (config.mode === 'changed-config-after') fs.appendFileSync(join(config.topology.base, 'production.env'), 'STUDIO_BOTS=0\n');
+    const expected = { uid: process.getuid(), baseDevice: binding.base.identity.dev, baseInode: binding.base.identity.ino, artifactDevice: binding.artifactIdentity.dev, artifactInode: binding.artifactIdentity.ino };
+    const status = ['invalid', 'unavailable', 'changed', 'overflow'].includes(config.mode) ? config.mode : 'complete';
+    const value = status === 'complete' ? { version: 1, status, ...expected, matches: [] } : { version: 1, status };
+    return { status: config.mode === 'wrong-exit' ? 5 : { complete: 0, invalid: 64, unavailable: 4, changed: 5, overflow: 6 }[status],
+      stdout: Buffer.from(JSON.stringify(value) + '\n'), stderr: config.mode === 'stderr' ? Buffer.from('model diagnostic') : Buffer.alloc(0),
+      signal: config.mode === 'signal' ? 'SIGTERM' : null, error: config.mode === 'timeout' ? Object.assign(Error('model timeout'), { code: 'ETIMEDOUT' }) : undefined };
+  };
+  const net = (await import('node:net')).default, http = (await import('node:http')).default, https = (await import('node:https')).default;
+  net.connect = deny; net.createConnection = deny; net.Server.prototype.listen = deny; http.request = deny; https.request = deny; globalThis.fetch = deny;
+  syncBuiltinESMExports();
+  const api = await import(config.apiURL), owner = await import(config.ownerURL), operations = await import(config.operationsURL);
+  const t = config.topology, manifest = JSON.parse(fs.readFileSync(join(t.artifact, 'studio-release.json')));
+  if (config.mode !== 'unregistered') owner.registerFileRuntimeFixture({ dataRoot: t.dataRoot, artifactRoot: t.artifact, release: config.release });
+  const current = operations.readCurrent(t.base), nodePath = fs.realpathSync(process.execPath), nodeStat = fs.lstatSync(nodePath);
+  const binding = { version: 1, fixtureId: t.fixtureId, fixtureReceiptDigest: sha(fs.readFileSync(join(t.parent, 'file-runtime-owner-fixture-v1.json'))), fixtureReceiptIdentity: identity(join(t.parent, 'file-runtime-owner-fixture-v1.json')),
+    source: { root: t.sourceRoot, revision: manifest.revision, sourceTree: manifest.sourceTree, controllerSha256: sha(fs.readFileSync(join(t.sourceRoot, 'scripts', 'studio-production.mjs'))) },
+    artifactManifestSha256: sha(fs.readFileSync(join(t.artifact, 'studio-release.json'))), base: { path: t.base, identity: identity(t.base) }, dataRoot: { path: t.dataRoot, identity: identity(t.dataRoot) }, artifactIdentity: identity(t.artifact),
+    current: { digest: sha(JSON.stringify(current)), identity: current.identity }, configuration: { digest: sha(fs.readFileSync(join(t.base, 'production.env'))), identity: identity(join(t.base, 'production.env')) },
+    node: { path: nodePath, bytes: nodeStat.size, sha256: sha(fs.readFileSync(nodePath)), identity: identity(nodePath) } };
+  if (config.mode === 'stale-config') binding.configuration.digest = 'f'.repeat(64);
+  if (config.mode === 'stale-current') binding.current.digest = 'f'.repeat(64);
+  if (config.mode === 'wrong-node') binding.node.sha256 = 'f'.repeat(64);
+  if (config.mode === 'extra-binding') binding.excludedPids = [];
+  if (config.mode === 'missing-descriptor') { delete manifest.runtimeCurrentProcessCensus; fs.writeFileSync(join(t.artifact, 'studio-release.json'), JSON.stringify(manifest)); }
+  const failures = ['unregistered', 'stale-config', 'stale-current', 'wrong-node', 'extra-binding', 'missing-descriptor', 'changed-config-after', 'wrong-exit', 'timeout', 'signal', 'stderr'];
+  if (failures.includes(config.mode)) assert.throws(() => api.nativeCurrentFixtureCensus(t.artifact, binding, 1234));
+  else {
+    const value = api.nativeCurrentFixtureCensus(t.artifact, binding, 1234);
+    assert.equal(value.status, config.mode === 'complete' ? 'complete' : config.mode);
+    if (value.status === 'complete') assert.deepEqual(value.matches, []);
+    else assert.equal(Object.hasOwn(value, 'matches'), false);
+  }
+  const preRefusal = ['unregistered', 'stale-config', 'stale-current', 'wrong-node', 'extra-binding', 'missing-descriptor'].includes(config.mode);
+  assert.equal(calls, preRefusal ? 0 : 1);
+  for (const name of ['runtime-process-v1.json', 'runtime-owner-recovery-v1.json', 'memory-account-initialization-v1.json', '.studio-operation.lock']) assert.equal(fs.existsSync(join(t.base, name)), false);
+  assert.equal(fs.existsSync(join(t.dataRoot, '.studio-runtime-owner-v1.lock')), false);
+  process.stdout.write(JSON.stringify({ evidence: 'DETERMINISTIC_ADAPTER_MODEL_NOT_KERNEL', mode: config.mode, calls }) + '\n');
+}
+
+const censusAdapterModelSkip = existsSync('/private/tmp') && realpathSync('/private/tmp') === '/private/tmp' ? false : 'UNAVAILABLE: exact private Darwin fixture path unavailable for deterministic adapter model';
+for (const mode of ['complete', 'invalid', 'unavailable', 'changed', 'overflow', 'unregistered', 'stale-config', 'stale-current', 'wrong-node', 'extra-binding', 'missing-descriptor', 'changed-config-after', 'wrong-exit', 'timeout', 'signal', 'stderr']) {
+  test(`MI1 current census simulated adapter ${mode}`, { skip: censusAdapterModelSkip, timeout: 10000 }, () => {
+    const parent = realpathSync(mkdtempSync('/private/tmp/vox-mi1-b-'));
+    try {
+      const release = { revision: 'a'.repeat(40), sourceTree: 'b'.repeat(40), buildId: 'census-unit-only' };
+      const topology = writeUnitFixtureEpoch({ parent, release, helpersDirectory: dirname(script), preloadText: '// Inert provenance only; never imported.\n' });
+      mkdirSync(join(topology.sourceRoot, 'scripts')); cpSync(script, join(topology.sourceRoot, 'scripts', 'studio-production.mjs'));
+      writeFileSync(join(topology.base, 'production.env'), `STUDIO_DATA_DIR='${topology.dataRoot}'\n`, { mode: 0o600 });
+      symlinkSync(topology.artifact, join(topology.base, 'current'));
+      const binaryBytes = Buffer.from('INERT CENSUS MODEL BINARY; MUST NEVER EXECUTE\n'), binaryHash = createHash('sha256').update(binaryBytes).digest('hex');
+      writeFileSync(join(topology.artifact, 'studio-process-metadata'), binaryBytes, { mode: 0o700 }); chmodSync(join(topology.artifact, 'studio-process-metadata'), 0o700);
+      const manifestPath = join(topology.artifact, 'studio-release.json'), manifest = JSON.parse(readFileSync(manifestPath));
+      manifest.runtimeProcessMetadata = { version: 1, abi: 1, available: true, platform: 'darwin', arch: 'arm64', file: 'studio-process-metadata', bytes: binaryBytes.length, binarySha256: binaryHash,
+        sourceSha256: 'c'.repeat(64), compilerPath: '/synthetic/non-executed-compiler', compilerSha256: 'd'.repeat(64), compilerVersionSha256: 'e'.repeat(64), sdkVersion: '0.0', deploymentTarget: '11.0' };
+      manifest.runtimeCurrentProcessCensus = { version: 1, selectorVersion: 1, metadataBinarySha256: binaryHash };
+      writeFileSync(manifestPath, JSON.stringify(manifest) + '\n', { mode: 0o600 });
+      const config = { mode, release, topology, apiURL: new URL('./studio-production.mjs', import.meta.url).href, ownerURL: new URL('./studio-file-runtime-owner.mjs', import.meta.url).href, operationsURL: new URL('./studio-operation-guard.mjs', import.meta.url).href };
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', `await (${currentCensusAdapterModel.toString()})(${JSON.stringify(config)});`], { cwd: parent, env: {}, timeout: 9000, maxBuffer: 8192, encoding: 'utf8' });
+      assert.equal(result.error, undefined); assert.equal(result.signal, null); assert.equal(result.status, 0, result.stderr);
+      const receipt = JSON.parse(result.stdout); assert.equal(receipt.evidence, 'DETERMINISTIC_ADAPTER_MODEL_NOT_KERNEL'); assert.equal(receipt.mode, mode);
+    } finally { rmSync(parent, { recursive: true, force: true }); }
+  });
+}
