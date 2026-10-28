@@ -1,4 +1,6 @@
 /** Original FILE ER1 format/time admission. Initialization belongs to managed offline migration. */
+import { readManagedMemoryAccountOperation, type ManagedMemoryAccountOperation } from '../../../scripts/studio-memory-account-operation.mjs';
+import { qualifiedMemoryClock } from './memory-account-time';
 import { randomUUID, createHash } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -97,3 +99,62 @@ export function observeMemoryAccountTime(directory: string, clock: () => number)
   }
 }
 export function memoryAccountFileDigest(value: string): string { return createHash('sha256').update(value).digest('hex'); }
+
+/** Partial control inspection is private to the managed operation; ordinary readers still require the pair. */
+export function inspectMemoryAccountControls(directory: string): { marker: string | null; time: string | null; highWaterMs?: number } {
+  const marker = readMemoryAccountPrivateFile(join(directory, MEMORY_ACCOUNT_MARKER), 128);
+  const time = readMemoryAccountPrivateFile(join(directory, MEMORY_ACCOUNT_TIME), 256);
+  if (marker !== null && marker !== MEMORY_ACCOUNT_MARKER_BYTES || marker !== null && time === null) throw new Error('Memory account controls unavailable');
+  if (time === null) return { marker, time };
+  const parsed = memoryAccountTimeSchema.parse(JSON.parse(time));
+  if (time !== `${JSON.stringify(parsed)}\n`) throw new Error('Memory account time unavailable');
+  return { marker, time, highWaterMs: parsed.highWaterMs };
+}
+
+/** First publication authority is the registered actual stopped MI1 operation, never a clock callback. */
+export function publishMemoryAccountRoot(operation: ManagedMemoryAccountOperation): { marked: true; highWaterMs: number } {
+  const context = readManagedMemoryAccountOperation(operation), directory = join(context.dataRoot, 'adaptive');
+  const initial = fs.lstatSync(directory), rootIdentity = [initial.dev, initial.ino, initial.birthtimeMs];
+  const assertDirectory = () => {
+    const actual = fs.lstatSync(directory);
+    if (!actual.isDirectory() || actual.isSymbolicLink() || actual.uid !== process.getuid?.() || (actual.mode & 0o077) !== 0 || JSON.stringify([actual.dev, actual.ino, actual.birthtimeMs]) !== JSON.stringify(rootIdentity)) throw new Error('Memory account root changed');
+  };
+  assertDirectory(); context.assertCurrent();
+  let controls = inspectMemoryAccountControls(directory);
+  if (controls.marker !== null) {
+    checkMemoryAccountTime(directory, qualifiedMemoryClock(context.time));
+    return { marked: true, highWaterMs: controls.highWaterMs! };
+  }
+  const publish = (purpose: 'time' | 'marker', bytes: string, highWaterMs?: number) => {
+    const basename = randomUUID(), name = purpose === 'time' ? MEMORY_ACCOUNT_TIME : MEMORY_ACCOUNT_MARKER;
+    const path = join(directory, name), temporary = `${path}.${basename}.tmp`;
+    const expected = inspectMemoryAccountControls(directory), digest = memoryAccountFileDigest(bytes);
+    context.assertCurrent(); assertDirectory(); context.reserveTransient({ purpose, basename });
+    prepareFileRuntimeTransient(temporary);
+    const handle = openFileRuntimeDescriptor(temporary, 'wx', 0o600);
+    try { handle.writeFile(bytes); handle.sync(); } finally { handle.close(); }
+    context.createdTransient({ purpose, basename, digest });
+    // On any unknown result retain exact registered evidence for managed forward reconciliation.
+    commitFileRuntimeRename(temporary, path, () => {
+      assertDirectory(); context.assertCurrent();
+      const actual = inspectMemoryAccountControls(directory);
+      if (actual.marker !== expected.marker || actual.time !== expected.time || purpose === 'marker' && actual.marker !== null) throw new Error('Memory account controls changed');
+      const final = context.checkDeadline();
+      if (highWaterMs !== undefined && final.utcUpperMs < highWaterMs || actual.highWaterMs !== undefined && final.utcUpperMs < actual.highWaterMs) throw new Error('Memory account clock regressed');
+      // Only the FRO pure active latch and synchronous rename follow this final interval.
+    });
+    const parent = fs.openSync(directory, 'r');
+    try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+    if (readMemoryAccountPrivateFile(path, purpose === 'time' ? 256 : 128) !== bytes) throw new Error('Memory account publication unknown');
+    context.published({ purpose, digest, ...(highWaterMs === undefined ? {} : { highWaterMs }) });
+  };
+  const now = context.checkDeadline().utcUpperMs;
+  if (controls.highWaterMs !== undefined && now < controls.highWaterMs) throw new Error('Memory account clock regressed');
+  publish('time', `${JSON.stringify({ version: 1, highWaterMs: now })}\n`, now);
+  controls = inspectMemoryAccountControls(directory);
+  if (controls.highWaterMs !== now || controls.marker !== null) throw new Error('Memory account time publication unknown');
+  publish('marker', MEMORY_ACCOUNT_MARKER_BYTES);
+  const root = readMemoryAccountRoot(directory);
+  if (!root.marked) throw new Error('Memory account publication unavailable');
+  return root;
+}

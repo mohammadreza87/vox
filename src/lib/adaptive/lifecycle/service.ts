@@ -1,3 +1,4 @@
+import {currentMemoryAccountWork,memoryAccountWorkDetails,type MemoryAccountWork} from '../memory-account-lifecycle';
 import { exportAssistantDeliveryControl, pruneAssistantDeliveryControl } from '../assistant-delivery-control';
 import { accountIdFor, digest, type AdaptiveDocument, type SpaceKind } from '../persistence/repository';
 import { AdaptiveError, type AdaptiveService } from '../persistence/service';
@@ -154,17 +155,38 @@ export class AdaptiveLifecycleService {
    * Snapshot-only disaster recovery must remain offline until authority is restored. */
   async reconcileSnapshot(telegramId: number, snapshot: unknown) {
     if (!Number.isSafeInteger(telegramId) || telegramId <= 0) fail(401, 'authentication_required');
-    await this.adaptive.repository.storage.transact(accountIdFor(telegramId), current => {
+    const marked=this.adaptive.repository.memoryAccountMarked();
+    let captured: {work:MemoryAccountWork;incarnation:string;lifecycleRevision:number;revision:number;clock:()=>number}|undefined;
+    if(marked){
+      const work=currentMemoryAccountWork();if(!work)fail(409,'recovery_authority_unavailable');
+      const details=memoryAccountWorkDetails(work!);
+      if(details.accountId!==accountIdFor(telegramId))fail(409,'recovery_authority_unavailable');
+      const current=this.adaptive.readCommittedForEffect(telegramId,(d,now)=>{
+        if(!d.memoryLifecycle||!this.adaptive.isProfileConfirmed(d,now)||!this.adaptive.isCoreAllowed(d,now))fail(409,'recovery_authority_unavailable');
+        return {incarnation:d.memoryLifecycle!.incarnation,lifecycleRevision:d.memoryLifecycle!.revision,revision:d.revision};
+      });
+      if(current.status==='ready')captured={work:work!,...current.value,clock:details.clock};
+      else return fail(409,'recovery_authority_unavailable');
+    }
+    const assertCaptured=(d:AdaptiveDocument,now:number)=>{
+      if(!captured)return;
+      if(d.memoryLifecycle?.incarnation!==captured.incarnation||d.memoryLifecycle.revision!==captured.lifecycleRevision||d.revision!==captured.revision||!this.adaptive.isProfileConfirmed(d,now)||!this.adaptive.isCoreAllowed(d,now))fail(409,'recovery_authority_unavailable');
+    };
+    if(!captured)await this.adaptive.repository.storage.transact(accountIdFor(telegramId), current => {
       if (current === null) fail(409, 'recovery_authority_unavailable');
       return { document: current, result: undefined };
     });
+    let authorityDeadline=Number.MAX_SAFE_INTEGER;
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+      assertCaptured(d,now);
+      if(captured){authorityDeadline=d.binding!.expiresAt;const core=this.adaptive.capabilityStatus(d,'core_text',now);if(!core.eligible||core.validUntil===undefined)fail(409,'recovery_authority_unavailable');authorityDeadline=Math.min(authorityDeadline,core.validUntil!);}
       this.prune(d, now);
       const parsed = z.object({ accountId: z.string(), revision: z.number().int().nonnegative().safe(),
         memories: z.array(z.object({ id: z.string().min(1).max(200) }).passthrough()).max(300),
       }).passthrough().safeParse(snapshot);
       if (!parsed.success || parsed.data.accountId !== d.accountId) return fail(400, 'invalid_recovery_snapshot');
       if (parsed.data.revision > d.revision) return fail(409, 'recovery_authority_unavailable');
+      if(captured&&'memoryLifecycle' in parsed.data){const old=parsed.data.memoryLifecycle as {incarnation?:unknown}|undefined;if(!old||old.incarnation!==captured.incarnation)fail(409,'recovery_authority_unavailable');}
       const rows = parsed.data.memories;
       const accepted: string[] = [], suppressed: string[] = [];
       for (const row of rows) {
@@ -176,6 +198,10 @@ export class AdaptiveLifecycleService {
       return { schemaVersion: 1 as const, authorityRevision: d.revision, acceptedMemoryIds: accepted,
         suppressedMemoryIds: suppressed, importedPayloads: 0 as const, permissions: 'current_authority_only' as const,
         providerDeletion: 'unverified' as const, backupDeletion: 'unverified' as const };
-    });
+    },captured?()=>{
+      // Storage has just compared actual locked bytes and original work incarnation.
+      // No imported payload or stale snapshot can extend current authority.
+      if(captured){const now=captured.clock();if(now>=authorityDeadline)fail(409,'recovery_authority_unavailable');}
+    }:undefined);
   }
 }

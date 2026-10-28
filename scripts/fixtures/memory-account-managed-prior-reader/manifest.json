@@ -1,0 +1,22 @@
+{
+  "base": "ae1236f4794dac65d1c62e5661885764437e493c",
+  "tree": "763639f4206cbec7aec5dd21a33fdfdcca51b167",
+  "purpose": "Unmodified accepted ae reader and owner dependency; synthetic operational downgrade oracle only. Root froze before successor qualification; parser support is not qualified operational recovery. No live data/provider operation.",
+  "files": {
+    "studio-adaptive-compatibility.mjs": {
+      "source": "scripts/studio-adaptive-compatibility.mjs",
+      "sha256": "927467772c98539f13c1b446a86cb4ade6207a8aa446508bd89252d34410f145",
+      "bytes": 102513
+    },
+    "studio-file-runtime-owner.mjs": {
+      "source": "scripts/studio-file-runtime-owner.mjs",
+      "sha256": "508d3995a941c5376c069f20314f9e4276ee6a3b12220efeebb3002e8cfb457a",
+      "bytes": 35699
+    },
+    "studio-release.json": {
+      "source": "Accepted ae/VQF exact generated manifest; metadata only",
+      "sha256": "c959acff72e49568bfe5441302eb31cc875232d729e577d756537d983a7abbb8",
+      "bytes": 2234
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { qualifiedMemoryInterval } from '../memory-account-time';
 import { fileRuntimeFs, fileRuntimePromises, assertFileRuntimePath, commitFileRuntimeRename, prepareFileRuntimeTransient, createFileRuntimeTransientDirectory } from '../../studio/file-runtime-owner';
 const fs = fileRuntimePromises;
 const { existsSync, readFileSync, constants, openSync, closeSync, fstatSync, lstatSync } = fileRuntimeFs;
@@ -87,11 +88,12 @@ function accountFrom(raw: unknown, expectedKey: string): string | undefined {
       !Number.isSafeInteger(Number(id.slice('telegram-account:'.length))) || key(id) !== expectedKey) throw new Error('Invalid adaptive account index');
   return id;
 }
-function encode(document: unknown): string {
+export function encodeAdaptiveStorageDocument(document: unknown): string {
   const json = JSON.stringify(document);
   if (Buffer.byteLength(json) > MAX_ADAPTIVE_DOCUMENT_BYTES) throw new Error('Adaptive account storage capacity reached');
   return json;
 }
+const encode = encodeAdaptiveStorageDocument;
 
 /** Cross-instance process locks, fsync and atomic rename. A crashed lock fails closed;
  * an operator must inspect/remove it after verifying no writer still owns it. */
@@ -172,7 +174,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     if (captured.directory !== resolve(this.directory) || captured.accountId !== accountId || !document || typeof document !== 'object' || isMemoryAccountErasing(document) || !('memoryLifecycle' in document)) throw new Error('Memory account work refused');
     const lifecycle = parseMemoryLifecycle(document.memoryLifecycle, now ?? Number.MAX_SAFE_INTEGER);
     if (lifecycle.incarnation !== captured.incarnation) throw new Error('Memory account incarnation changed');
-    if (now !== undefined) assertMemoryAccountSource(lifecycle, captured.sourceDateSeconds, now);
+    if (now !== undefined) assertMemoryAccountSource(lifecycle, captured.sourceDateSeconds, now, qualifiedMemoryInterval(captured.clock, now).utcLowerMs);
   }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     if (this.memoryAccountMarked()) {
@@ -272,6 +274,13 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
       if(before?.assistantDeliveryControl || (document as AdaptiveDocument)?.assistantDeliveryControl)this.assertAssistantDeliveryControlMarker((document as AdaptiveDocument)?.assistantDeliveryControl?.version===2||before?.assistantDeliveryControl?.version===2?2:1);
       if((document as AdaptiveDocument)?.assistantDeliveryControl!==undefined){const d=document as AdaptiveDocument;if(d.schemaVersion!==1)throw new Error('Assistant control format unavailable');parseAssistantDeliveryControl(d.assistantDeliveryControl,accountId,d.personId,d.updatedAt);}
       assertAssistantDeliveryTransition(before,document as AdaptiveDocument,this.assistantWriters.has(mutate));
+      // Already qualified lifecycle rows are validated under the real account lock,
+      // without rewriting payloads, changing optional omissions or assigning a new incarnation.
+      if (lifecycleWriter === 'migration' && JSON.stringify(document) === JSON.stringify(current)) {
+        if (readMemoryAccountPrivateFile(file, MAX_ADAPTIVE_DOCUMENT_BYTES) !== originalBytes) throw new Error('Memory account committed state changed');
+        beforeCommit?.();
+        return result === undefined ? result : structuredClone(result);
+      }
       const json = encode(document);
       prepareFileRuntimeTransient(temporary);
       const handle = await fs.open(temporary, 'wx', 0o600);

@@ -1,3 +1,7 @@
+import {join} from 'node:path';
+import {readMemoryAccountRoot} from '../adaptive/memory-account-lifecycle-file';
+import {botIdOfToken} from './auth';
+import { assertQualifiedMemoryTime, qualifiedMemoryClock, qualifiedMemoryInterval, type QualifiedMemoryTime, type MemoryTimeInterval } from '../adaptive/memory-account-time';
 /** ER1 manager intent and original-work admission. No marker activation or wall-clock fallback. */
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash,createHmac,randomBytes} from 'node:crypto';
@@ -11,7 +15,7 @@ import {SourceFencePendingError,type AssistantTextPoller} from './assistant-text
 
 export class MemoryAccountUnavailable extends Error {constructor(){super('memory_account_unavailable');}}
 export interface MemoryAccountSession {ownerId:number;session:string;deadline:number;authenticate:(now:number)=>boolean;cancelled:()=>boolean}
-export interface MemoryAccountOptions {/** Independently qualified UTC source; deliberately absent at production composition until qualified. */ clock?:()=>number}
+export interface MemoryAccountOptions {/** Independently qualified UTC source; deliberately absent at production composition until qualified. */ clock?:()=>number; time?:QualifiedMemoryTime; managerToken?:()=>string}
 export interface MemoryAccountPreview {version:1;action:'fresh-bootstrap';scope:'original-file-canonical-memory-account';spaces:readonly ['work','personal'];agents:'all-canonical-agent-rows';expected:{kind:'missing'};previewDigest:string}
 export interface MemoryAccountStatusResponse {state:'unavailable'|'setup-required'|'legacy-current'|'fresh-confirmed'|'erasing';ready:false;reason:'source-time-and-core-eligibility-not-qualified';pending?:{expiresAt:number}}
 interface Challenge {ownerId:number;session:string;ownerGeneration:string;preview:MemoryAccountPreview;nonceHash:string;issuedAt:number;expiresAt:number}
@@ -23,6 +27,29 @@ const ambient=globalThis as typeof globalThis&{__voxMemoryAccountWork?:AsyncLoca
 const work=ambient.__voxMemoryAccountWork??=new AsyncLocalStorage<Work>();
 const maps=ambient.__voxMemoryAccountChallenges??=new Map<string,Map<number,Challenge>>();
 const currentTurnScopes=ambient.__voxCurrentTurnScopes??=new WeakMap<object,{work:Work;audience:string}>();
+interface OperationalComposition {studio:Studio;owner:NonNullable<Studio['deps']['fileRuntimeOwner']>;time:QualifiedMemoryTime;managerToken:()=>string}
+const operationalSlot=Symbol.for('vox.memory-account-operational-composition.v1');
+function operationalCompositions():WeakMap<object,OperationalComposition> {
+  const global=globalThis as typeof globalThis&{[operationalSlot]?:WeakMap<object,OperationalComposition>};
+  return global[operationalSlot]??=new WeakMap<object,OperationalComposition>();
+}
+/** Explicit operational metadata only: no account lookup, user eligibility or remote credential claim. */
+export function memoryAccountOperationalHealth(studio:Studio):{version:1;state:'available'|'unavailable'} {
+  const unavailable={version:1 as const,state:'unavailable' as const};
+  try{
+    const account=studio.deps.memoryAccount,composition=account?operationalCompositions().get(account):undefined,owner=studio.deps.fileRuntimeOwner;
+    if(!account||!composition||composition.studio!==studio||!owner||composition.owner!==owner||!studio.deps.managerBot)return unavailable;
+    const root=readMemoryAccountRoot(join(owner.root,'adaptive'));
+    if(!root.marked)return unavailable;
+    const token=composition.managerToken();
+    if(typeof token!=='string'||!token||!botIdOfToken(token))return unavailable;
+    // Root/owner/HWM and credential checks precede the last qualified sample.
+    assertQualifiedMemoryTime(composition.time,{dataRoot:owner.root,owner});
+    composition.time.sampleNow();
+    return {version:1,state:'available'};
+  }catch{return unavailable;}
+}
+
 /** Opaque scope is valid only in its original authenticated stateless work and captured public audience. */
 export function isMemoryAccountCurrentTurnScope(scope:unknown):boolean {
   if(!scope||typeof scope!=='object')return false;
@@ -33,15 +60,21 @@ export function assertMemoryAccountEffect():void {const row=work.getStore();if(r
 export function memoryAccountTurnCurrent():boolean {try{assertMemoryAccountEffect();return true;}catch{return false;}}
 export class StudioMemoryAccount {
   private readonly challenges:Map<number,Challenge>;
+  private readonly sourceClock:(()=>number)|undefined;
   private readonly accepted=new WeakMap<MemoryAccountQueuedUpdate,AcceptedUpdate>();
   constructor(readonly studio:Studio,readonly options:MemoryAccountOptions={}) {
-    const root=studio.deps.fileRuntimeOwner?.root??`unqualified:${randomBytes(16).toString('hex')}`;
+    const owner=studio.deps.fileRuntimeOwner;
+    if(options.time){if(!owner||options.clock)throw new MemoryAccountUnavailable();assertQualifiedMemoryTime(options.time,{dataRoot:owner.root,owner});}
+    this.sourceClock=options.time?qualifiedMemoryClock(options.time):options.clock;
+    if(options.time&&owner&&typeof options.managerToken==='function')operationalCompositions().set(this,{studio,owner,time:options.time,managerToken:options.managerToken});
+    const root=owner?.root??`unqualified:${randomBytes(16).toString('hex')}`;
     this.challenges=maps.get(root)??new Map();maps.set(root,this.challenges);
     studio.deps.fileRuntimeOwner?.onDrain(()=>{this.challenges.clear();});
   }
   private repository(){const r=this.studio.deps.adaptive?.repository;if(!r)throw new MemoryAccountUnavailable();return r;}
   marked():boolean{return this.repository().memoryAccountMarked();}
-  now():number {this.studio.deps.fileRuntimeOwner?.assertCurrent();const n=this.options.clock?.();if(n===undefined||!Number.isSafeInteger(n)||n<0)throw new MemoryAccountUnavailable();return n;}
+  now():number {this.studio.deps.fileRuntimeOwner?.assertCurrent();const n=this.sourceClock?.();if(n===undefined||!Number.isSafeInteger(n)||n<0)throw new MemoryAccountUnavailable();return n;}
+  interval(now=this.now()):MemoryTimeInterval {if(!this.sourceClock)throw new MemoryAccountUnavailable();return qualifiedMemoryInterval(this.sourceClock,now);}
   private generation():string {const owner=this.studio.deps.fileRuntimeOwner;if(!owner)throw new MemoryAccountUnavailable();owner.assertCurrent();owner.assertActive();return digest(owner.snapshot());}
   session(initData:string):string{return createHmac('sha256',this.studio.deps.secret).update('er1-manager-session\0').update(initData).digest('hex');}
   private live(s:MemoryAccountSession,now:number):void {if(s.cancelled()||now>=s.deadline||!s.authenticate(now))throw new MemoryAccountUnavailable();}
@@ -73,7 +106,7 @@ export class StudioMemoryAccount {
     const c=this.challenges.get(s.ownerId);
     const check=(now:number)=>{
       const ownerGeneration=this.generation();now=this.now();this.live(s,now);
-      const finalNow=this.options.clock?.();if(finalNow===undefined||!Number.isSafeInteger(finalNow)||finalNow<now||finalNow>=s.deadline||c&&finalNow>=c.expiresAt)throw new MemoryAccountUnavailable();
+      const finalNow=this.sourceClock?.();if(finalNow===undefined||!Number.isSafeInteger(finalNow)||finalNow<now||finalNow>=s.deadline||c&&finalNow>=c.expiresAt)throw new MemoryAccountUnavailable();
       if(!c||this.challenges.get(s.ownerId)!==c||now<c.issuedAt||now>=c.expiresAt||c.session!==s.session||c.ownerGeneration!==ownerGeneration||c.preview.previewDigest!==previewDigest||c.nonceHash!==createHash('sha256').update(nonce).digest('hex'))throw new MemoryAccountUnavailable();
     };
     check(this.now());
@@ -110,9 +143,9 @@ export class StudioMemoryAccount {
     if(marked&&message&&message.chat.type==='private'&&message.from&&!message.from.is_bot&&message.chat.id===message.from.id&&
       typeof message.text==='string'&&!message.voice&&!message.photo?.length&&!message.document&&assistant?.memoryAccountSourceCurrent(agentId,message,poller)&&Number.isSafeInteger(message.date)){
       try {
-        const token=this.repository().captureMemoryAccountWork(accountIdFor(message.from.id),()=>this.now(),message.date);
+        const token=this.repository().captureMemoryAccountWork(accountIdFor(message.from.id),this.sourceClock!,message.date);
         row.token=token;row.denied=false;
-        row.current=()=>{try{return assistant.memoryAccountSourceCurrent(agentId,message,poller)&&this.repository().isMemoryAccountWorkCurrent(token,()=>this.now());}catch{return false;}};
+        row.current=()=>{try{return assistant.memoryAccountSourceCurrent(agentId,message,poller)&&this.repository().isMemoryAccountWorkCurrent(token,this.sourceClock!);}catch{return false;}};
       }catch{/* Missing/closed/unknown source is not queued for retry. */}
     }
     if(marked&&row.denied&&snapshot.message&&message?.from&&typeof message.text==='string'&&!message.text.startsWith('/')&&!parseExplicitControl(message.text)&&!message.voice&&!message.photo?.length&&!message.document&&assistant?.memoryAccountStatelessSourceCurrent(agentId,message,poller)){
@@ -176,7 +209,7 @@ export class StudioMemoryAccount {
       const now=this.now(),adaptive=this.studio.deps.adaptive!,core=adaptive.capabilityStatus(d,'core_text',now);
       validUntil=Math.min(d.binding?.expiresAt??now,core.validUntil??now);
       if(!Number.isSafeInteger(validUntil)||!adaptive.isCoreAllowed(d,now)||!core.eligible||now>=validUntil)throw new MemoryAccountUnavailable();
-      const finalNow=this.options.clock?.();if(finalNow===undefined||!Number.isSafeInteger(finalNow)||finalNow<now||finalNow>=validUntil)throw new MemoryAccountUnavailable();
+      const finalNow=this.sourceClock?.();if(finalNow===undefined||!Number.isSafeInteger(finalNow)||finalNow<now||finalNow>=validUntil)throw new MemoryAccountUnavailable();
       revision=digest(['er1-current-source',d.memoryLifecycle,d.binding,d.declaration,d.permissions,core,studio]);
     }
     return {revision,validUntil,memoryEnabled:false,historyEnabled:false,storedContextAllowed:false,context:[],priorityContext:[],reviewedContext:[]};

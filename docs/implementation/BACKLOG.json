@@ -3003,6 +3003,16 @@
         "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
       ],
       "note": "Independent architecture, privacy and technical review accepted the bounded MI1 design for documentation publication. Contract SHA256 fd0edb349ef06981345c95d6038d3fac59c273054c5da794be6166662f53f96f; initial review gaps and corrections remain in external MI1 evidence. Fixed documentation validation and hosted merge gates are recorded separately. This is not runtime implementation, qualified UTC/provider behavior, first marking, migration, physical erasure, activation or a production reinstall. Next: implement and qualify the integrated managed operation and runtime consumers under this contract; AM-05/AM-12 remain in progress."
+    },
+    {
+      "id": "AM-ER1-MANAGED-INIT-RUNTIME-01",
+      "status": "in_progress",
+      "baseline": "97dfcaee3aae24dbbe02cb9d6c080511796c2cde",
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MANAGED_INITIALIZATION.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "note": "Integrated managed initialization/resume and qualified runtime consumers under accepted MI1. Exact interface/schema seams require independent review before code. Main CI376 subsequently passed; production remains independently accepted ae1236f/VQF with configuration preserved. Source, synthetic process/FILE qualification, hosted checks, build/install and real activation are separate gates; no first production marker, provider experiment, keys/enrollment, migration or physical erasure is authorized by task registration."
     }
   ]
 }

@@ -4,6 +4,7 @@ import * as fsp from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readManagedMemoryGuardToken, readManagedMemoryAccountPreflight,readManagedMemoryAccountArtifact,revokeManagedMemoryAccountGuard } from './studio-memory-account-operation.mjs';
 
 export const FILE_RUNTIME_OWNER_GUARD = '.studio-runtime-owner-v1.lock';
 export const FILE_RUNTIME_OWNER_MARKER = 'file-runtime-owner-v1.json';
@@ -13,7 +14,7 @@ const fail = () => { throw new Error('Studio FILE runtime ownership unavailable'
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const identity = s => ({ dev: String(s.dev), ino: String(s.ino), birth: String(s.birthtimeNs) });
 const stat = p => fs.lstatSync(p, { bigint: true, throwIfNoEntry: false });
-const sha = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
+const sha = v => typeof v === 'string' && /^[a-f0-9]{40}(?![\s\S])/.test(v);
 const integer = v => Number.isSafeInteger(v) && v >= 0 && !Object.is(v, -0);
 const uid = () => BigInt(process.geteuid?.() ?? process.getuid?.() ?? -1);
 const hash = b => createHash('sha256').update(b).digest('hex');
@@ -116,7 +117,7 @@ function assertEntry(entry) {
     active(entry);
   } catch { terminate(entry, 'lost'); fail(); }
 }
-export function acquireFileRuntimeOperationGuard(input, operation) {
+export function acquireFileRuntimeOperationGuard(input, operation, managedToken) {
   if (typeof operation !== 'string' || !/^[a-z][a-z-]{0,63}$/.test(operation)) fail();
   if(typeof input!=='string'||!isAbsolute(input)||resolve(input)==='/')throw new Error('Production base must be an absolute private directory.');
   if(operation==='prepare'&&!stat(input))fs.mkdirSync(input,{recursive:true,mode:0o700});
@@ -124,12 +125,15 @@ export function acquireFileRuntimeOperationGuard(input, operation) {
   if(resolved==='/')throw new Error('Production base must be a private directory, not the filesystem root.');
   const { root: base } = privateRoot(resolved);
   const baseIdentity = identity(stat(base)), lockPath = join(base, '.studio-operation.lock');
+  const managedMemory=managedToken===undefined?undefined:readManagedMemoryGuardToken(managedToken,base,operation);
+  const bytes = JSON.stringify({ version: 1, token: randomBytes(32).toString('hex'), pid: process.pid, startedAt: new Date().toISOString(), operation,
+    ...(managedMemory?{managedMemory}:{} ) });
+  if(Buffer.byteLength(bytes)>4096)fail();
   try{fs.mkdirSync(lockPath,{mode:0o700});}catch(error){if(error.code==='EEXIST')throw new Error('Another operation or a stale lock exists. Explicit verified recovery is required; no automatic reclaim.');throw error;}
   const lockIdentity = identity(stat(lockPath)), ownerPath = join(lockPath, 'owner.json');
-  const bytes = JSON.stringify({ version: 1, token: randomBytes(32).toString('hex'), pid: process.pid, startedAt: new Date().toISOString(), operation });
   const ownerFd = fs.openSync(ownerPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
   fs.writeFileSync(ownerFd, bytes); fs.fsyncSync(ownerFd); syncDir(lockPath); syncDir(base);
-  const binding = { ownerPath, ownerFd, identity: identity(fs.fstatSync(ownerFd, { bigint: true })), digest: hash(bytes), closed: false };
+  const binding = { base,baseIdentity,lockPath,lockIdentity,managedMemory,bytes,operation,ownerPath, ownerFd, identity: identity(fs.fstatSync(ownerFd, { bigint: true })), digest: hash(bytes), closed: false };
   const assertOwned = () => {
     if (binding.closed || !equal(identity(stat(base)), baseIdentity) || !equal(identity(stat(lockPath)), lockIdentity)) fail();
     const current = readRegular(ownerPath, 4096), held = fs.fstatSync(ownerFd, { bigint: true });
@@ -139,9 +143,15 @@ export function acquireFileRuntimeOperationGuard(input, operation) {
     assertOwned();
     if (!equal(fs.readdirSync(lockPath), ['owner.json']))throw new Error('Operation lock contains unknown files; explicit verified recovery is required.');
     fs.unlinkSync(ownerPath); fs.rmdirSync(lockPath); syncDir(base);
-    binding.closed = true; fs.closeSync(ownerFd);
+    binding.closed = true; revokeManagedMemoryAccountGuard(guard);fs.closeSync(ownerFd);
   } });
   registry().operations.set(guard, binding); return guard;
+}
+/** Inspection never mints an operation identity. */
+export function inspectFileRuntimeOperationGuard(guard) {
+  checkOperation(guard); const b=registry().operations.get(guard);
+  return {base:b.base,baseIdentity:b.baseIdentity,directoryIdentity:b.lockIdentity,ownerIdentity:b.identity,digest:b.digest,
+    record:JSON.parse(b.bytes),operation:b.operation};
 }
 export function createMaintenanceAuthorization(operationGuard) {
   checkOperation(operationGuard);
@@ -154,6 +164,11 @@ function checkOperation(guard) {
   if (!equal(identity(held), binding.identity) || !equal(current.identity, binding.identity) || current.digest !== binding.digest) fail();
 }
 function checkAuthorization(token) { const guard = registry().authorizations.get(token); if (!guard) fail(); checkOperation(guard); }
+export function assertMaintenanceAuthorization(dataRoot,authorization,owner) {
+  checkAuthorization(authorization);const e=details(owner);
+  if(e.root!==pathString(dataRoot)||e.role!=='maintenance'||e.authorization!==authorization)fail();
+  assertEntry(e);active(e);
+}
 function trusted(fn) { if (!fn) return; if (typeof fn !== 'function' || fn.constructor.name === 'AsyncFunction') fail(); const result = fn(); if (result && (typeof result === 'object' || typeof result === 'function') && typeof result.then === 'function') fail(); }
 export function acquireFileRuntimeOwner({ dataRoot, release: r, role = 'runtime', authorization } = {}) {
   r = release(r); if (!['runtime', 'maintenance'].includes(role)) fail();
@@ -404,6 +419,53 @@ export function registerFileRuntimeFixture({ dataRoot, artifactRoot, release: in
   const holder=inspectFileRuntimeOwner(root);
   if(holder&&(!receipt||holder.record.role!=='runtime'||holder.root!==root||!equal(holder.rootIdentity,rootIdentity)||!equal(holder.record.release,r)))fail();
   registry().fixtures.set(root,{artifact,release:r,rootIdentity,artifactIdentity,receipt:receipt?{path:receiptPath,identity:receipt.identity,digest:receipt.digest}:undefined});
+}
+/** A fixture receipt is provenance for isolated qualification, never approval of production. */
+export function assertFileRuntimeFixture(dataRoot) {
+  // Reject unregistered roots before touching any live filesystem path.
+  if(typeof dataRoot!=='string'||!isAbsolute(dataRoot))fail();
+  let candidate=resolve(dataRoot),registered=registry().fixtures.get(candidate);
+  if(!registered&&candidate.startsWith('/tmp/')){candidate=`/private${candidate}`;registered=registry().fixtures.get(candidate);}
+  if(!registered||!/^\/(?:private\/)?tmp\//.test(candidate))fail();
+  const {root}=privateRoot(candidate),f=registered;
+  if(!f?.receipt||!/^\/(?:private\/)?tmp\//.test(root)||!/^\/(?:private\/)?tmp\//.test(f.artifact)||dirname(root)!==dirname(f.artifact)||
+    !equal(identity(stat(root)),f.rootIdentity)||!equal(identity(stat(f.artifact)),f.artifactIdentity))fail();
+  const receipt=readRegular(f.receipt.path,4096),value=JSON.parse(receipt.text);
+  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}(?![\s\S])/.test(value.fixtureId)||receipt.digest!==f.receipt.digest||!equal(receipt.identity,f.receipt.identity)||value.providerBlocking!==true||value.metadataSource!=='next-build-source-binding')fail();
+  if(fs.readFileSync(join(pathString(value.sourceRoot),'.next','BUILD_ID'),'utf8').trim()!==f.release.buildId)fail();
+}
+export function fileRuntimeFixtureProvenance(dataRoot) {
+  assertFileRuntimeFixture(dataRoot);const f=registry().fixtures.get(pathString(dataRoot)),r=readRegular(f.receipt.path,4096),value=JSON.parse(r.text);
+  return {fixtureId:value.fixtureId,receiptDigest:r.digest,parent:dirname(pathString(dataRoot))};
+}
+/** Isolated real launchd fixture topology; no caller-selected label/port/preload. */
+export function fileRuntimeFixtureSupervisor(dataRoot) {
+  assertFileRuntimeFixture(dataRoot);const root=pathString(dataRoot),f=registry().fixtures.get(root),provenance=fileRuntimeFixtureProvenance(root),parent=dirname(root),base=join(parent,'base');
+  privateRoot(parent);
+  if(stat(join(parent,'launch-agents')))privateRoot(join(parent,'launch-agents'));
+  const baseIdentity=identity(privateRoot(base).info),saved=readRegular(join(parent,'mi1-synthetic-supervisor-v1.json'),4096),v=JSON.parse(saved.text),preload=join(parent,'mi1-fixture-preload-v1.mjs'),loaded=readRegular(preload,65536);
+  if(!v||Object.keys(v).sort().join()!=='artifactIdentity,baseIdentity,fixtureId,fixtureReceiptDigest,kind,preloadDigest,preloadIdentity,rootIdentity,scope,status,version'||v.version!==1||v.kind!=='mi1-synthetic-supervisor'||v.scope!=='synthetic'||v.status!=='unverified'||v.fixtureId!==provenance.fixtureId||v.fixtureReceiptDigest!==provenance.receiptDigest||!equal(v.baseIdentity,baseIdentity)||!equal(v.rootIdentity,f.rootIdentity)||!equal(v.artifactIdentity,f.artifactIdentity)||!equal(v.preloadIdentity,loaded.identity)||v.preloadDigest!==loaded.digest||saved.text!==JSON.stringify(v)+'\n'||(saved.stat.mode&0o777n)!==0o600n||(loaded.stat.mode&0o777n)!==0o600n)fail();
+  const label=`io.ludaxis.vox-studio.fixture.${provenance.fixtureId}`,port=49152+(parseInt(provenance.fixtureId.slice(0,4),16)%16384);
+  return {scope:'synthetic',fixtureId:provenance.fixtureId,parent,base,dataRoot:root,artifact:f.artifact,label,port,plist:join(parent,'launch-agents',`${label}.plist`),preload,preloadIdentity:loaded.identity,preloadDigest:loaded.digest};
+}
+/** Controller provenance is a registered current preflight, not a caller path. */
+export function registerFileRuntimeManagedArtifact(binding) {
+  const p=readManagedMemoryAccountPreflight(binding),reg=registry();
+  reg.managedArtifacts??=new Map();reg.managedArtifacts.set(p.dataRoot,{artifact:p.artifact,release:p.release,artifactIdentity:p.artifactIdentity,digest:p.artifactDigest});
+}
+export function fileRuntimeArtifactDigest(dataRoot) {
+  const {root}=privateRoot(dataRoot),reg=registry(),fixture=reg.fixtures.get(root),managed=reg.managedArtifacts?.get(root);
+  let artifact,r,pinned;
+  if(fixture){assertFileRuntimeFixture(root);artifact=fixture.artifact;r=fixture.release;pinned=fixture.artifactIdentity;}
+  else if(managed){artifact=managed.artifact;r=managed.release;pinned=managed.artifactIdentity;}
+  else {const entry=pathString(process.argv[1]);if(!entry?.endsWith('/server.js')||pathString(process.cwd())!==dirname(entry))fail();artifact=dirname(entry);r=resolveFileRuntimeRelease(root);pinned=identity(stat(artifact));}
+  checkComponents(artifact);if(!equal(identity(stat(artifact)),pinned))fail();
+  const manifest=readRegular(join(artifact,'studio-release.json'),65536,false),value=JSON.parse(manifest.text);
+  if(!equal(release({revision:value.revision,sourceTree:value.sourceTree,buildId:value.buildId}),r)||
+    readRegular(join(artifact,'.next','BUILD_ID'),256,false).text.trim()!==r.buildId||managed&&manifest.digest!==managed.digest)fail();
+  readManagedMemoryAccountArtifact(artifact,value);
+  const owner=reg.roots.get(root);if(owner&&!equal(owner.record.release,r))fail();
+  return manifest.digest;
 }
 export function resolveFileRuntimeRelease(dataRoot) {
   // Resolution is read-only. Acquisition alone creates a missing final directory.
