@@ -3003,6 +3003,20 @@
         "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
       ],
       "note": "Independent architecture, privacy and technical review accepted the bounded MI1 design for documentation publication. Contract SHA256 fd0edb349ef06981345c95d6038d3fac59c273054c5da794be6166662f53f96f; initial review gaps and corrections remain in external MI1 evidence. Fixed documentation validation and hosted merge gates are recorded separately. This is not runtime implementation, qualified UTC/provider behavior, first marking, migration, physical erasure, activation or a production reinstall. Next: implement and qualify the integrated managed operation and runtime consumers under this contract; AM-05/AM-12 remain in progress."
+    },
+    {
+      "id": "AM-ER1-MANAGED-INIT-RUNTIME-01",
+      "status": "in_progress",
+      "baseline": "97dfcaee3aae24dbbe02cb9d6c080511796c2cde",
+      "evidence": "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+      "note": "Separate draft PR140 at ca649e81 remains held. Hosted CI passed but two actual native census cases failed; no merge or installed acceptance. Bounded diagnostics closed without absence/exclusion proof. Finite UTM isolation feasibility was independently deferred on29October; no VM or fork commissioned. Preserve failed fixtures, consumed execution receipts and recovery/current-authority/retention gates. This stop-routing branch does not include or accept PR140."
+    },
+    {
+      "id": "AM03-STOP-REPAIR-01",
+      "status": "in_progress",
+      "baseline": "97dfcaee3aae24dbbe02cb9d6c080511796c2cde",
+      "evidence": "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+      "note": "Implemented bounded private-agent EN/FA broad daily/check-in stop, atomic sameOwner daily cancellation, truthful partial receipts, queued/final-publication sender checks and per-attempt relationship transport fences. Local qualification:13 chronological cases across retained/successor executions,30 authority checks,13 independent neutral holdout cases,214 selected existing regressions/26explicit exclusions. First two fixture failures and precise corrections retained. Independent final acceptance, hosted gates and guarded deployment are separate evidence. No provider experiment, history import, activation, full-recall or heldPR140 recovery acceptance. F2-F4 context/capability follow-ups remain open."
     }
   ]
 }

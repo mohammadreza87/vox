@@ -201,9 +201,13 @@ export class AdaptiveRelationshipService {
     // Also purge empty/source-less core state on an explicit reset.
     await this.adaptive.notifyRelationshipInvalidation({ telegramId, space, ...input });
   }
-  async control(telegramId: number, agentId: string, space: SpaceKind, action: 'pause' | 'resume' | 'stop' | 'forget', until?: number): Promise<void> {
+  async control(telegramId: number, agentId: string, space: SpaceKind, action: 'pause' | 'resume' | 'stop' | 'forget', until?: number, authorizeNow?: () => boolean): Promise<void> {
     if (!validId(agentId) || !['work', 'personal'].includes(space) || !['pause', 'resume', 'stop', 'forget'].includes(action)) throw new AdaptiveError(400, 'invalid_control');
+    const beforeCommit = authorizeNow ? () => {
+      if (!authorizeNow()) throw new AdaptiveError(403, 'control_authority_denied');
+    } : undefined;
     await this.adaptive.withAccountDocument(telegramId, (d, now) => {
+      if (authorizeNow && !authorizeNow()) throw new AdaptiveError(403, 'control_authority_denied');
       if (action === 'pause' && (until !== undefined && (!Number.isSafeInteger(until) || until <= now || until > now + 90 * DAY))) throw new AdaptiveError(400, 'invalid_pause');
       let control = d.relationships.controls.find(c => c.agentId === agentId && c.space === space);
       if (!control) {
@@ -220,7 +224,7 @@ export class AdaptiveRelationshipService {
         for (const item of d.relationships.inbox) if (item.key.personaId === agentId && item.key.scope.space === space) { item.status = 'cancelled'; item.text = ''; }
       }
       d.revision++; d.updatedAt = now;
-    });
+    }, beforeCommit);
     if (action === 'stop' || action === 'forget') await this.adaptive.notifyRelationshipInvalidation({ telegramId, agentId, space, reason: action });
   }
   async configureExternal(telegramId: number, space: SpaceKind, enabled: boolean): Promise<void> {
@@ -295,6 +299,25 @@ export class AdaptiveRelationshipService {
       return !!item && !!entry && entry.state === 'reserved' && entry.reservationId === reservationId &&
         !!this.authorized(d, key, item.sourceIds, 'external', now, entry.fingerprint);
     });
+  }
+  /** Read-only FILE reservation/source fence, including the exact Telegram
+   * endpoint which established this private relationship. */
+  maySendExternalNow(key: RelationshipKey, id: string, reservationId: string, expectedFingerprint: string, endpointId: string): boolean {
+    const telegramId = telegramFor(key); if (telegramId === null) return false;
+    try {
+      const result = this.adaptive.readCommittedAuthorityForEffect(telegramId, undefined, (d, now) => {
+        const item = d.relationships.inbox.find(i => i.id === id && sameKey(i.key, key) && ['unread', 'read'].includes(i.status));
+        const entry = d.relationships.ledger.find(e => e.id === id && sameKey(e.key, key));
+        const permit = item && this.authorized(d, key, item.sourceIds, 'external', now, expectedFingerprint);
+        const sourceEndpoint = item && d.relationships.sources.some(s => item.sourceIds.includes(s.id) && sameKey(s.key, key) &&
+          s.channel === 'telegram' && s.endpointId === endpointId && s.status === 'active' && s.createdAt <= now && s.expiresAt > now);
+        const value = !!item && item.expiresAt > now && !!entry && entry.at <= now && entry.at > now - 90 * DAY &&
+          entry.state === 'reserved' && entry.reservationId === reservationId && entry.fingerprint === expectedFingerprint &&
+          item.fingerprint === expectedFingerprint && item.sourceFence === permit?.sourceFence && !!permit && !!sourceEndpoint;
+        return { value, denied: !value, ...(value ? { deadline: Math.min(item!.expiresAt, permit!.expiresAt) } : {}) };
+      });
+      return result.status === 'ready' && result.value;
+    } catch { return false; }
   }
   async recordExternal(key: RelationshipKey, id: string, reservationId: string, outcome: 'accepted' | 'unknown' | 'cancelled', messageId?: string): Promise<void> {
     const telegramId = telegramFor(key); if (telegramId === null) return;

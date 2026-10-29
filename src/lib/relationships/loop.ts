@@ -262,8 +262,11 @@ export class RelationshipLoop {
     if (settings.quietHours && ![settings.quietHours.start, settings.quietHours.end].every((h) => Number.isInteger(h) && h >= 0 && h <= 23)) throw new Error('Invalid quiet hours');
     await this.deps.store.update(key, (s) => { s.timeZone = settings.timeZone; if (settings.quietHours) s.quietHours = settings.quietHours; s.revision++; });
   }
-  async control(key: RelationshipKey, action: ExplicitControl, options: { until?: Date; sourceIds?: string[] } = {}): Promise<void> {
-    await this.deps.store.update(key, (s) => this.applyControl(s, action, options));
+  async control(key: RelationshipKey, action: ExplicitControl, options: { until?: Date; sourceIds?: string[]; authorizeNow?: () => boolean } = {}): Promise<void> {
+    await this.deps.store.update(key, (s) => {
+      if (options.authorizeNow && !options.authorizeNow()) throw new RelationshipControlError();
+      this.applyControl(s, action, options);
+    });
     await this.emit(key, 'control');
   }
   private applyControl(s: RelationshipState, action: ExplicitControl, options: { until?: Date; sourceIds?: string[] } = {}): void {
@@ -305,6 +308,18 @@ export class RelationshipLoop {
     return this.mode === 'live' && !!current && current.status === 'sending' &&
       current.leaseOwner === job.leaseOwner && state.revision === job.revision &&
       Date.parse(current.leaseUntil ?? '') > this.now().getTime() && !this.gate(state, current, this.now());
+  }
+  /** Committed contact/lease fence for every transport attempt. No async fallback.
+   * Scoped source authority is composed by the delivery adapter. */
+  mayDeliverNow(job: Intention): boolean {
+    try {
+      const state = this.deps.store.readCommittedForEffect?.(job.key);
+      const current = state?.intentions.find(j => j.id === job.id);
+      const now = this.now();
+      return this.mode === 'live' && !!state && !!current && current.status === 'sending' &&
+        current.leaseOwner === job.leaseOwner && state.revision === job.revision && current.revision === job.revision &&
+        Date.parse(current.leaseUntil ?? '') > now.getTime() && !this.gate(state, current, now);
+    } catch { return false; }
   }
   private async authorizeJob(job: Intention): Promise<boolean> {
     const state = await this.deps.store.read(job.key);

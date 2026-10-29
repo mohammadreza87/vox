@@ -1,5 +1,5 @@
 import { ArchiveAdmissionRefusedError, ArchiveCommandDeliveryError } from './telegram-archive';
-import { handleRequestedRoutineMessage, noteRequestedRoutineActivity } from './requested-routines';
+import { handleAgentStopMessage, handleRequestedRoutineMessage, noteRequestedRoutineActivity } from './requested-routines';
 /**
  * What VoxxBot and the agent bots do with each Telegram update. Shared by the
  * long-polling runner (bots.ts, one always-on server) and the webhook route
@@ -240,6 +240,7 @@ async function handleAdmittedAgentUpdate(studio: Studio, agentId: string, update
     }
     // Retained routine prompts lack incarnation lineage; the adapter stays outside marked turns.
     if(!studio.deps.memoryAccount?.marked()){
+      if (await handleAgentStopMessage(studio, agentId, msg, endpointId)) return;
       noteRequestedRoutineActivity(studio, agentId, msg);
       if (await handleRequestedRoutineMessage(studio, agentId, msg, endpointId)) return;
     }

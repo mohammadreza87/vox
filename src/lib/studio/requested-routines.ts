@@ -6,6 +6,8 @@ import type { Studio } from './service';
 import type { StudioState } from './types';
 import { canUseAgent } from './permissions';
 import { RequestedRoutineEngine, type RoutineBinding } from './routines';
+import { parseExplicitControl } from '../relationships/policy';
+import { personId } from './org-bridge';
 
 const HELP = 'Use /daily Area/City instruction for automatic timing (for example /daily Europe/Tallinn teach me one English slang phrase), or /daily HH:mm Area/City instruction for a fixed time. Use /daily list, /daily pause ID, /daily resume ID, /daily stop ID, or /daily change ID HH:mm Area/City instruction.';
 const UNAVAILABLE = 'Daily scheduling is unavailable for this chat right now. Nothing has been scheduled.';
@@ -77,6 +79,93 @@ export function noteRequestedRoutineActivity(studio: Studio, agentId: string, me
 }
 
 function fingerprint(token: string): string { return createHash('sha256').update(token).digest('hex'); }
+
+/** Whole-message direct communication stops only. Questions, quotation, named
+ * lesson/check-in controls and bare stop retain their separate meanings. */
+export function isBroadAgentStop(text: string): boolean {
+  const value = text.trim().toLowerCase().replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
+    .replace(/[\u064b-\u065f]/g, '').replace(/\u200c/g, ' ').replace(/\s+/g, ' ')
+    .replace(/[.!]+$/u, '').replace(/^please\s+/u, '').replace(/,?\s+please$/u, '').replace(/^لطفا\s+/u, '');
+  return /^(?:stop messaging me|leave me alone|no more messages|(?:do not|don't) message me|(?:do not|don't) send me (?:any )?(?:more )?messages|stop (?:sending me )?messages|دیگه (?:(?:به من |برام |بهم )?پیام نده)|پیام نده|دیگه (?:به من |برام |بهم )?پیام نفرست|(?:به من |برام |بهم )پیام نده|تنهام بذار)$/.test(value);
+}
+
+/** Narrow ingress control; relationship and routine receipts are independent. */
+export async function handleAgentStopMessage(studio: Studio, agentId: string, message: TelegramMessage, endpointId?: string): Promise<boolean> {
+  if (studio.deps.memoryAccount?.marked()) return false;
+  const text = message.text?.trim() ?? '';
+  const broad = isBroadAgentStop(text);
+  if (!broad && parseExplicitControl(text) !== 'stop') return false;
+  if (!message.from || message.from.is_bot || message.chat.type !== 'private' || message.chat.id !== message.from.id) return true;
+  const raw = message as TelegramMessage & { forward_origin?: unknown; forward_date?: unknown; forward_from?: unknown; forward_from_chat?: unknown; forward_sender_name?: unknown; is_automatic_forward?: unknown; quote?: unknown; external_reply?: unknown };
+  if (raw.forward_origin || raw.forward_date || raw.forward_from || raw.forward_from_chat || raw.forward_sender_name || raw.is_automatic_forward || raw.quote || raw.external_reply || message.entities?.some(e => ['blockquote', 'expandable_blockquote'].includes(e.type))) return true;
+  if (!broad && endpointId === undefined) return false;
+  const state = await studio.deps.store.read();
+  const agent = state.agents.find(a => a.id === agentId);
+  const member = state.members.find(m => m.telegramId === message.from!.id);
+  const token = agent && studio.botToken(agent);
+  if (!agent || !member || !token || !agent.bot || endpointId !== studio.relationshipEndpointId(token)) return true;
+  const currentSender = () => {
+    try {
+      if (studio.deps.memoryAccount?.marked()) return false;
+      const current = studio.deps.store.readCommittedForEffect?.();
+      const a = current?.agents.find(a => a.id === agentId), m = current?.members.find(m => m.telegramId === member.telegramId);
+      return !!a && !!m && a.status === 'active' && canUseAgent(m, a) && !a.blocked?.includes(m.telegramId) &&
+        a.bot?.id === agent.bot!.id && studio.botToken(a) === token && endpointId === studio.relationshipEndpointId(token);
+    } catch { return false; }
+  };
+  if (!currentSender()) return true;
+  let dailyStopped = false, checkInsStopped = false;
+  const binding: RoutineBinding = { memberId: `telegram-account:${member.telegramId}`, agentId, telegramUserId: String(member.telegramId),
+    telegramChatId: String(message.chat.id), telegramBotId: String(agent.bot.id), tokenFingerprint: fingerprint(token) };
+  if (broad) {
+    // Only this direct endpoint's pending creation can be discarded.
+    pending.get(studio)?.delete(`${agentId}:${member.telegramId}:${endpointId}`);
+    try {
+      if (currentSender() && studio.deps.requestedRoutines) {
+        const result = await studio.deps.requestedRoutines.manage(binding, { type: 'stop-all', inboundMessageId: String(message.message_id) });
+        dailyStopped = result.routines.every(r => r.status === 'stopped');
+      }
+    } catch { /* No durable daily receipt: acknowledge only the other component. */ }
+  }
+  try {
+    if (currentSender()) {
+      const loop = studio.deps.relationships;
+      if (studio.deps.adaptive && studio.deps.relationshipAuthority) {
+        await studio.deps.relationshipAuthority.control(member.telegramId, agentId, 'work', 'stop', undefined, currentSender);
+        for (const key of await loop?.deps.store.keysForPersona(agentId) ?? []) {
+          if (key.scope?.accountId === `telegram-account:${member.telegramId}` && key.scope.space === 'work') await loop!.control(key, 'stop', { authorizeNow: currentSender });
+        }
+        checkInsStopped = true;
+      } else if (!studio.deps.adaptive && loop) {
+        const person = personId(member.telegramId);
+        await loop.control({ personaId: agentId, chatKey: `private-${person}`, audience: { kind: 'private', personId: person } }, 'stop', { authorizeNow: currentSender });
+        checkInsStopped = true;
+      }
+    }
+  } catch { /* Never undo a confirmed daily stop to hide partial failure. */ }
+  if (!currentSender()) return true;
+  const receipt = broad
+    ? `${dailyStopped ? 'Daily lessons are stopped' : 'I couldn’t confirm stopping daily lessons'}; ${checkInsStopped ? 'check-ins are stopped' : 'I couldn’t confirm stopping check-ins'} for this agent in this chat.`
+    : checkInsStopped ? 'Check-ins are stopped for this agent in this chat.' : 'I couldn’t confirm stopping check-ins for this agent in this chat.';
+  const receiptCurrent = () => {
+    try {
+      if (!currentSender() || (dailyStopped && !studio.deps.requestedRoutines?.stoppedNow(binding))) return false;
+      if (!checkInsStopped) return true;
+      if (studio.deps.adaptive) {
+        const result = studio.deps.adaptive.readCommittedAuthorityForEffect(member.telegramId, undefined, d => {
+          const value = d.relationships.controls.some(c => c.agentId === agentId && c.space === 'work' && c.disabled);
+          return { value, denied: !value };
+        });
+        return result.status === 'ready' && result.value;
+      }
+      const person = personId(member.telegramId);
+      return studio.deps.relationships?.deps.store.readCommittedForEffect?.({ personaId: agentId, chatKey: `private-${person}`, audience: { kind: 'private', personId: person } }).disabled === true;
+    } catch { return false; }
+  };
+  if (receiptCurrent()) await studio.deps.botFor(token).sendMessage(message.chat.id, `${receipt} You can still message me. A message already sent may still arrive.`, { authorizeNow: receiptCurrent });
+  return true;
+}
+
 function authority(studio: Studio, state: StudioState, binding: RoutineBinding): boolean {
   const member = state.members.find(m => String(m.telegramId) === binding.telegramUserId);
   const agent = state.agents.find(a => a.id === binding.agentId);
@@ -87,7 +176,7 @@ function authority(studio: Studio, state: StudioState, binding: RoutineBinding):
   return !!token && fingerprint(token) === binding.tokenFingerprint;
 }
 export function requestedRoutineAuthorityNow(studio: Studio, binding: RoutineBinding, enabled: () => boolean): boolean {
-  try { const state = studio.deps.store.readCommittedForEffect?.(); return enabled() && !!state && authority(studio, state, binding); } catch { return false; }
+  try { const state = studio.deps.store.readCommittedForEffect?.(); return !studio.deps.memoryAccount?.marked() && enabled() && !!state && authority(studio, state, binding); } catch { return false; }
 }
 export async function requestedRoutineAuthority(studio: Studio, binding: RoutineBinding, enabled: () => boolean): Promise<boolean> {
   try { return enabled() && authority(studio, await studio.deps.store.read(), binding) && requestedRoutineAuthorityNow(studio, binding, enabled); } catch { return false; }
