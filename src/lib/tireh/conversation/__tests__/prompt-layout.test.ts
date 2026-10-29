@@ -213,7 +213,7 @@ describe('the per-turn block', () => {
   it('keeps the personal block free of Work memories and the org name', () => {
     const { turn, system } = layoutFor(chats.reza, { space: 'personal', persona: { ...skillPersona(), skillSet: { ...skillPersona().skillSet!, routable: [{ id: 'r', title: 'HOOR review', whenToUse: 'x', playbook: 'Review HOOR plans.' }] } },
       activeSkills: ['r'], savedContext: [SAVED_CANARY], relationshipContext: RELATION_CANARY, replyFormat: 'voice', canSpeak: true });
-    expect(turn.startsWith('## For this turn\nToday is 2026-10-19.\n\n<active_skill>\nReview the team plans.\n</active_skill>')).toBe(true);
+    expect(turn.startsWith('## For this turn\nToday is 2026-10-19.\nIn this private conversation, rely on the messages, quoted text and authorized saved context actually supplied for this reply; permission to retain history does not mean the earlier message you need is present. If a short reply such as "yes" clearly refers to supplied context, continue from it. If the person\'s request depends on earlier context that is absent or ambiguous, ask one brief clarification or request a quote; do not invent the missing exchange or a technical reason, say you forgot or missed it, or claim no record exists anywhere. Do not volunteer a history warning when it is not needed.\n\n<active_skill>\nReview the team plans.\n</active_skill>')).toBe(true);
     expect(turn).not.toContain(MEMORY_CANARY);
     expect(turn).not.toContain('What you remember');
     expect(turn).not.toContain('A voice reply');

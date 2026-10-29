@@ -329,6 +329,7 @@ function inputModalityLine(inputModality: PromptInput['inputModality']): string 
  */
 function turnContextLines({ chat, historyVisible, recentWindow, replyQuote, register }: PromptInput): string[] {
   const lines: string[] = [];
+  if (chat.kind === 'private') lines.push(`In this private conversation, rely on the messages, quoted text and authorized saved context actually supplied for this reply; permission to retain history does not mean the earlier message you need is present. If a short reply such as "yes" clearly refers to supplied context, continue from it. If the person's request depends on earlier context that is absent or ambiguous, ask one brief clarification or request a quote; do not invent the missing exchange or a technical reason, say you forgot or missed it, or claim no record exists anywhere. Do not volunteer a history warning when it is not needed.`);
   const unseen = 'If asked about earlier messages you cannot see, say plainly that you can\'t see them here and ask them to reply to or quote the message; never say you missed or forgot it.';
   if (chat.kind === 'group' && recentWindow) lines.push(`The messages before the latest are the recent lines visible to you in this group; those marked "${UNANSWERED_MARK}" are ones you did not answer. Older messages are not visible. ${unseen}`);
   else if (chat.kind === 'group' && historyVisible === false) lines.push(`You see only the latest message${replyQuote ? ' and the message it replies to' : ''}; earlier messages in this group are not visible to you. ${unseen}`);
