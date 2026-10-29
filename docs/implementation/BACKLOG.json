@@ -3013,10 +3013,17 @@
     },
     {
       "id": "AM03-STOP-REPAIR-01",
-      "status": "in_progress",
+      "status": "complete",
       "baseline": "97dfcaee3aae24dbbe02cb9d6c080511796c2cde",
       "evidence": "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
-      "note": "Implemented bounded private-agent EN/FA broad daily/check-in stop, atomic sameOwner daily cancellation, truthful partial receipts, queued/final-publication sender checks and per-attempt relationship transport fences. Local qualification:13 chronological cases across retained/successor executions,30 authority checks,13 independent neutral holdout cases,214 selected existing regressions/26explicit exclusions. First two fixture failures and precise corrections retained. Independent final acceptance, hosted gates and guarded deployment are separate evidence. No provider experiment, history import, activation, full-recall or heldPR140 recovery acceptance. F2-F4 context/capability follow-ups remain open."
+      "note": "Bounded F1/F5 repair independently accepted and installed from PR141 as 359b81873cf1a0caba2198fc67e6faceb76059bc/buildTq2qyNGVkFzfwUdDjNjTU on 29 October 2026. PR CI 9,070 tests/15 existing skips/55 browser cases, actual compiled ownership 1 and synthetic polling 2 cases, installed 3,588 files/24 capabilities/40 routes/160 reader cases/220 nonmutating calls passed; configuration preserved. Prior failures remain retained. This completes only qualified private unmarked FILE polling stop scope; no provider/device/full-recall/heldPR140 recovery acceptance. External final disposition and acceptance under task-artifacts/agent-memory-production."
+    },
+    {
+      "id": "AM03-F3-CONTEXT-HONESTY-01",
+      "status": "in_progress",
+      "baseline": "359b81873cf1a0caba2198fc67e6faceb76059bc",
+      "evidence": "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+      "note": "Bounded private prompt guidance for actual available context, with independent synthetic assembled-input/privacy evaluation. No historyVisible reinterpretation, gateway/schema/retention/authority/history import or activation. F2 scheduling capability and F4 governed scheduled-content continuity remain separate; provider semantic quality/latency/cost unavailable until measured. Local qualification:24 new cases/44 named probes and83 selected existing regressions across retained/successor runs; one original Personal prefix expectation failure preserved, exact correction passed affected23-case suite; typecheck/lint passed. Hosted/artifact/install gates remain separate."
     }
   ]
 }
