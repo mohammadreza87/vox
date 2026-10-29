@@ -30,6 +30,7 @@ export interface Routine {
 export type RoutineRequest =
   | { type: 'create'; inboundMessageId: string; instruction: string; timing?: 'adaptive' | 'fixed'; localTime?: string; timeZone: string }
   | { type: 'list' }
+  | { type: 'stop-all'; inboundMessageId: string }
   | { type: 'update'; inboundMessageId: string; routineId: string; instruction?: string; timing?: 'adaptive' | 'fixed'; localTime?: string; timeZone?: string }
   | { type: 'pause' | 'resume' | 'stop'; inboundMessageId: string; routineId: string };
 

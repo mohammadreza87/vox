@@ -46,8 +46,16 @@ export class RequestedRoutineEngine {
     catch { return false; }
   }
 
+  /** Acknowledgement fence; a replay cannot claim a subsequently resumed/new task stopped. */
+  stoppedNow(binding: RoutineBinding): boolean {
+    try {
+      const ledger = this.store.snapshot();
+      return this.authorizedNow(binding) && !!ledger && ledger.routines.filter(r => sameOwner(r.binding, binding)).every(r => r.status === 'stopped');
+    } catch { return false; }
+  }
+
   async manage(rawBinding: RoutineBinding, request: RoutineRequest): Promise<{ routines: Routine[]; duplicate?: boolean }> {
-    if (!request || !['create', 'list', 'update', 'pause', 'resume', 'stop'].includes(request.type)) throw new Error('routine_invalid_request');
+    if (!request || !['create', 'list', 'update', 'pause', 'resume', 'stop', 'stop-all'].includes(request.type)) throw new Error('routine_invalid_request');
     const binding = validateBinding(rawBinding);
     if (!await this.authorized(binding)) throw new Error('routine_authority_denied');
     const now = this.now();
@@ -74,6 +82,18 @@ export class RequestedRoutineEngine {
           createdAt: now.toISOString(), updatedAt: now.toISOString(), recentLessons: [], recentLessonDates: [],
           decisionDay: null, decisionCount: 0, lastDeliveredAt: null,
         });
+      } else if (request.type === 'stop-all') {
+        // One owner-scoped transaction and inbound receipt, including old token
+        // bindings owned by the currently authenticated rotated credential.
+        for (const routine of visible()) {
+          this.active.get(routine.id)?.abort();
+          routine.revision++; routine.updatedAt = now.toISOString();
+          routine.status = 'stopped'; routine.instruction = ''; routine.recentLessons = []; routine.recentLessonDates = []; routine.nextRunAt = null;
+          for (const occurrence of ledger.occurrences) if (occurrence.routineId === routine.id && occurrence.status === 'generating') {
+            occurrence.status = 'cancelled'; occurrence.updatedAt = now.toISOString();
+          }
+          // Dispatching, accepted and unknown entries remain transport receipts.
+        }
       } else {
         const routine = visible().find(r => r.id === request.routineId);
         if (!routine) throw new Error('routine_not_found');

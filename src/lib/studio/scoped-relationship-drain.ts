@@ -100,7 +100,11 @@ export async function drainScopedRelationships(studio: Studio, limit: number): P
           }
           const bot = studio.deps.botFor(token);
           attempted = true;
-          const result = await bot.sendMessage(fresh.telegramId, reservation.text, { signal });
+          const result = await bot.sendMessage(fresh.telegramId, reservation.text, { signal, authorizeNow: () =>
+            !signal?.aborted && studio.relationshipTransportAuthorizedNow(job.key.personaId, fresh.telegramId, token, fresh.agent.bot?.id) &&
+            loop.mayDeliverNow(job) && !!authority.authorizeNow(job.key, job.sourceIds, 'external', snapshot.fingerprint) &&
+            authority.maySendExternalNow(job.key, published.id, reservation.reservationId, snapshot.fingerprint, studio.relationshipEndpointId(token)),
+          });
           await authority.recordExternal(job.key, published.id, reservationId, 'accepted', String(result.message_id));
         } catch {
           if (reservationId) await authority.recordExternal(job.key, published.id, reservationId, attempted ? 'unknown' : 'cancelled').catch(() => undefined);
