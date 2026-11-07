@@ -45,6 +45,8 @@ export default function SettingsPage() {
   );
 }
 
+const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
+
 function SettingsContent() {
   const router = useRouter();
 
@@ -111,7 +113,7 @@ function SettingsContent() {
 
   // Load voices on mount
   useEffect(() => {
-    loadClonedVoices();
+    if (!WEB_CALLS_ONLY) loadClonedVoices();
   }, [loadClonedVoices]);
 
   // Delete a cloned voice
@@ -427,6 +429,7 @@ function SettingsContent() {
           </div>
         </div>
 
+        {!WEB_CALLS_ONLY && <>
         {/* Cloned Voices Section */}
         <div className="liquid-card rounded-2xl p-6 mb-6">
           <div className="flex items-center gap-3 mb-6">
@@ -616,6 +619,8 @@ function SettingsContent() {
             </p>
           </div>
         </div>
+
+        </>}
 
         {/* Account Info (Read-only) */}
         <div className="liquid-card rounded-2xl p-6 mb-8">

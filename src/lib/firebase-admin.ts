@@ -21,7 +21,12 @@ async function initializeFirebaseAdmin(): Promise<App> {
     return _app;
   }
 
-  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'vox-aicontact-fe0e3';
+  const webCallsOnly = process.env.VOX_WEB_CALLS_ONLY === '1';
+  const configuredProject = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  if (webCallsOnly && !configuredProject) {
+    throw new Error('The standalone call app requires an explicit Firebase project');
+  }
+  const projectId = configuredProject || 'vox-aicontact-fe0e3';
   const serviceAccountJson = process.env.SERVICE_ACCOUNT_KEY;
 
   // Always try to use the service account key first if available
@@ -52,7 +57,9 @@ async function initializeFirebaseAdmin(): Promise<App> {
   _app = initializeApp({
     credential: applicationDefault(),
     projectId,
-    serviceAccountId: 'firebase-adminsdk-fbsvc@vox-aicontact-fe0e3.iam.gserviceaccount.com',
+    ...(webCallsOnly ? {} : {
+      serviceAccountId: 'firebase-adminsdk-fbsvc@vox-aicontact-fe0e3.iam.gserviceaccount.com',
+    }),
   });
 
   _initialized = true;

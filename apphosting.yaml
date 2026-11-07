@@ -1,0 +1,25 @@
+# Firebase App Hosting for the dedicated Vox Web Calls project.
+runConfig:
+  minInstances: 0
+  maxInstances: 1
+  memoryMiB: 1024
+
+env:
+  - variable: VOX_WEB_CALLS_ONLY
+    value: '1'
+  - variable: NEXT_PUBLIC_VOX_WEB_CALLS_ONLY
+    value: '1'
+  - variable: STUDIO_BOTS
+    value: '0'
+  - variable: NEXT_TELEMETRY_DISABLED
+    value: '1'
+    availability: [BUILD]
+  - variable: ELEVENLABS_AGENT_ID
+    secret: ELEVENLABS_AGENT_ID
+    availability: [RUNTIME]
+  - variable: ELEVENLABS_API_KEY
+    secret: ELEVENLABS_API_KEY
+    availability: [RUNTIME]
+  - variable: OPENAI_API_KEY
+    secret: OPENAI_API_KEY
+    availability: [RUNTIME]

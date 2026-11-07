@@ -50,6 +50,16 @@ describe('POST /api/convai/session (legacy /app calls)', () => {
     expect(logged).not.toContain('wss://synthetic.invalid/session');
   });
 
+  it('requires a verified email in the standalone release', async () => {
+    vi.stubEnv('VOX_WEB_CALLS_ONLY', '1');
+    auth.verifyIdToken.mockResolvedValue({ uid: 'synthetic-user', email_verified: false });
+    const response = await POST(createAuthenticatedRequest('POST', '/api/convai/session', {
+      body: { contactName: 'A', voiceId: 'v' },
+    }), context);
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed body from a signed-in user', async () => {
     auth.verifyIdToken.mockResolvedValue({ uid: 'synthetic-user' });
     const response = await POST(createAuthenticatedRequest('POST', '/api/convai/session', { body: { contactName: '', voiceId: 7 } }), context);

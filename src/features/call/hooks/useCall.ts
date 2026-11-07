@@ -34,6 +34,7 @@ export function useCall(options: UseCallOptions = {}) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
 
+  const pendingCallRef = useRef<AbortController | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -44,7 +45,9 @@ export function useCall(options: UseCallOptions = {}) {
   const currentContactRef = useRef<Contact | null>(null);
 
   const conversation = useConversation({
+    micMuted: isMuted,
     onConnect: () => {
+      if (pendingCallRef.current?.signal.aborted) return;
       console.log('[Call] Connected');
       setCallStatus('connected');
       callStartTimeRef.current = Date.now();
@@ -79,7 +82,7 @@ export function useCall(options: UseCallOptions = {}) {
         ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
         : 0;
 
-      if (contact && shouldExtractMemory(transcript)) {
+      if (process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY !== '1' && contact && shouldExtractMemory(transcript)) {
         try {
           const token = await user?.getIdToken();
           if (token) {
@@ -106,11 +109,10 @@ export function useCall(options: UseCallOptions = {}) {
       options.onCallEnd?.();
     },
     onMessage: (message) => {
-      console.log('[Call] Message:', message);
       // Capture transcript for memory extraction
       // ElevenLabs message format: { source: 'user' | 'ai', message: string }
       const msg = message as { source?: string; message?: string };
-      if (msg.message) {
+      if (process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY !== '1' && msg.message) {
         transcriptRef.current.push({
           role: msg.source === 'user' ? 'user' : 'assistant',
           content: msg.message,
@@ -119,6 +121,7 @@ export function useCall(options: UseCallOptions = {}) {
       }
     },
     onError: (error) => {
+      if (pendingCallRef.current?.signal.aborted) return;
       console.error('[Call] Error:', error);
       setErrorMessage(String(error) || 'An error occurred');
       setCallStatus('error');
@@ -158,6 +161,9 @@ export function useCall(options: UseCallOptions = {}) {
       return;
     }
 
+    if (pendingCallRef.current) return;
+    const pending = new AbortController();
+    pendingCallRef.current = pending;
     try {
       setCallStatus('connecting');
       setCurrentContact(contact);
@@ -165,6 +171,7 @@ export function useCall(options: UseCallOptions = {}) {
       transcriptRef.current = []; // Reset transcript for new call
       setErrorMessage(null);
       setCallDuration(0);
+      setIsMuted(false);
 
       // Get auth token
       const token = await user.getIdToken();
@@ -175,27 +182,28 @@ export function useCall(options: UseCallOptions = {}) {
       // Fetch memory context for this contact
       let memoryContext = null;
       let memoryGreeting = `Hi! I'm ${contact.name}. How can I help you today?`;
-      try {
-        const memoryService = getMemoryService();
-        memoryContext = await memoryService.buildContextForContact(contact.id);
-        memoryGreeting = await memoryService.generateGreeting(contact.id, contact.name);
-      } catch (err) {
-        console.warn('[Call] Failed to load memory context:', err);
+      if (process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY !== '1') {
+        try {
+          const memoryService = getMemoryService();
+          memoryContext = await memoryService.buildContextForContact(contact.id);
+          memoryGreeting = await memoryService.generateGreeting(contact.id, contact.name);
+        } catch (err) {
+          console.warn('[Call] Failed to load memory context:', err);
+        }
       }
 
+      if (pending.signal.aborted) return;
       // Get signed URL from our API
       const response = await fetch('/api/convai/session', {
         method: 'POST',
+        signal: pending.signal,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          contactId: contact.id,
           contactName: contact.name,
           voiceId: contact.voiceId,
-          systemPrompt: contact.systemPrompt || `You are ${contact.name}, a helpful AI assistant.`,
-          personality: contact.personality,
         }),
       });
 
@@ -235,22 +243,23 @@ export function useCall(options: UseCallOptions = {}) {
         hasMemory: !!memoryContext?.contextString,
       });
 
-      // Start the conversation with ElevenLabs
-      await conversation.startSession({
-        signedUrl,
-        overrides,
-      });
-
+      if (pending.signal.aborted) return;
+      await conversation.startSession({ signedUrl, overrides });
+      if (pending.signal.aborted) await conversation.endSession();
     } catch (error) {
+      if (pending.signal.aborted) return;
       console.error('[Call] Failed to start:', error);
       setErrorMessage(error instanceof Error ? error.message : 'Failed to start call');
       setCallStatus('error');
       setCurrentContact(null);
       currentContactRef.current = null;
+    } finally {
+      pendingCallRef.current = null;
     }
   }, [user, conversation]);
 
   const endCall = useCallback(async () => {
+    pendingCallRef.current?.abort();
     try {
       await conversation.endSession();
     } catch (error) {
@@ -262,10 +271,8 @@ export function useCall(options: UseCallOptions = {}) {
   }, [conversation, cleanup]);
 
   const toggleMute = useCallback(() => {
-    const newMuted = !isMuted;
-    setIsMuted(newMuted);
-    conversation.setVolume({ volume: newMuted ? 0 : 1 });
-  }, [isMuted, conversation]);
+    setIsMuted(muted => !muted);
+  }, []);
 
   // Cleanup on unmount - use refs to avoid stale closure
   const callStatusRef = useRef(callStatus);
@@ -281,6 +288,7 @@ export function useCall(options: UseCallOptions = {}) {
 
   useEffect(() => {
     return () => {
+      pendingCallRef.current?.abort();
       cleanup();
       if (callStatusRef.current !== 'idle' && callStatusRef.current !== 'ended') {
         conversationRef.current.endSession().catch(console.error);

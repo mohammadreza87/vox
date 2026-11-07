@@ -14,7 +14,7 @@ export async function startStudioBots() {
   if (process.env.STUDIO_MAINTENANCE === '1' && process.env.STUDIO_BOTS !== '1') {
     throw new Error('STUDIO_MAINTENANCE=1 requires STUDIO_BOTS=1 in a persistent polling process');
   }
-  if (process.env.STUDIO_BOTS !== '1') return;
+  if (process.env.VOX_WEB_CALLS_ONLY === '1' || process.env.STUDIO_BOTS !== '1') return;
   const g = globalThis as unknown as { __voxBots?: boolean };
   if (g.__voxBots) return;
   g.__voxBots = true;
