@@ -27,6 +27,9 @@ env:
     availability: [RUNTIME]
   - variable: STUDIO_BOTS
     value: '0'
+  - variable: NPM_CONFIG_LEGACY_PEER_DEPS
+    value: 'true'
+    availability: [BUILD]
   - variable: NEXT_TELEMETRY_DISABLED
     value: '1'
     availability: [BUILD]
