@@ -87,7 +87,7 @@ export function startGeminiPilot(options: PilotOptions) {
       };
       setMuted(muted);
 
-      const url = new URL('/api/gemini-pilot/socket', window.location.href);
+      const url = new URL('/api/gemini-live/socket', window.location.href);
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(url);
       socket.binaryType = 'arraybuffer';

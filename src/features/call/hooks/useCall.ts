@@ -179,7 +179,7 @@ export function useCall(options: UseCallOptions = {}) {
       setCallDuration(0);
       setIsMuted(false);
 
-      if (process.env.NEXT_PUBLIC_VOX_GEMINI_PILOT === '1' && geminiVoice) {
+      if (process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE === '1' && geminiVoice) {
         geminiRef.current = startGeminiPilot({
           getToken: () => user.getIdToken(),
           voice: geminiVoice,

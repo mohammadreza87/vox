@@ -40,23 +40,31 @@ To revert a subsequent rollout, select the last verified rollout in the
 App Hosting console. To suspend calls, revoke the backend's dedicated
 ElevenLabs key and disable the backend if the app must also go offline.
 
-## Local Gemini Live comparison
+## Gemini Live calls
 
-Set the existing Web Calls Firebase web configuration and the ElevenLabs
-credentials for the comparison. Export the variables below and start the pilot
-with Google Cloud Application Default Credentials that can use Vertex AI in
-`vox-web-calls`. Authorize the loopback hostname in Firebase Authentication
-when using Google sign-in locally.
+Web Calls serves its authenticated Gemini socket on the same origin as the
+app. The runtime service account needs `aiplatform.endpoints.predict` in
+`vox-web-calls` for the Gemini 3.8 Live EU endpoint. Set
+`VOX_GEMINI_LIVE_EMAILS` in Secret Manager to the approved email addresses.
+An administrator can also enable Gemini for a verified Firebase account using
+the `voxGeminiLive` custom claim.
+
+Choose a default under **Settings → Vox Preferences → Default call voice**.
+The choice is saved per account on the browser and can be overridden in the
+call dialog. ElevenLabs is the initial default. The relay accepts one Gemini
+call at a time and keeps no audio or transcripts in Vox. Google Cloud approval
+is required before using a cloned voice.
+
+For a local comparison, configure the Web Calls Firebase web variables,
+ElevenLabs credentials and Google Cloud Application Default Credentials.
+Authorize the loopback hostname in Firebase Authentication for Google sign-in.
 
 ```sh
-export VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_GEMINI_PILOT=1
-export VOX_GEMINI_PILOT_PROJECT=vox-web-calls VOX_GEMINI_PILOT_EMAIL=your-verified-email
-npm run web-calls:gemini-pilot
+export VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_GEMINI_LIVE=1
+export VOX_GEMINI_LIVE_EMAILS=your-verified-email
+npm run web-calls:serve
 ```
 
-Open `http://127.0.0.1:3138/app` and pick a voice in the call dialog.
-ElevenLabs starts selected. The Gemini relay accepts the configured verified
-account, allows one call at a time, and forwards audio to the Gemini 3.8 Live
-EU endpoint without storing audio or transcripts in Vox. Google Cloud must
-approve the project for live voice replication before testing a consented
-voice sample.
+Open `http://127.0.0.1:3138/app`. To suspend Gemini, set
+`NEXT_PUBLIC_VOX_GEMINI_LIVE` to `0` and redeploy Web Calls, or restore the
+previous verified App Hosting rollout.

@@ -132,7 +132,7 @@ function isWebCallsRoute(pathname: string, method: string): boolean {
     /^\/chat\/[^/]+$/.test(pathname) ||
     pathname.startsWith('/_next/static/') ||
     pathname.startsWith('/images/') || pathname === '/favicon.ico' ||
-    (process.env.NEXT_PUBLIC_VOX_GEMINI_PILOT === '1' && pathname === '/audio/gemini-pilot-capture.js');
+    (process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE === '1' && pathname === '/audio/gemini-pilot-capture.js');
 }
 
 export function middleware(request: NextRequest) {

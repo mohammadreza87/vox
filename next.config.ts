@@ -3,7 +3,7 @@ import { PHASE_PRODUCTION_SERVER } from 'next/constants';
 
 const nextConfig: NextConfig = {
   // Keep each production release independent of the working checkout.
-  output: 'standalone',
+  ...(process.env.VOX_WEB_CALLS_SERVER === '1' ? {} : { output: 'standalone' as const }),
   // Native SQLite and Firebase Admin must retain their server-side package boundaries.
   serverExternalPackages: ['firebase-admin', 'better-sqlite3'],
   outputFileTracingIncludes: {

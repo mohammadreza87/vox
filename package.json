@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "web-calls:gemini-pilot": "node scripts/web-calls-gemini-pilot.mjs",
+    "web-calls:serve": "node scripts/web-calls-server.mjs",
     "dev:dd": "dotenv -e .env.local -- node --import dd-trace/initialize.mjs ./node_modules/.bin/next dev",
     "build": "next build",
     "start": "next start",
