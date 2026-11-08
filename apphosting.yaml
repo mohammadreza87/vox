@@ -3,7 +3,7 @@ scripts:
   runCommand: npm run web-calls:serve
 outputFiles:
   serverApp:
-    include: [.next, node_modules, public, scripts/web-calls-server.mjs, src/features/call/lib/gemini-voices.mjs, next.config.ts, package.json]
+    include: [.next, node_modules, public, scripts/web-calls-server.mjs, src/features/call/lib/gemini-voices.mjs, package.json]
 runConfig:
   minInstances: 0
   maxInstances: 1

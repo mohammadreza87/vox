@@ -1,6 +1,7 @@
 // Web Calls serves the app and its authenticated Gemini Live socket on one origin.
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import next from 'next';
 import { GoogleAuth } from 'google-auth-library';
 import { getApps, initializeApp } from 'firebase-admin/app';
@@ -30,6 +31,12 @@ const server = createServer();
 // Next registers its HMR upgrade listener automatically. Dispatch to it only
 // for Next paths so its router cannot close a socket owned by the relay.
 const nextUpgrades = new EventEmitter();
+if (!dev) {
+  // Use the same serialized config as Next's generated standalone entry point.
+  // App Hosting prunes dev dependencies after building the image.
+  const { config } = JSON.parse(readFileSync('.next/required-server-files.json', 'utf8'));
+  process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(config);
+}
 const app = next({ dev, hostname: host, port, httpServer: nextUpgrades });
 await app.prepare();
 const handle = app.getRequestHandler();
