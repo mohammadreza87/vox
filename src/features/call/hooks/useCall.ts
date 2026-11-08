@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { startGeminiPilot } from '../lib/gemini-pilot';
 import { useConversation } from '@elevenlabs/react';
 import { useAuthStore } from '@/stores/authStore';
 import { getMemoryService } from '@/services/container';
@@ -34,6 +35,7 @@ export function useCall(options: UseCallOptions = {}) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
 
+  const geminiRef = useRef<ReturnType<typeof startGeminiPilot> | null>(null);
   const pendingCallRef = useRef<AbortController | null>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -44,33 +46,37 @@ export function useCall(options: UseCallOptions = {}) {
   const transcriptRef = useRef<{ role: 'user' | 'assistant'; content: string; timestamp: number }[]>([]);
   const currentContactRef = useRef<Contact | null>(null);
 
+  function markConnected() {
+    setCallStatus('connected');
+    callStartTimeRef.current = Date.now();
+
+    // Start duration timer
+    durationIntervalRef.current = setInterval(() => {
+      if (callStartTimeRef.current) {
+        setCallDuration(Math.floor((Date.now() - callStartTimeRef.current) / 1000));
+      }
+    }, 1000);
+
+    // Set warning timeout (4:30)
+    warningTimeoutRef.current = setTimeout(() => {
+      setShowTimeWarning(true);
+    }, MAX_CALL_DURATION - WARNING_TIME);
+
+    // Set end timeout (5:00)
+    timeoutRef.current = setTimeout(() => {
+      console.log('[Call] Max duration reached, ending call');
+      endCall();
+    }, MAX_CALL_DURATION);
+
+    options.onCallStart?.();
+  }
+
   const conversation = useConversation({
     micMuted: isMuted,
     onConnect: () => {
       if (pendingCallRef.current?.signal.aborted) return;
       console.log('[Call] Connected');
-      setCallStatus('connected');
-      callStartTimeRef.current = Date.now();
-
-      // Start duration timer
-      durationIntervalRef.current = setInterval(() => {
-        if (callStartTimeRef.current) {
-          setCallDuration(Math.floor((Date.now() - callStartTimeRef.current) / 1000));
-        }
-      }, 1000);
-
-      // Set warning timeout (4:30)
-      warningTimeoutRef.current = setTimeout(() => {
-        setShowTimeWarning(true);
-      }, MAX_CALL_DURATION - WARNING_TIME);
-
-      // Set end timeout (5:00)
-      timeoutRef.current = setTimeout(() => {
-        console.log('[Call] Max duration reached, ending call');
-        endCall();
-      }, MAX_CALL_DURATION);
-
-      options.onCallStart?.();
+      markConnected();
     },
     onDisconnect: async () => {
       console.log('[Call] Disconnected');
@@ -154,14 +160,14 @@ export function useCall(options: UseCallOptions = {}) {
     setShowTimeWarning(false);
   }, []);
 
-  const startCall = useCallback(async (contact: Contact) => {
+  async function startCall(contact: Contact, geminiVoice?: string) {
     if (!user) {
       setErrorMessage('Please sign in to make calls');
       setCallStatus('error');
       return;
     }
 
-    if (pendingCallRef.current) return;
+    if (pendingCallRef.current || geminiRef.current) return;
     const pending = new AbortController();
     pendingCallRef.current = pending;
     try {
@@ -172,6 +178,27 @@ export function useCall(options: UseCallOptions = {}) {
       setErrorMessage(null);
       setCallDuration(0);
       setIsMuted(false);
+
+      if (process.env.NEXT_PUBLIC_VOX_GEMINI_PILOT === '1' && geminiVoice) {
+        geminiRef.current = startGeminiPilot({
+          getToken: () => user.getIdToken(),
+          voice: geminiVoice,
+          name: contact.name,
+          prompt: [contact.systemPrompt, contact.personality].filter(Boolean).join('\n'),
+          signal: pending.signal,
+          onReady: markConnected,
+          onMode: setCallStatus,
+          onClose: (error) => {
+            geminiRef.current = null;
+            currentContactRef.current = null;
+            cleanup();
+            setCurrentContact(null);
+            setErrorMessage(error ?? null);
+            setCallStatus(error ? 'error' : 'ended');
+          },
+        });
+        return;
+      }
 
       // Get auth token
       const token = await user.getIdToken();
@@ -256,12 +283,17 @@ export function useCall(options: UseCallOptions = {}) {
     } finally {
       pendingCallRef.current = null;
     }
-  }, [user, conversation]);
+  }
 
   const endCall = useCallback(async () => {
     pendingCallRef.current?.abort();
     try {
-      await conversation.endSession();
+      if (geminiRef.current) {
+        geminiRef.current.stop();
+        geminiRef.current = null;
+      } else {
+        await conversation.endSession();
+      }
     } catch (error) {
       console.error('[Call] Error ending session:', error);
     }
@@ -271,8 +303,9 @@ export function useCall(options: UseCallOptions = {}) {
   }, [conversation, cleanup]);
 
   const toggleMute = useCallback(() => {
-    setIsMuted(muted => !muted);
-  }, []);
+    geminiRef.current?.setMuted(!isMuted);
+    setIsMuted(!isMuted);
+  }, [isMuted]);
 
   // Cleanup on unmount - use refs to avoid stale closure
   const callStatusRef = useRef(callStatus);
@@ -289,6 +322,8 @@ export function useCall(options: UseCallOptions = {}) {
   useEffect(() => {
     return () => {
       pendingCallRef.current?.abort();
+      geminiRef.current?.stop();
+      geminiRef.current = null;
       cleanup();
       if (callStatusRef.current !== 'idle' && callStatusRef.current !== 'ended') {
         conversationRef.current.endSession().catch(console.error);

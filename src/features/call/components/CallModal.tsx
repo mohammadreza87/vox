@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Phone, PhoneOff, Mic, MicOff, X } from 'lucide-react';
 import { Avatar } from '@/shared/components/Avatar';
 import { useCall, CallStatus } from '../hooks/useCall';
+import { geminiVoices } from '../lib/gemini-voices.mjs';
 
 const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
 
@@ -52,6 +53,8 @@ function getStatusText(status: CallStatus): string {
 }
 
 export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
+  const [geminiVoice, setGeminiVoice] = useState('');
+  const pilot = WEB_CALLS_ONLY && process.env.NEXT_PUBLIC_VOX_GEMINI_PILOT === '1';
   const {
     callStatus,
     callDuration,
@@ -96,6 +99,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
   }, [isCallActive, endCall, onClose]);
 
   if (!contact) return null;
+  const readyToDial = callStatus === 'idle' || callStatus === 'error' || callStatus === 'ended';
 
   return (
     <AnimatePresence>
@@ -161,9 +165,26 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
                 </p>
               )}
 
-              {WEB_CALLS_ONLY && (callStatus === 'idle' || callStatus === 'error' || callStatus === 'ended') && (
+              {pilot && readyToDial && (
+                <label className="mt-4 flex w-full max-w-xs flex-col gap-2 text-sm text-gray-300">
+                  Call voice
+                  <select
+                    className="rounded-lg border border-white/20 bg-[#222] px-3 py-2 text-white"
+                    value={geminiVoice}
+                    onChange={(event) => setGeminiVoice(event.target.value)}
+                  >
+                    <option value="">ElevenLabs · {contact.voiceName || 'Agent voice'}</option>
+                    <optgroup label="Gemini Live pilot">
+                      {geminiVoices.map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+                    </optgroup>
+                  </select>
+                  {geminiVoice && <span className="text-xs text-gray-400">Google approval is required for cloned voices.</span>}
+                </label>
+              )}
+
+              {WEB_CALLS_ONLY && readyToDial && (
                 <p className="mt-3 text-sm text-gray-400 text-center">
-                  Starting a call shares your microphone audio with ElevenLabs for the live conversation.
+                  Starting a call shares your microphone audio with {pilot && geminiVoice ? 'Google Cloud (EU)' : 'ElevenLabs'} for the live conversation.
                 </p>
               )}
 
@@ -227,7 +248,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
                       voiceId: contact.voiceId,
                       systemPrompt: contact.systemPrompt || contact.purpose,
                       personality: contact.personality,
-                    })}
+                    }, pilot ? geminiVoice || undefined : undefined)}
                     aria-label={callStatus === 'idle' ? 'Start call' : 'Redial'}
                     className="p-4 rounded-full bg-[#FF6D1F] text-white hover:bg-[#FF6D1F]/80 transition-colors"
                   >
@@ -247,7 +268,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
               {/* Instructions */}
               {isCallActive && (
                 <p className="mt-6 text-sm text-gray-500 text-center">
-                  Speak naturally. The AI will respond with {contact.name}&apos;s voice.
+                  Speak naturally. The AI will respond with {pilot && geminiVoice ? geminiVoice : `${contact.name}’s voice`}.
                 </p>
               )}
             </div>

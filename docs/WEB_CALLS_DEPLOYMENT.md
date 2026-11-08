@@ -39,3 +39,24 @@ persistence. Check that Firestore denies direct browser reads and writes.
 To revert a subsequent rollout, select the last verified rollout in the
 App Hosting console. To suspend calls, revoke the backend's dedicated
 ElevenLabs key and disable the backend if the app must also go offline.
+
+## Local Gemini Live comparison
+
+Set the existing Web Calls Firebase web configuration and the ElevenLabs
+credentials for the comparison. Export the variables below and start the pilot
+with Google Cloud Application Default Credentials that can use Vertex AI in
+`vox-web-calls`. Authorize the loopback hostname in Firebase Authentication
+when using Google sign-in locally.
+
+```sh
+export VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_GEMINI_PILOT=1
+export VOX_GEMINI_PILOT_PROJECT=vox-web-calls VOX_GEMINI_PILOT_EMAIL=your-verified-email
+npm run web-calls:gemini-pilot
+```
+
+Open `http://127.0.0.1:3138/app` and pick a voice in the call dialog.
+ElevenLabs starts selected. The Gemini relay accepts the configured verified
+account, allows one call at a time, and forwards audio to the Gemini 3.8 Live
+EU endpoint without storing audio or transcripts in Vox. Google Cloud must
+approve the project for live voice replication before testing a consented
+voice sample.
