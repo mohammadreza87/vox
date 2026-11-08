@@ -63,5 +63,13 @@ Cloud Application Default Credentials and set `VOX_GEMINI_LIVE_PROJECT` and
 `VOX_GEMINI_LIVE_ORIGIN`. In the local Web Calls app, set
 `NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET=ws://127.0.0.1:3138/api/gemini-live/socket`.
 
-To suspend Gemini, set `NEXT_PUBLIC_VOX_GEMINI_LIVE` to `0` and redeploy
-Web Calls, or restore the previous verified App Hosting rollout.
+Build the relay image with `scripts/gemini-live-relay.Dockerfile` and deploy
+it to `vox-gemini-live` in `europe-west4`. Use a dedicated service account,
+set `VOX_GEMINI_LIVE_PROJECT` to `vox-web-calls`, and set
+`VOX_GEMINI_LIVE_ORIGIN` to the public Web Calls origin. The browser connects
+directly to Cloud Run, where the relay checks Firebase authorization before
+opening a Gemini session.
+
+To remove Gemini from the call controls, set `NEXT_PUBLIC_VOX_GEMINI_LIVE`
+to `0` and redeploy Web Calls. To stop connections to the relay immediately,
+enable the Cloud Run Invoker IAM check.
