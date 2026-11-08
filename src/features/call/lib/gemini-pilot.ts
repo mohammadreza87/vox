@@ -87,8 +87,8 @@ export function startGeminiPilot(options: PilotOptions) {
       };
       setMuted(muted);
 
-      const url = new URL('/api/gemini-live/socket', window.location.href);
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET;
+      if (!url) throw new Error('Gemini Live is unavailable');
       socket = new WebSocket(url);
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => socket?.send(JSON.stringify({
@@ -97,7 +97,7 @@ export function startGeminiPilot(options: PilotOptions) {
       socket.onclose = (event) => {
         if (closed) return;
         stop();
-        options.onClose(event.code === 1000 ? undefined : event.reason || 'Gemini pilot connection closed');
+        options.onClose(event.code === 1000 ? undefined : event.reason || 'Gemini Live connection closed');
       };
       socket.onmessage = ({ data }) => {
         if (closed) return;
@@ -138,7 +138,7 @@ export function startGeminiPilot(options: PilotOptions) {
         ? 'No microphone found. Connect a microphone and try again.'
         : error instanceof DOMException && error.name === 'NotAllowedError'
           ? 'Allow microphone access in your browser and try again.'
-          : error instanceof Error ? error.message : 'Could not start the Gemini pilot';
+          : error instanceof Error ? error.message : 'Could not start Gemini Live';
       options.onClose(message);
     }
   }

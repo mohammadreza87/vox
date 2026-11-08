@@ -1,9 +1,4 @@
 # Firebase App Hosting for the dedicated Vox Web Calls project.
-scripts:
-  runCommand: npm run web-calls:serve
-outputFiles:
-  serverApp:
-    include: [.next, node_modules, public, scripts/web-calls-server.mjs, src/features/call/lib/gemini-voices.mjs, package.json]
 runConfig:
   minInstances: 0
   maxInstances: 1
@@ -16,9 +11,8 @@ env:
     value: '1'
   - variable: NEXT_PUBLIC_VOX_GEMINI_LIVE
     value: '1'
-  - variable: VOX_GEMINI_LIVE_ORIGIN
-    value: https://vox-web-calls--vox-web-calls.europe-west4.hosted.app
-    availability: [RUNTIME]
+  - variable: NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET
+    value: wss://vox-gemini-live-752223719617.europe-west4.run.app/api/gemini-live/socket
   - variable: VOX_GEMINI_LIVE_EMAILS
     secret: VOX_GEMINI_LIVE_EMAILS
     availability: [RUNTIME]

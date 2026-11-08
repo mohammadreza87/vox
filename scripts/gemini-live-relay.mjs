@@ -1,74 +1,43 @@
-// Web Calls serves the app and its authenticated Gemini Live socket on one origin.
-import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
-import next from 'next';
 import { GoogleAuth } from 'google-auth-library';
-import { getApps, initializeApp } from 'firebase-admin/app';
+import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import WebSocket, { WebSocketServer } from 'ws';
 import { geminiVoices } from '../src/features/call/lib/gemini-voices.mjs';
+import { canUseGeminiLive } from '../src/features/call/lib/gemini-access.mjs';
 
-const hostedOrigin = process.env.VOX_GEMINI_LIVE_ORIGIN;
-const dev = !hostedOrigin && process.env.NODE_ENV !== 'production';
-const host = hostedOrigin ? '0.0.0.0' : '127.0.0.1';
+const origin = process.env.VOX_GEMINI_LIVE_ORIGIN;
 const port = Number(process.env.PORT ?? 3138);
-const origin = hostedOrigin ?? `http://127.0.0.1:${port}`;
-const allowedEmails = new Set(
-  (process.env.VOX_GEMINI_LIVE_EMAILS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean),
-);
-const geminiEnabled = process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE === '1' && allowedEmails.size > 0;
-if (process.env.VOX_WEB_CALLS_ONLY !== '1' || process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY !== '1') {
-  throw new Error('The Web Calls server requires standalone Web Calls configuration.');
-}
-const firebaseProject = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+if (!origin) throw new Error('The Gemini Live relay requires an approved browser origin.');
+const firebaseProject = process.env.VOX_GEMINI_LIVE_PROJECT;
 if (!firebaseProject) throw new Error('Firebase project configuration is required.');
-const firebase = getApps()[0] ?? initializeApp({ projectId: firebaseProject });
+const firebase = initializeApp({ projectId: firebaseProject });
 const google = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
 const upstreamUrl = 'wss://aiplatform.eu.rep.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent';
-const model = `projects/${process.env.VOX_GEMINI_LIVE_PROJECT ?? firebaseProject}/locations/eu/publishers/google/models/gemini-3.8-live`;
-const server = createServer();
-// Next registers its HMR upgrade listener automatically. Dispatch to it only
-// for Next paths so its router cannot close a socket owned by the relay.
-const nextUpgrades = new EventEmitter();
-if (!dev) {
-  // Use the same serialized config as Next's generated standalone entry point.
-  // App Hosting prunes dev dependencies after building the image.
-  const { config } = JSON.parse(readFileSync('.next/required-server-files.json', 'utf8'));
-  process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(config);
-}
-const app = next({ dev, hostname: host, port, httpServer: nextUpgrades });
-await app.prepare();
-const handle = app.getRequestHandler();
+const model = `projects/${firebaseProject}/locations/eu/publishers/google/models/gemini-3.8-live`;
+
+const server = createServer((request, response) => {
+  const healthy = request.method === 'GET' && request.url === '/health';
+  response.writeHead(healthy ? 200 : 404, { 'Cache-Control': 'no-store' }).end();
+});
+
 async function canUseGemini(token) {
-  if (!geminiEnabled || typeof token !== 'string' || token.length > 8192) return false;
   try {
-    const user = await getAuth(firebase).verifyIdToken(token);
-    return user.email_verified === true &&
-      (allowedEmails.has(user.email?.toLowerCase()) || user.voxGeminiLive === true);
+    return canUseGeminiLive(await getAuth(firebase).verifyIdToken(token));
   } catch {
     return false;
   }
 }
 
-server.on('request', async (req, res) => {
-  if (req.url !== '/api/gemini-live/availability' || req.method !== 'GET') {
-    return handle(req, res);
-  }
-  const bearer = req.headers.authorization;
-  const enabled = bearer?.startsWith('Bearer ') && await canUseGemini(bearer.slice(7));
-  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify({ enabled: enabled === true }));
-});
 const relay = new WebSocketServer({ noServer: true, maxPayload: 24 * 1024 });
 let active = false;
 let attempts = [];
 server.on('upgrade', (request, socket, head) => {
   if (request.url !== '/api/gemini-live/socket') {
-    if (!nextUpgrades.emit('upgrade', request, socket, head)) socket.destroy();
+    socket.destroy();
     return;
   }
-  if (!geminiEnabled || request.headers.origin !== origin || relay.clients.size >= 4) {
+  if (request.headers.origin !== origin || relay.clients.size >= 4) {
     socket.destroy();
     return;
   }
@@ -106,7 +75,7 @@ relay.on('connection', (client) => {
       active = reserved = true;
       attempts.push(Date.now());
 
-      const access = (!hostedOrigin && process.env.VOX_GEMINI_LOCAL_ACCESS_TOKEN) || await google.getAccessToken();
+      const access = await google.getAccessToken();
       if (!access) throw new Error('Missing Google credential');
       if (client.readyState !== WebSocket.OPEN) return;
       upstream = new WebSocket(upstreamUrl, {
@@ -175,4 +144,4 @@ relay.on('connection', (client) => {
   });
 });
 
-server.listen(port, host, () => console.log(`Vox Web Calls listening at ${origin}/app`));
+server.listen(port, '0.0.0.0', () => console.log('Gemini Live relay listening'));

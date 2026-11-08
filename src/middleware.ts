@@ -91,6 +91,10 @@ function hasBrokerControlConfiguration(): boolean {
 function buildCSP(isDev: boolean, isMiniApp = false): string {
   const directives = { ...CSP_DIRECTIVES };
   if (isMiniApp) directives['frame-ancestors'] = TELEGRAM_FRAME_ANCESTORS;
+  const geminiSocket = process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET;
+  if (process.env.VOX_WEB_CALLS_ONLY === '1' && geminiSocket) {
+    directives['connect-src'] = [...directives['connect-src'], new URL(geminiSocket).origin];
+  }
 
   // In development, allow localhost and hot reload
   if (isDev) {
@@ -120,7 +124,7 @@ const PERMISSIONS_POLICY = [
 
 const webCallsPages = new Set(['/app', '/login', '/create', '/contacts', '/settings', '/privacy']);
 const webCallsApi = new Set([
-  '/api/chat', '/api/chat/stream', '/api/convai/session', '/api/features',
+  '/api/chat', '/api/chat/stream', '/api/convai/session', '/api/features', '/api/gemini-live/availability',
   '/api/stt', '/api/tts', '/api/tts/stream', '/api/user/data',
   '/api/user/subscription', '/api/voices', '/api/v2/migrate', '/api/v2/sync',
 ]);

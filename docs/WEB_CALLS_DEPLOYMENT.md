@@ -42,10 +42,13 @@ ElevenLabs key and disable the backend if the app must also go offline.
 
 ## Gemini Live calls
 
-Web Calls serves its authenticated Gemini socket on the same origin as the
-app. The runtime service account needs `aiplatform.endpoints.predict` in
-`vox-web-calls` for the Gemini 3.8 Live EU endpoint. Set
-`VOX_GEMINI_LIVE_EMAILS` in Secret Manager to the approved email addresses.
+The Web Calls app connects to a Cloud Run Gemini relay over WebSocket.
+Set `NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET` to the relay URL. The relay verifies
+the caller's Firebase token and the browser origin before forwarding audio
+to the Gemini 3.8 Live EU endpoint. Its service account needs
+`aiplatform.endpoints.predict` in `vox-web-calls`. Set
+`VOX_GEMINI_LIVE_EMAILS` in Secret Manager to the approved email addresses
+and mount it on both the app and the relay.
 An administrator can also enable Gemini for a verified Firebase account using
 the `voxGeminiLive` custom claim.
 
@@ -55,16 +58,10 @@ call dialog. ElevenLabs is the initial default. The relay accepts one Gemini
 call at a time and keeps no audio or transcripts in Vox. Google Cloud approval
 is required before using a cloned voice.
 
-For a local comparison, configure the Web Calls Firebase web variables,
-ElevenLabs credentials and Google Cloud Application Default Credentials.
-Authorize the loopback hostname in Firebase Authentication for Google sign-in.
+For a local comparison, run `npm run web-calls:gemini-relay` with Google
+Cloud Application Default Credentials and set `VOX_GEMINI_LIVE_PROJECT` and
+`VOX_GEMINI_LIVE_ORIGIN`. In the local Web Calls app, set
+`NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET=ws://127.0.0.1:3138/api/gemini-live/socket`.
 
-```sh
-export VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_WEB_CALLS_ONLY=1 NEXT_PUBLIC_VOX_GEMINI_LIVE=1
-export VOX_GEMINI_LIVE_EMAILS=your-verified-email
-npm run web-calls:serve
-```
-
-Open `http://127.0.0.1:3138/app`. To suspend Gemini, set
-`NEXT_PUBLIC_VOX_GEMINI_LIVE` to `0` and redeploy Web Calls, or restore the
-previous verified App Hosting rollout.
+To suspend Gemini, set `NEXT_PUBLIC_VOX_GEMINI_LIVE` to `0` and redeploy
+Web Calls, or restore the previous verified App Hosting rollout.
