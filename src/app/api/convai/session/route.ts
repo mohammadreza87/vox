@@ -15,6 +15,9 @@ const SESSIONS_PER_MINUTE = 6;
  */
 async function handler(request: AuthenticatedRequest) {
   try {
+    if (process.env.VOX_WEB_CALLS_ONLY === '1' && request.user.email_verified !== true) {
+      return NextResponse.json({ error: 'Verify your email before making calls' }, { status: 403 });
+    }
     const limited = await checkRateLimitSecure(getApiRateLimiter(),
       `convai-session:${getRateLimitIdentifier(request, request.userId)}`, SESSIONS_PER_MINUTE, 60_000);
     if (!limited.success && limited.response) return limited.response;
@@ -40,7 +43,7 @@ async function handler(request: AuthenticatedRequest) {
     const { signed_url: signedUrl } = (await signedUrlResponse.json()) as { signed_url?: unknown };
     if (typeof signedUrl !== 'string' || !signedUrl) return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
 
-    logger.info({ userId: request.userId }, '[ConvAI Session] Session created');
+    logger.info('[ConvAI Session] Session created');
     return NextResponse.json({ signedUrl, overrides: {}, agentId });
   } catch {
     logger.error('[ConvAI Session] Error');

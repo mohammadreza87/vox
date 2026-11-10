@@ -27,7 +27,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ voices: cachedVoices });
     }
 
-    const apiKey = process.env.ELEVENLABS_API_KEY;
+    // The standalone app serves only the public preset catalog. Workspace
+    // voice clones may belong to other products or callers.
+    const apiKey = process.env.VOX_WEB_CALLS_ONLY === '1' ? undefined : process.env.ELEVENLABS_API_KEY;
 
     if (!apiKey) {
       // Return default voices without preview URLs if no API key

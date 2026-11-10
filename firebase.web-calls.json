@@ -1,0 +1,21 @@
+{
+  "apphosting": [
+    {
+      "backendId": "vox-web-calls",
+      "rootDir": ".",
+      "ignore": [
+        "node_modules",
+        ".git",
+        ".next",
+        ".env",
+        ".env.*",
+        "firebase-debug*.log",
+        "test-results",
+        "tireh.org.json"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.web-calls.rules"
+  }
+}

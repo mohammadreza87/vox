@@ -1,0 +1,35 @@
+# Firebase App Hosting for the dedicated Vox Web Calls project.
+runConfig:
+  minInstances: 0
+  maxInstances: 1
+  memoryMiB: 1024
+
+env:
+  - variable: VOX_WEB_CALLS_ONLY
+    value: '1'
+  - variable: NEXT_PUBLIC_VOX_WEB_CALLS_ONLY
+    value: '1'
+  - variable: NEXT_PUBLIC_VOX_GEMINI_LIVE
+    value: '1'
+  - variable: NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET
+    value: wss://vox-gemini-live-752223719617.europe-west4.run.app/api/gemini-live/socket
+  - variable: VOX_GEMINI_LIVE_EMAILS
+    secret: VOX_GEMINI_LIVE_EMAILS
+    availability: [RUNTIME]
+  - variable: STUDIO_BOTS
+    value: '0'
+  - variable: NPM_CONFIG_LEGACY_PEER_DEPS
+    value: 'true'
+    availability: [BUILD]
+  - variable: NEXT_TELEMETRY_DISABLED
+    value: '1'
+    availability: [BUILD]
+  - variable: ELEVENLABS_AGENT_ID
+    secret: ELEVENLABS_AGENT_ID
+    availability: [RUNTIME]
+  - variable: ELEVENLABS_API_KEY
+    secret: ELEVENLABS_API_KEY
+    availability: [RUNTIME]
+  - variable: OPENAI_API_KEY
+    secret: OPENAI_API_KEY
+    availability: [RUNTIME]

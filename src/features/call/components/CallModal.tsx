@@ -1,10 +1,14 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Phone, PhoneOff, Mic, MicOff, X } from 'lucide-react';
 import { Avatar } from '@/shared/components/Avatar';
 import { useCall, CallStatus } from '../hooks/useCall';
+import { useCallVoice } from '../hooks/useCallVoice';
+import { geminiVoices } from '../lib/gemini-voices.mjs';
+
+const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
 
 interface Contact {
   id: string;
@@ -50,6 +54,9 @@ function getStatusText(status: CallStatus): string {
 }
 
 export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
+  const [voiceOverride, setVoiceOverride] = useState<string | null>(null);
+  const { available, checking, savedVoice } = useCallVoice(isOpen);
+  const geminiVoice = available ? voiceOverride ?? savedVoice : '';
   const {
     callStatus,
     callDuration,
@@ -63,13 +70,13 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
   } = useCall({
     onCallEnd: () => {
       // Auto-close modal after call ends
-      setTimeout(onClose, 1500);
+      if (!WEB_CALLS_ONLY) setTimeout(onClose, 1500);
     },
   });
 
   // Start call when modal opens with a contact (only once)
   useEffect(() => {
-    if (isOpen && contact && callStatus === 'idle') {
+    if (!WEB_CALLS_ONLY && isOpen && contact && callStatus === 'idle') {
       startCall({
         id: contact.id,
         name: contact.name,
@@ -83,16 +90,22 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
 
   const handleEndCall = useCallback(() => {
     endCall();
-  }, [endCall]);
+    if (WEB_CALLS_ONLY) {
+      setVoiceOverride(null);
+      onClose();
+    }
+  }, [endCall, onClose]);
 
   const handleClose = useCallback(() => {
     if (isCallActive) {
       endCall();
     }
+    setVoiceOverride(null);
     onClose();
   }, [isCallActive, endCall, onClose]);
 
   if (!contact) return null;
+  const readyToDial = callStatus === 'idle' || callStatus === 'error' || callStatus === 'ended';
 
   return (
     <AnimatePresence>
@@ -112,6 +125,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
             {/* Close button */}
             <button
               onClick={handleClose}
+              aria-label="Close call"
               className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/10 transition-colors"
             >
               <X className="w-5 h-5 text-gray-400" />
@@ -157,6 +171,28 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
                 </p>
               )}
 
+              {available && readyToDial && (
+                <label className="mt-4 flex w-full max-w-xs flex-col gap-2 text-sm text-gray-300">
+                  Call voice
+                  <select
+                    className="rounded-lg border border-white/20 bg-[#222] px-3 py-2 text-white"
+                    value={geminiVoice}
+                    onChange={(event) => setVoiceOverride(event.target.value)}
+                  >
+                    <option value="">ElevenLabs · {contact.voiceName || 'Agent voice'}</option>
+                    <optgroup label="Gemini Live">
+                      {geminiVoices.map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+                    </optgroup>
+                  </select>
+                </label>
+              )}
+
+              {WEB_CALLS_ONLY && readyToDial && (
+                <p className="mt-3 text-sm text-gray-400 text-center">
+                  Starting a call shares your microphone audio with {geminiVoice ? 'Google Cloud (EU)' : 'ElevenLabs'} for the live conversation.
+                </p>
+              )}
+
               {/* Error message */}
               {errorMessage && (
                 <p className="mt-2 text-sm text-red-400 text-center">
@@ -193,6 +229,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
                 {isCallActive && (
                   <button
                     onClick={toggleMute}
+                    aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
                     className={`p-4 rounded-full transition-colors ${
                       isMuted
                         ? 'bg-red-500/20 text-red-400'
@@ -208,7 +245,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
                 )}
 
                 {/* End/Retry call button */}
-                {callStatus === 'error' ? (
+                {callStatus === 'error' || (WEB_CALLS_ONLY && (callStatus === 'idle' || callStatus === 'ended')) ? (
                   <button
                     onClick={() => startCall({
                       id: contact.id,
@@ -216,14 +253,17 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
                       voiceId: contact.voiceId,
                       systemPrompt: contact.systemPrompt || contact.purpose,
                       personality: contact.personality,
-                    })}
-                    className="p-4 rounded-full bg-[#FF6D1F] text-white hover:bg-[#FF6D1F]/80 transition-colors"
+                    }, geminiVoice || undefined)}
+                    disabled={checking}
+                    aria-label={callStatus === 'idle' ? 'Start call' : 'Redial'}
+                    className="p-4 rounded-full bg-[#FF6D1F] text-white hover:bg-[#FF6D1F]/80 transition-colors disabled:opacity-50"
                   >
                     <Phone className="w-6 h-6" />
                   </button>
                 ) : (callStatus === 'connecting' || isCallActive) ? (
                   <button
                     onClick={handleEndCall}
+                    aria-label="End call"
                     className="p-4 rounded-full bg-red-500 text-white hover:bg-red-600 transition-colors"
                   >
                     <PhoneOff className="w-6 h-6" />
@@ -234,7 +274,7 @@ export function CallModal({ contact, isOpen, onClose }: CallModalProps) {
               {/* Instructions */}
               {isCallActive && (
                 <p className="mt-6 text-sm text-gray-500 text-center">
-                  Speak naturally. The AI will respond with {contact.name}&apos;s voice.
+                  Speak naturally. The AI will respond with {geminiVoice ? geminiVoice : `${contact.name}’s voice`}.
                 </p>
               )}
             </div>

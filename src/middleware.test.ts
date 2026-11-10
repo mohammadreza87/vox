@@ -18,6 +18,25 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+describe('Standalone Web Calls routes', () => {
+  beforeEach(() => {
+    vi.stubEnv('STUDIO_ONLY', '0');
+    vi.stubEnv('VOX_WEB_CALLS_ONLY', '1');
+  });
+
+  it('serves the sign-in and call endpoints while blocking unrelated product APIs', () => {
+    expect(middleware(request('/')).headers.get('location')).toBe('https://studio.example.com/login');
+    expect(middleware(request('/app')).headers.get('x-middleware-next')).toBe('1');
+    expect(middleware(new NextRequest('https://studio.example.com/api/convai/session', { method: 'POST' }))
+      .headers.get('x-middleware-next')).toBe('1');
+    for (const path of ['/studio', '/api/studio/health', '/api/telegram/payments',
+      '/api/auth/telegram', '/api/tireh/telegram/aria', '/api/convai/llm',
+      '/api/stripe/webhook', '/api/clone-voice', '/api/memory/extract']) {
+      expect(middleware(new NextRequest(`https://studio.example.com${path}`, { method: 'POST' })).status).toBe(404);
+    }
+  });
+});
+
 describe('Studio production routes', () => {
   it.each([
     ['/api/agents/agent-a/connections?space=personal', 'GET'],

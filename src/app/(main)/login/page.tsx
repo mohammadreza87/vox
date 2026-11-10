@@ -11,6 +11,8 @@ import { getAuthErrorMessage } from '@/lib/auth-errors';
 import { isTelegramMiniApp } from '@/lib/platform';
 import { usePlatformStore } from '@/stores/platformStore';
 
+const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
+
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -131,7 +133,7 @@ export default function LoginPage() {
     const isLocalhost = window.location.hostname === 'localhost' ||
                         window.location.hostname === '127.0.0.1';
     const inTelegram = isTelegramMiniApp();
-    setShowTelegramLogin(!isLocalhost && !inTelegram);
+    setShowTelegramLogin(!WEB_CALLS_ONLY && !isLocalhost && !inTelegram);
   }, []);
 
   // Show loading screen if in Telegram (auto-login in progress) or processing redirect
@@ -290,6 +292,7 @@ export default function LoginPage() {
               )}
             </div>
 
+            {!WEB_CALLS_ONLY && <>
             {/* Divider */}
             <div className="flex items-center gap-4 mb-6">
               <div className="flex-1 h-px bg-[var(--foreground)]/10" />
@@ -380,6 +383,7 @@ export default function LoginPage() {
                 {isSignUp ? 'Sign In' : 'Sign Up'}
               </button>
             </p>
+            </>}
           </div>
         </div>
       </main>

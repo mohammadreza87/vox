@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Authenticated Vox API routes own all browser app reads and writes.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

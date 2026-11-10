@@ -91,6 +91,10 @@ function hasBrokerControlConfiguration(): boolean {
 function buildCSP(isDev: boolean, isMiniApp = false): string {
   const directives = { ...CSP_DIRECTIVES };
   if (isMiniApp) directives['frame-ancestors'] = TELEGRAM_FRAME_ANCESTORS;
+  const geminiSocket = process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE_SOCKET;
+  if (process.env.VOX_WEB_CALLS_ONLY === '1' && geminiSocket) {
+    directives['connect-src'] = [...directives['connect-src'], new URL(geminiSocket).origin];
+  }
 
   // In development, allow localhost and hot reload
   if (isDev) {
@@ -118,6 +122,23 @@ const PERMISSIONS_POLICY = [
   'accelerometer=()',
 ].join(', ');
 
+const webCallsPages = new Set(['/app', '/login', '/create', '/contacts', '/settings', '/privacy']);
+const webCallsApi = new Set([
+  '/api/chat', '/api/chat/stream', '/api/convai/session', '/api/features', '/api/gemini-live/availability',
+  '/api/stt', '/api/tts', '/api/tts/stream', '/api/user/data',
+  '/api/user/subscription', '/api/voices', '/api/v2/migrate', '/api/v2/sync',
+]);
+
+function isWebCallsRoute(pathname: string, method: string): boolean {
+  if (webCallsApi.has(pathname) || /^\/api\/v2\/chats(?:\/[^/]+(?:\/messages)?)?$/.test(pathname)) return true;
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  return webCallsPages.has(pathname) ||
+    /^\/chat\/[^/]+$/.test(pathname) ||
+    pathname.startsWith('/_next/static/') ||
+    pathname.startsWith('/images/') || pathname === '/favicon.ico' ||
+    (process.env.NEXT_PUBLIC_VOX_GEMINI_LIVE === '1' && pathname === '/audio/gemini-pilot-capture.js');
+}
+
 export function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const guestPage = pathname === '/privacy';
@@ -131,6 +152,15 @@ export function middleware(request: NextRequest) {
   const connectionOAuth = request.method === 'GET' && (
     pathname === '/oauth/callback/remote_mcp' && request.nextUrl.search.length <= 8192 ||
     pathname === '/oauth/client-metadata.json' && request.nextUrl.search === '');
+
+  if (process.env.VOX_WEB_CALLS_ONLY === '1') {
+    if (pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+    if (!isWebCallsRoute(pathname, request.method)) {
+      return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+    }
+  }
 
   if (process.env.STUDIO_ONLY === '1') {
     if (pathname === '/') {

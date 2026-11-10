@@ -14,7 +14,13 @@ export function Providers({ children }: {
         window.location.replace(window.location.href);
         return;
     } if (publicPrivacy)
-        return; let stopped = false; const existing = (window as Window & {
+        return;
+    if (process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1') {
+        setReady(true);
+        return;
+    }
+    let stopped = false;
+    const existing = (window as Window & {
         Telegram?: {
             WebApp?: unknown;
         };

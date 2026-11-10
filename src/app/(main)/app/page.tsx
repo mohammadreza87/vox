@@ -59,6 +59,8 @@ import gsap from 'gsap';
 
 type TabType = 'contacts' | 'chats' | 'translator';
 
+const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
+
 export default function AppPage() {
   return (
     <ProtectedRoute>
@@ -227,6 +229,7 @@ function AppContent() {
     contactId: selectedContact?.id ?? null,
     userId: user?.uid ?? null,
     tier: tier || 'free',
+    enabled: !WEB_CALLS_ONLY,
   });
 
   // Save memory when switching contacts or unmounting
@@ -241,7 +244,7 @@ function AppContent() {
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
-      saveMemory({ messages: memoryMessages, type: 'chat' }).catch(console.error);
+      if (!WEB_CALLS_ONLY) saveMemory({ messages: memoryMessages, type: 'chat' }).catch(console.error);
     }
 
     // Update refs for next switch
@@ -488,8 +491,8 @@ function AppContent() {
       contactId: selectedContact.id,
       systemPrompt: smartContext.systemPrompt,
       conversationHistory,
-      aiProvider: selectedContact.aiProvider,
-      aiModel: selectedContact.aiModel,
+      aiProvider: WEB_CALLS_ONLY ? 'openai' : selectedContact.aiProvider,
+      aiModel: WEB_CALLS_ONLY ? 'gpt-4o-mini' : selectedContact.aiModel,
     });
   }, [selectedContact, activeChat, messages, stopSpeaking, cancelStream, addMessage, startStream, buildSmartContext, resetProgressiveTTS]);
 
@@ -699,13 +702,13 @@ function AppContent() {
                   </span>
                 )}
               </button>
-              <button
+              {!WEB_CALLS_ONLY && <button
                 onClick={() => setActiveTab('translator')}
                 className={cn("liquid-tab", activeTab === 'translator' && "active")}
               >
                 <Languages className="w-4 h-4" />
                 Translate
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -878,7 +881,7 @@ function AppContent() {
                   <Settings className="w-5 h-5 text-[var(--foreground)]/60" />
                   <span className="text-[var(--foreground)]">Settings</span>
                 </button>
-                <button
+                {!WEB_CALLS_ONLY && <button
                   onClick={() => {
                     setShowUserMenu(false);
                     router.push('/pricing');
@@ -890,7 +893,7 @@ function AppContent() {
                     <span className="text-[var(--foreground)]">Plans</span>
                     <span className="ml-2 liquid-badge text-[10px]">{tier}</span>
                   </div>
-                </button>
+                </button>}
                 <button
                   onClick={() => {
                     setShowUserMenu(false);

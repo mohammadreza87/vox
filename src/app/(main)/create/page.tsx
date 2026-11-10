@@ -61,6 +61,8 @@ const CATEGORY_OPTIONS: { value: ContactCategory; label: string; emoji: string }
 type VoiceSelectionType = 'premade' | 'record' | 'random';
 type AvatarType = 'emoji' | 'image';
 
+const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
+
 export default function CreateContactPage() {
   return (
     <ProtectedRoute>
@@ -115,8 +117,8 @@ function CreateContactPageContent() {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   // AI Model state - defaults set by useEffect based on tier
-  const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
-  const [aiModel, setAiModel] = useState('gemini-2.0-flash-001');
+  const [aiProvider, setAiProvider] = useState<AIProvider>(WEB_CALLS_ONLY ? 'openai' : 'gemini');
+  const [aiModel, setAiModel] = useState(WEB_CALLS_ONLY ? 'gpt-4o-mini' : 'gemini-2.0-flash-001');
 
   const [isCreating, setIsCreating] = useState(false);
 
@@ -200,7 +202,7 @@ function CreateContactPageContent() {
   const [hasSetTierDefault, setHasSetTierDefault] = useState(false);
   useEffect(() => {
     // Only set default if not editing and haven't set it yet
-    if (!editContactId && !hasSetTierDefault && tier) {
+    if (!WEB_CALLS_ONLY && !editContactId && !hasSetTierDefault && tier) {
       const defaultProvider: AIProvider = 'gemini';
       const defaultModel = 'gemini-2.0-flash-001';
       setAiProvider(defaultProvider);
@@ -866,7 +868,7 @@ Guidelines:
                   <Volume2 className="w-5 h-5 text-[#FF6D1F]" />
                   <span className="text-xs font-medium text-[var(--foreground)]">Select Voice</span>
                 </button>
-                <button
+                {!WEB_CALLS_ONLY && <button
                   onClick={() => {
                     if (!canUseVoiceCloning) {
                       showUpgradeModal('voice-cloning');
@@ -887,7 +889,7 @@ Guidelines:
                   )}
                   <Mic className="w-5 h-5 text-[#FF6D1F]" />
                   <span className="text-xs font-medium text-[var(--foreground)]">Clone New</span>
-                </button>
+                </button>}
                 <button
                   onClick={() => {
                     setVoiceSelectionType('random');
@@ -1245,7 +1247,7 @@ Guidelines:
             </div>
 
             {/* AI Model Selection */}
-            <div>
+            {!WEB_CALLS_ONLY && <div>
               <label className="block text-sm font-medium text-[var(--foreground)] mb-3">
                 <Brain className="w-4 h-4 inline mr-2" />
                 AI Model
@@ -1322,7 +1324,7 @@ Guidelines:
                   );
                 })}
               </div>
-            </div>
+            </div>}
 
             {/* Preview */}
             <Card className="glass-light">

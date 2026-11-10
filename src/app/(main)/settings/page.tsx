@@ -11,6 +11,8 @@ import { Button } from '@/shared/components/Button';
 import { auth } from '@/lib/firebase';
 import { cn } from '@/shared/utils/cn';
 import { useEntranceAnimation } from '@/hooks/useAnimations';
+import { useCallVoice } from '@/features/call/hooks/useCallVoice';
+import { geminiVoices } from '@/features/call/lib/gemini-voices.mjs';
 
 interface ClonedVoice {
   id: string;
@@ -45,7 +47,10 @@ export default function SettingsPage() {
   );
 }
 
+const WEB_CALLS_ONLY = process.env.NEXT_PUBLIC_VOX_WEB_CALLS_ONLY === '1';
+
 function SettingsContent() {
+  const { available: geminiAvailable, savedVoice, saveVoice } = useCallVoice(true);
   const router = useRouter();
 
   // Auth store
@@ -111,7 +116,7 @@ function SettingsContent() {
 
   // Load voices on mount
   useEffect(() => {
-    loadClonedVoices();
+    if (!WEB_CALLS_ONLY) loadClonedVoices();
   }, [loadClonedVoices]);
 
   // Delete a cloned voice
@@ -408,6 +413,25 @@ function SettingsContent() {
           </div>
 
           <div className="space-y-4">
+            {geminiAvailable && (
+              <label className="block text-sm font-medium text-[var(--foreground)]/70">
+                Default call voice
+                <select
+                  value={savedVoice}
+                  onChange={(event) => saveVoice(event.target.value)}
+                  className="mt-2 block w-full rounded-xl liquid-input px-4 py-3"
+                >
+                  <option value="">ElevenLabs · Contact voice</option>
+                  <optgroup label="Gemini Live">
+                    {geminiVoices.map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+                  </optgroup>
+                </select>
+                <span className="mt-1 block text-xs font-normal text-[var(--foreground)]/50">
+                  Saved on this browser. You can choose a different voice before any call.
+                </span>
+              </label>
+            )}
+
             {/* Vox Call Name */}
             <div>
               <label className="block text-sm font-medium text-[var(--foreground)]/70 mb-2">
@@ -427,6 +451,7 @@ function SettingsContent() {
           </div>
         </div>
 
+        {!WEB_CALLS_ONLY && <>
         {/* Cloned Voices Section */}
         <div className="liquid-card rounded-2xl p-6 mb-6">
           <div className="flex items-center gap-3 mb-6">
@@ -616,6 +641,8 @@ function SettingsContent() {
             </p>
           </div>
         </div>
+
+        </>}
 
         {/* Account Info (Read-only) */}
         <div className="liquid-card rounded-2xl p-6 mb-8">
